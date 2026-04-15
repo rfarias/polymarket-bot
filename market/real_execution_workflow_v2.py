@@ -202,18 +202,15 @@ def maybe_post_force_close_exits_v2(executor, *, slot_name: str, metrics: Option
 
 def maybe_post_balanced_exit_orders_v2(executor, *, slot_name: str, metrics: Optional[Dict[str, float]]) -> List[str]:
     plan = _plan(executor, slot_name)
-    if plan is None or not metrics:
+    if plan is None:
         return []
     if plan.state != PLAN_HEDGED:
         return []
-    if (executor.plan_broker_orders.get(plan.plan_id) or {}).get("up_exit") or (executor.plan_broker_orders.get(plan.plan_id) or {}).get("down_exit"):
+    marker = "hedged_hold_resolution_logged"
+    if marker in (plan.logs or []):
         return []
-    logs: List[str] = []
-    for event in executor.order_manager.post_exit_orders(plan.plan_id, float(metrics.get("up_bid") or 0.0), float(metrics.get("down_bid") or 0.0)):
-        logs.append(f"[PLAN] {slot_name}: {event}")
-    logs.extend(_post_real_exit_order(executor, slot_name, plan.plan_id, "up_entry", float(metrics.get("up_bid") or 0.0), "balanced_exit"))
-    logs.extend(_post_real_exit_order(executor, slot_name, plan.plan_id, "down_entry", float(metrics.get("down_bid") or 0.0), "balanced_exit"))
-    return logs
+    plan.logs.append(marker)
+    return [f"[PLAN] {slot_name}: balanced hedge confirmed -> hold until resolution (no exit orders)"]
 
 
 def handle_deadline_real_v2(executor, *, slot_name: str, secs_to_end: Optional[int], deadline_trigger: Optional[int], metrics: Optional[Dict[str, float]]) -> List[str]:
@@ -235,7 +232,7 @@ def handle_deadline_real_v2(executor, *, slot_name: str, secs_to_end: Optional[i
         return logs
     if up.filled_qty == down.filled_qty and up.filled_qty > 0:
         plan.state = PLAN_HEDGED
-        logs.append(f"[PLAN] {slot_name}: deadline with balanced filled hedge qty={up.filled_qty} -> post exits")
+        logs.append(f"[PLAN] {slot_name}: deadline with balanced filled hedge qty={up.filled_qty} -> hold to resolution")
         logs.extend(maybe_post_balanced_exit_orders_v2(executor, slot_name=slot_name, metrics=metrics))
         return logs
     plan.state = PLAN_FORCE_CLOSED

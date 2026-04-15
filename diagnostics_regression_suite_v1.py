@@ -38,6 +38,10 @@ CASES = [
         "name": "broker_status_sync_v2",
         "command": [sys.executable, "diagnostics_broker_status_sync_v2.py"],
     },
+    {
+        "name": "balanced_hedge_hold_v1",
+        "command": [sys.executable, "diagnostics_balanced_hedge_hold_v1.py"],
+    },
 ]
 
 
