@@ -68,16 +68,6 @@ Valida:
 - nenhuma criação de `up_exit/down_exit`
 - nenhuma postagem de saída no broker para hedge balanceado
 
-### 1.6 Teste isolado: filtro de continuação (bloqueador de reversão)
-
-```bash
-python diagnostics_continuation_filter_v1.py
-```
-
-Valida:
-- classificação de risco de continuação em cenário de movimento monotônico forte
-- cenário neutro sem bloqueio indevido de entrada
-
 ## 2. Testes com broker autenticado (PC de casa)
 
 Esses testes exigem `.env` configurado com credenciais válidas do broker real.
@@ -122,18 +112,6 @@ Valida:
 - operação somente em `next_1`
 - reconcile e sync contínuo no ciclo
 - persistência JSON + cleanup do plano
-
-### 2.4 Runner separado: scalp reversão (v1)
-
-```bash
-python run_scalp_reversal_bot.py --seconds 300
-```
-
-Valida:
-- modo separado do hedge (single-leg, mão pequena)
-- bloqueio quando continuação está forte
-- logs de ciclo do scalp (`SCALP_SIGNAL`, `SCALP_BLOCK`, `SCALP_ENTRY_ALLOWED`)
-- saídas explícitas (`SCALP_EXIT_TP`, `SCALP_EXIT_STOP`, `SCALP_EXIT_TIMEOUT`)
 
 ## 3. Ordem recomendada de execução
 
