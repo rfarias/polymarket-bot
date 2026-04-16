@@ -95,6 +95,13 @@ def _fetch_slot_state(slot_bundle: Dict[str, Any]) -> Dict[str, Any]:
             spread = fetch_spread(token_id)
             executable = fetch_token_executable_prices(token_id)
             display_price, display_source = _display_price(midpoint, spread, book.get("last_trade_price"))
+            top_bids = []
+            top_asks = []
+            for lvl in (book.get("bids") or [])[:3]:
+                top_bids.append({"price": lvl.get("price"), "size": lvl.get("size")})
+            for lvl in (book.get("asks") or [])[:3]:
+                top_asks.append({"price": lvl.get("price"), "size": lvl.get("size")})
+
             joined.append({
                 "outcome": mapping.get("outcome"),
                 "token_id": token_id,
@@ -109,6 +116,8 @@ def _fetch_slot_state(slot_bundle: Dict[str, Any]) -> Dict[str, Any]:
                 "executable_sell": executable.get("SELL"),
                 "tick_size": book.get("tick_size"),
                 "min_order_size": book.get("min_order_size"),
+                "top_bids": top_bids,
+                "top_asks": top_asks,
                 "raw_book_id": _raw_book_id(book) if book else None,
                 "has_raw_book": bool(book),
             })

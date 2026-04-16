@@ -16,9 +16,10 @@ Essa suíte executa:
 - `diagnostics_broker_reconcile_v1.py`
 - `diagnostics_broker_status_sync_v1.py`
 - `diagnostics_broker_status_sync_v2.py`
+- `diagnostics_balanced_hedge_hold_v1.py`
 
 Saída esperada no final:
-- `TOTAL=3 PASS=3 FAIL=0`
+- `TOTAL=4 PASS=4 FAIL=0`
 - `[RESULT] Regression suite finished successfully`
 
 ### 1.2 Teste isolado: reconciliação de ordens
@@ -56,6 +57,27 @@ Valida:
 - `PLAN_END next_1: force_closed`
 - `active_plan_id = None`
 
+### 1.5 Teste isolado: hedge balanceado sem saída no book
+
+```bash
+python diagnostics_balanced_hedge_hold_v1.py
+```
+
+Valida:
+- plano em estado `hedged`
+- nenhuma criação de `up_exit/down_exit`
+- nenhuma postagem de saída no broker para hedge balanceado
+
+### 1.6 Teste isolado: filtro de continuação (bloqueador de reversão)
+
+```bash
+python diagnostics_continuation_filter_v1.py
+```
+
+Valida:
+- classificação de risco de continuação em cenário de movimento monotônico forte
+- cenário neutro sem bloqueio indevido de entrada
+
 ## 2. Testes com broker autenticado (PC de casa)
 
 Esses testes exigem `.env` configurado com credenciais válidas do broker real.
@@ -66,8 +88,8 @@ Exemplo mínimo para runners protegidos:
 
 ```env
 POLY_GUARDED_ENABLED=true
-POLY_GUARDED_SHADOW_ONLY=true
-POLY_GUARDED_REAL_POSTS_ENABLED=false
+POLY_GUARDED_SHADOW_ONLY=false
+POLY_GUARDED_REAL_POSTS_ENABLED=true
 POLY_GUARDED_MAX_ACTIVE_PLANS=1
 POLY_GUARDED_ALLOW_NEXT_2=false
 POLY_GUARDED_MIN_SHARES=5
@@ -87,20 +109,31 @@ python diagnostics_live_guard_preflight.py
 Valida:
 - se o broker env está pronto
 - se o runner protegido está habilitado
-- se o modo atual é `real-shadow`
+- se o modo atual está pronto para runner real (`shadow_only=false`, `real_posts_enabled=true`)
 
-### 2.3 Runner protegido com startup guard e sync
+### 2.3 Runner principal (real fill-cycle v2)
 
 ```bash
-python -c "from market.live_minimal_guarded_v4 import monitor_live_minimal_guarded_v4; print('[TEST] Starting live minimal guarded v4...'); monitor_live_minimal_guarded_v4(duration_seconds=20); print('\n[TEST] live minimal guarded v4 finished 🚀')"
+python run_guarded_bot.py --seconds 900
 ```
 
 Valida:
-- `BROKER_HEALTH`
-- `BROKER_OPEN_ORDERS_STARTUP`
-- `STARTUP_GUARD`
-- snapshots do runner
-- reconciliação e sync no ciclo
+- preflight + startup guard
+- operação somente em `next_1`
+- reconcile e sync contínuo no ciclo
+- persistência JSON + cleanup do plano
+
+### 2.4 Runner separado: scalp reversão (v1)
+
+```bash
+python run_scalp_reversal_bot.py --seconds 300
+```
+
+Valida:
+- modo separado do hedge (single-leg, mão pequena)
+- bloqueio quando continuação está forte
+- logs de ciclo do scalp (`SCALP_SIGNAL`, `SCALP_BLOCK`, `SCALP_ENTRY_ALLOWED`)
+- saídas explícitas (`SCALP_EXIT_TP`, `SCALP_EXIT_STOP`, `SCALP_EXIT_TIMEOUT`)
 
 ## 3. Ordem recomendada de execução
 
@@ -110,22 +143,47 @@ Valida:
 
 ### Em PC com wallet / broker autenticado
 1. `git pull`
-2. `python diagnostics_live_guard_preflight.py`
-3. `python -c "from market.live_minimal_guarded_v4 import monitor_live_minimal_guarded_v4; print('[TEST] Starting live minimal guarded v4...'); monitor_live_minimal_guarded_v4(duration_seconds=20); print('\n[TEST] live minimal guarded v4 finished 🚀')"`
+2. `python run_guarded_bot.py --preflight-only`
+3. `python run_guarded_bot.py --seconds 900`
+
+## 3.1 Runner principal (real, next_1 only)
+
+Para facilitar a execução no dia a dia (preflight + runner em um comando), use:
+
+```bash
+python run_guarded_bot.py --seconds 900
+```
+
+Fluxo esperado:
+- imprime `[BROKER_ENV]` e `[LIVE_GUARDED_CONFIG]`
+- valida guardrails de segurança
+- imprime `[RESULT] Ready for live real fill-cycle monitoring (next_1 only).`
+- inicia `monitor_live_real_fill_cycle_v2`
+- opera apenas `next_1` (nunca `next_2`)
+- reconcilia ordens abertas e mantém persistência JSON
+
+Somente preflight (sem iniciar o monitor):
+
+```bash
+python run_guarded_bot.py --preflight-only
+```
 
 ## 4. Checklist rápido
 
 ### Offline
 - [ ] `git pull` atualizado
 - [ ] suíte offline passando
-- [ ] `PASS=3 FAIL=0`
+- [ ] `PASS=4 FAIL=0`
 
 ### PC de casa
 - [ ] `.env` configurado
 - [ ] `POLY_GUARDED_ENABLED=true`
+- [ ] `POLY_GUARDED_SHADOW_ONLY=false`
+- [ ] `POLY_GUARDED_REAL_POSTS_ENABLED=true`
+- [ ] `POLY_GUARDED_ALLOW_NEXT_2=false`
 - [ ] preflight ok
 - [ ] startup guard ok
-- [ ] runner protegido em `shadow_only`
+- [ ] runner real operando apenas `next_1`
 
 ## 5. Estado atual do projeto
 
@@ -138,9 +196,8 @@ Já validado:
 - limpeza de `active_plan_id`
 - suíte offline consolidada
 
-Ainda **não** liberado por padrão:
-- postagem real de ordens
-- flatten real em conta live
-- execução live sem guardas
-
-A intenção continua sendo evoluir primeiro a reconciliação/sync, mantendo `real_posts_enabled=false` por padrão até a camada real estar madura.
+Restrições operacionais do rollout:
+- manter startup guard habilitado
+- não operar `next_2`
+- manter `max_active_plans=1`
+- manter reconcile + persistência ligados

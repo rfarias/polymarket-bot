@@ -2,6 +2,7 @@ import os
 import time
 
 from market.broker_startup_guard_v1 import evaluate_startup_guard
+from market.continuation_filter_v1 import ContinuationRiskFilterV1
 from market.broker_status_sync_v4 import sync_executor_from_broker_open_orders_v4
 from market.executor_state_store_v1 import (
     clear_executor_state_v1,
@@ -150,6 +151,7 @@ def monitor_live_real_fill_cycle_v2(duration_seconds: int | None = None) -> None
     started_at = time.time()
     next_print = 0.0
     had_active_plan = any(runtime.active_plan_id for runtime in executor.slots.values())
+    continuation_filter = ContinuationRiskFilterV1()
 
     while time.time() - started_at < run_for:
         slot_state = _fetch_slot_state(slot_bundle)
@@ -160,6 +162,7 @@ def monitor_live_real_fill_cycle_v2(duration_seconds: int | None = None) -> None
         tradable_metrics_next1 = None
         tradable_signal_next1 = "idle"
         outcome_token_ids_next1 = None
+        continuation_next1 = None
         event_slug_next1 = next_1_item["slug"] if next_1_item else None
 
         if time.time() >= next_print:
@@ -181,8 +184,10 @@ def monitor_live_real_fill_cycle_v2(duration_seconds: int | None = None) -> None
 
             tradable_allowed = slot_name == "next_1" and (active_count == 0 or executor.slots["next_1"].active_plan_id is not None)
             tradable_gate_reason = "next_1_only" if slot_name == "next_1" else "next_2_disabled_first_live"
+            continuation = continuation_filter.update_and_classify(slot_name=slot_name, snap=snap)
+            continuation_block = bool(continuation.get("block_entry"))
             tradable_metrics = None
-            if executable_metrics and executable_metrics["sum_asks"] <= ARBITRAGE_SUM_ASKS_MAX and tradable_allowed:
+            if executable_metrics and executable_metrics["sum_asks"] <= ARBITRAGE_SUM_ASKS_MAX and tradable_allowed and not continuation_block:
                 tradable_metrics = executable_metrics
 
             if tradable_metrics:
@@ -203,14 +208,30 @@ def monitor_live_real_fill_cycle_v2(duration_seconds: int | None = None) -> None
                     print(f"executable_metrics=None | reason={executable_reason}")
                 _print_slot_debug(slot_name, snap, display_reason, executable_reason, tradable_gate_reason)
                 print(f"[{slot_name.upper()} DEBUG] active_count={active_count} | shadow_only={executor.shadow_only}")
+                print(
+                    f"[{slot_name.upper()} CONTINUATION] "
+                    f"label={continuation.get('label')} score={continuation.get('score')} "
+                    f"block_entry={continuation.get('block_entry')} "
+                    f"delta30={continuation.get('delta30')} delta60={continuation.get('delta60')} "
+                    f"imbalance_top3={continuation.get('depth_imbalance_top3')} "
+                    f"reasons={continuation.get('reasons') or continuation.get('reason')}"
+                )
 
             if slot_name == "next_1":
                 tradable_metrics_next1 = tradable_metrics
                 tradable_signal_next1 = tradable_signal
+                continuation_next1 = continuation
                 outcome_token_ids_next1 = _outcome_token_ids_from_snapshot(snap)
 
         runtime = executor.slots["next_1"]
         plan = executor.order_manager.get_plan(runtime.active_plan_id) if runtime.active_plan_id else None
+        if plan is None and continuation_next1 and continuation_next1.get("block_entry"):
+            print(
+                "[ENTRY_BLOCK] next_1 blocked by continuation filter | "
+                f"label={continuation_next1.get('label')} score={continuation_next1.get('score')} "
+                f"delta30={continuation_next1.get('delta30')} delta60={continuation_next1.get('delta60')} "
+                f"imbalance_top3={continuation_next1.get('depth_imbalance_top3')} reasons={continuation_next1.get('reasons')}"
+            )
 
         if plan is None and event_slug_next1 and tradable_signal_next1 == cfg.require_signal:
             min_entry_secs = test_deadline_trigger_secs + min_post_buffer_secs
