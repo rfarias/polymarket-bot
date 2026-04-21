@@ -7,8 +7,8 @@ FIVE_MINUTE_STEP = 300
 UNFILLED_EXIT_TRIGGER_SECS_TO_END_ON_NEXT_1 = 330
 
 
-def _round_up_to_next_5m_epoch(now_ts: int) -> int:
-    return ((now_ts // FIVE_MINUTE_STEP) + 1) * FIVE_MINUTE_STEP
+def _round_down_to_current_5m_epoch(now_ts: int) -> int:
+    return (now_ts // FIVE_MINUTE_STEP) * FIVE_MINUTE_STEP
 
 
 def _parse_dt(value: Optional[str]):
@@ -75,11 +75,11 @@ def _fetch_target(ts: int) -> Optional[Dict[str, Any]]:
 
 def build_5m_queue_v5() -> Dict[str, Optional[Dict[str, Any]]]:
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    current_end_ts = _round_up_to_next_5m_epoch(now_ts)
+    current_start_ts = _round_down_to_current_5m_epoch(now_ts)
 
-    current = _fetch_target(current_end_ts)
-    next_1 = _fetch_target(current_end_ts + FIVE_MINUTE_STEP)
-    next_2 = _fetch_target(current_end_ts + 2 * FIVE_MINUTE_STEP)
+    current = _fetch_target(current_start_ts)
+    next_1 = _fetch_target(current_start_ts + FIVE_MINUTE_STEP)
+    next_2 = _fetch_target(current_start_ts + 2 * FIVE_MINUTE_STEP)
 
     return {
         "current": current,

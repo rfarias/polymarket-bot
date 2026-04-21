@@ -22,7 +22,7 @@ from market.rest_5m_shadow_public_v5 import (
 
 @dataclass
 class ScalpStateV1:
-    mode: str = "idle"  # idle | pending_entry | open_position | done
+    mode: str = "idle"  # idle | pending_entry | open_position | pending_exit | done
     slot_name: Optional[str] = None
     event_slug: Optional[str] = None
     outcome: Optional[str] = None
@@ -236,6 +236,62 @@ def _find_order_in_open(broker, order_id: str):
     return None
 
 
+def _get_order_status(broker, order_id: str):
+    if not order_id:
+        return None
+    try:
+        order = broker.get_order(order_id)
+        if order is not None:
+            return order
+    except Exception:
+        pass
+    return _find_order_in_open(broker, order_id)
+
+
+def _blocking_open_orders(broker):
+    try:
+        return broker.get_open_orders()[:50]
+    except Exception:
+        return []
+
+
+def _reset_runtime_state(now: float) -> ScalpStateV1:
+    return ScalpStateV1(mode="idle", created_at=now, updated_at=now)
+
+
+def _clear_and_reset(now: float) -> ScalpStateV1:
+    print("[SCALP_STATE_CLEAR]", _clear_state())
+    return _reset_runtime_state(now)
+
+
+def _post_exit_order(broker, state: ScalpStateV1, *, bid_now: float, now: float, reason: str) -> ScalpStateV1:
+    exit_qty = round(float(state.entry_filled_qty or 0.0), 6)
+    if exit_qty <= 0:
+        print(f"[SCALP_EXIT_BLOCK] reason={reason} invalid_exit_qty={exit_qty}")
+        return _clear_and_reset(now)
+
+    req = BrokerOrderRequest(
+        token_id=state.token_id or "",
+        side="SELL",
+        price=bid_now,
+        size=exit_qty,
+        market_slug=state.event_slug,
+        outcome=state.outcome,
+        client_order_key=f"scalp_exit:{reason}:{int(now)}:{state.outcome}",
+    )
+    exit_order = broker.place_limit_order(req)
+    print(
+        f"[SCALP_EXIT_POSTED] reason={reason} outcome={state.outcome} bid_now={bid_now} "
+        f"entry={state.entry_price} qty={exit_qty} exit_order_id={exit_order.order_id}"
+    )
+    state.mode = "pending_exit"
+    state.exit_order_id = exit_order.order_id
+    state.updated_at = now
+    state.last_reason = f"exit_posted:{reason}"
+    print("[SCALP_STATE_FLUSH]", _save_state(state))
+    return state
+
+
 def monitor_live_scalp_reversal_v1(duration_seconds: Optional[int] = None) -> None:
     guarded = load_live_guarded_config()
     cfg = _load_scalp_cfg_v1()
@@ -257,6 +313,17 @@ def monitor_live_scalp_reversal_v1(duration_seconds: Optional[int] = None) -> No
 
     state = _load_state() or ScalpStateV1(mode="idle", created_at=time.time(), updated_at=time.time())
     print("[SCALP_STATE_RESTORE]", asdict(state))
+
+    startup_open_orders = _blocking_open_orders(broker)
+    if startup_open_orders:
+        print("[SCALP_GUARD] Startup blocked because broker account already has open orders")
+        print("[SCALP_OPEN_ORDERS_STARTUP]", [o.as_dict() for o in startup_open_orders])
+        return
+
+    if state.mode != "idle":
+        print("[SCALP_RECOVERY] stale local scalp state without open broker orders; clearing local state")
+        state = _clear_and_reset(time.time())
+
     print("[SCALP_STATE_FLUSH]", _save_state(state))
 
     slot_bundle = _build_slot_bundle()
@@ -335,7 +402,7 @@ def monitor_live_scalp_reversal_v1(duration_seconds: Optional[int] = None) -> No
             print("[SCALP_STATE_FLUSH]", _save_state(state))
 
         elif state.mode == "pending_entry":
-            ord_open = _find_order_in_open(broker, state.entry_order_id or "")
+            ord_open = _get_order_status(broker, state.entry_order_id or "")
             filled = _safe_float(ord_open.size_matched, 0.0) if ord_open else state.entry_filled_qty
             state.entry_filled_qty = max(state.entry_filled_qty, filled)
             elapsed = now - state.created_at
@@ -352,11 +419,7 @@ def monitor_live_scalp_reversal_v1(duration_seconds: Optional[int] = None) -> No
             elif elapsed >= cfg.entry_timeout_secs:
                 cancel_resp = broker.cancel_order(state.entry_order_id)
                 print(f"[SCALP_EXIT_TIMEOUT_NO_FILL] cancel_resp={cancel_resp}")
-                state.mode = "done"
-                state.updated_at = now
-                state.last_reason = "entry_timeout_no_fill"
-                print("[SCALP_STATE_CLEAR]", _clear_state())
-                state = ScalpStateV1(mode="idle", created_at=now, updated_at=now)
+                state = _clear_and_reset(now)
 
         elif state.mode == "open_position":
             slot_snap = _slot_snapshot(slot_state, state.slot_name or "next_1")
@@ -370,58 +433,34 @@ def monitor_live_scalp_reversal_v1(duration_seconds: Optional[int] = None) -> No
             elapsed = now - state.updated_at
 
             if bid_now >= _safe_float(state.target_price, 0.0):
-                req = BrokerOrderRequest(
-                    token_id=state.token_id or "",
-                    side="SELL",
-                    price=bid_now,
-                    size=float(max(1.0, state.entry_filled_qty)),
-                    market_slug=state.event_slug,
-                    outcome=state.outcome,
-                    client_order_key=f"scalp_exit_tp:{int(now)}:{state.outcome}",
-                )
-                exit_order = broker.place_limit_order(req)
-                print(
-                    f"[SCALP_EXIT_TP] outcome={state.outcome} bid_now={bid_now} target={state.target_price} "
-                    f"entry={state.entry_price} qty={state.entry_filled_qty} exit_order_id={exit_order.order_id}"
-                )
-                print("[SCALP_STATE_CLEAR]", _clear_state())
-                state = ScalpStateV1(mode="idle", created_at=now, updated_at=now)
+                state = _post_exit_order(broker, state, bid_now=bid_now, now=now, reason="tp")
 
             elif bid_now <= _safe_float(state.stop_price, 0.0):
-                req = BrokerOrderRequest(
-                    token_id=state.token_id or "",
-                    side="SELL",
-                    price=bid_now,
-                    size=float(max(1.0, state.entry_filled_qty)),
-                    market_slug=state.event_slug,
-                    outcome=state.outcome,
-                    client_order_key=f"scalp_exit_stop:{int(now)}:{state.outcome}",
-                )
-                exit_order = broker.place_limit_order(req)
-                print(
-                    f"[SCALP_EXIT_STOP] outcome={state.outcome} bid_now={bid_now} stop={state.stop_price} "
-                    f"entry={state.entry_price} qty={state.entry_filled_qty} exit_order_id={exit_order.order_id}"
-                )
-                print("[SCALP_STATE_CLEAR]", _clear_state())
-                state = ScalpStateV1(mode="idle", created_at=now, updated_at=now)
+                state = _post_exit_order(broker, state, bid_now=bid_now, now=now, reason="stop")
 
             elif elapsed >= cfg.position_timeout_secs:
-                req = BrokerOrderRequest(
-                    token_id=state.token_id or "",
-                    side="SELL",
-                    price=bid_now,
-                    size=float(max(1.0, state.entry_filled_qty)),
-                    market_slug=state.event_slug,
-                    outcome=state.outcome,
-                    client_order_key=f"scalp_exit_timeout:{int(now)}:{state.outcome}",
-                )
-                exit_order = broker.place_limit_order(req)
+                state = _post_exit_order(broker, state, bid_now=bid_now, now=now, reason="timeout")
+
+        elif state.mode == "pending_exit":
+            exit_order = _get_order_status(broker, state.exit_order_id or "")
+            elapsed = now - state.updated_at
+
+            if exit_order is None:
+                print(f"[SCALP_EXIT_DONE] order_id={state.exit_order_id} not returned by broker anymore; assuming terminal")
+                state = _clear_and_reset(now)
+            else:
+                status = str(exit_order.status or "").lower()
+                matched = _safe_float(exit_order.size_matched, 0.0)
                 print(
-                    f"[SCALP_EXIT_TIMEOUT] outcome={state.outcome} bid_now={bid_now} elapsed={elapsed:.1f}s "
-                    f"entry={state.entry_price} qty={state.entry_filled_qty} exit_order_id={exit_order.order_id}"
+                    f"[SCALP_EXIT_WAIT] order_id={state.exit_order_id} status={status} "
+                    f"matched={matched} remaining={exit_order.remaining_size}"
                 )
-                print("[SCALP_STATE_CLEAR]", _clear_state())
-                state = ScalpStateV1(mode="idle", created_at=now, updated_at=now)
+                if status in ("filled", "closed", "resolved"):
+                    state = _clear_and_reset(now)
+                elif elapsed >= cfg.position_timeout_secs:
+                    cancel_resp = broker.cancel_order(state.exit_order_id)
+                    print(f"[SCALP_EXIT_CANCEL_TIMEOUT] cancel_resp={cancel_resp}")
+                    state = _clear_and_reset(now)
 
         time.sleep(cfg.loop_sleep_secs)
 

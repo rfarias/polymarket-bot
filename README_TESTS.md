@@ -146,6 +146,43 @@ Somente preflight (sem iniciar o monitor):
 python run_guarded_bot.py --preflight-only
 ```
 
+## 3.2 Runner dedicado: next1 scalp real
+
+Use este runner quando quiser operar apenas o setup de `next1 scalp`, sem o fluxo legado de fill-cycle.
+
+Preflight:
+
+```bash
+python run_live_next1_scalp_real_v1.py --preflight-only
+```
+
+Runner:
+
+```bash
+python run_live_next1_scalp_real_v1.py --seconds 1200
+```
+
+PrÃ©-requisitos adicionais no `.env`:
+
+```env
+POLY_NEXT1_SCALP_REAL_ENABLED=true
+POLY_NEXT1_SCALP_AGGRESSIVE_QTY=6
+POLY_NEXT1_SCALP_PASSIVE_QTY=0
+POLY_NEXT1_SCALP_ENTRY_TIMEOUT_SECS=25
+POLY_NEXT1_SCALP_ENTRY_REPRICE_SECS=1
+POLY_NEXT1_SCALP_EXIT_REPOST_SECS=6
+POLY_NEXT1_SCALP_POLL_SECS=0.5
+POLY_NEXT1_SCALP_RUN_SECONDS=1200
+```
+
+Fluxo esperado:
+- imprime `[BROKER_ENV]`, `[LIVE_GUARDED_CONFIG]` e `[NEXT1_SCALP_CONFIG]`
+- valida `shadow_only=false`, `real_posts_enabled=true` e `allow_next_2=false`
+- inicia `monitor_live_next1_scalp_real_v1`
+- restaura estado salvo se existir e se recusa a iniciar com ordens abertas nÃ£o pertencentes ao estado restaurado
+- escreve sessÃ£o em `logs/next1_scalp_real_*/next1_scalp_real.jsonl`
+- persiste o estado em `logs/next1_scalp_real_state.json`
+
 ## 4. Checklist rápido
 
 ### Offline

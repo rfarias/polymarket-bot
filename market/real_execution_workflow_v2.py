@@ -70,6 +70,33 @@ def _extract_fill_price(ticket, payload: Optional[Dict]) -> float:
     return float(ticket.price)
 
 
+def _single_leg_candidate(plan, metrics: Dict[str, float]) -> Optional[Tuple[str, str, float, float]]:
+    up = plan.tickets.get("up_entry")
+    down = plan.tickets.get("down_entry")
+    if not up or not down:
+        return None
+
+    if up.filled_qty > 0 and down.filled_qty == 0:
+        return "up_entry", "down_entry", float(metrics.get("up_bid") or 0.0), float(up.filled_qty)
+    if down.filled_qty > 0 and up.filled_qty == 0:
+        return "down_entry", "up_entry", float(metrics.get("down_bid") or 0.0), float(down.filled_qty)
+    return None
+
+
+def _single_leg_trailing_fields(payload: Dict, *, entry_price: float, exit_price: float, tick_size: float) -> Tuple[float, float, bool]:
+    best_bid = max(float(payload.get("single_leg_best_bid") or 0.0), float(exit_price))
+    trailing_armed = bool(payload.get("single_leg_trailing_armed"))
+    if best_bid >= round(float(entry_price) + float(tick_size), 4):
+        trailing_armed = True
+    stop_bid = float(payload.get("single_leg_stop_bid") or 0.0)
+    if trailing_armed:
+        stop_bid = max(float(entry_price), round(best_bid - float(tick_size), 4))
+    payload["single_leg_best_bid"] = round(best_bid, 4)
+    payload["single_leg_trailing_armed"] = trailing_armed
+    payload["single_leg_stop_bid"] = round(stop_bid, 4)
+    return round(best_bid, 4), round(stop_bid, 4), trailing_armed
+
+
 def _cancel_entry_leg_real(executor, slot_name: str, plan_id: str, leg: str, reason: str) -> List[str]:
     logs: List[str] = []
     payload = _entry_payload(executor, plan_id, leg)
@@ -159,28 +186,43 @@ def maybe_take_single_leg_profit_real_v2(executor, *, slot_name: str, metrics: O
     if plan.state != PLAN_WORKING:
         return []
 
-    up = plan.tickets.get("up_entry")
-    down = plan.tickets.get("down_entry")
-    if not up or not down:
+    broker_orders = executor.plan_broker_orders.get(plan.plan_id) or {}
+    candidate = _single_leg_candidate(plan, metrics)
+    if candidate is None:
         return []
 
-    broker_orders = executor.plan_broker_orders.get(plan.plan_id) or {}
-    if up.filled_qty > 0 and down.filled_qty == 0:
-        entry_price = _extract_fill_price(up, broker_orders.get("up_entry"))
-        exit_price = float(metrics.get("up_bid") or 0.0)
-        if exit_price >= round(entry_price + tick_size, 4):
-            logs = [f"[SINGLE_LEG_TP] {slot_name}: trigger up_entry entry={entry_price} exit={exit_price} tick={tick_size}"]
-            logs.extend(_cancel_entry_leg_real(executor, slot_name, plan.plan_id, "down_entry", "single_leg_profit"))
-            logs.extend(_post_real_exit_order(executor, slot_name, plan.plan_id, "up_entry", exit_price, "single_leg_profit"))
-            return logs
-    if down.filled_qty > 0 and up.filled_qty == 0:
-        entry_price = _extract_fill_price(down, broker_orders.get("down_entry"))
-        exit_price = float(metrics.get("down_bid") or 0.0)
-        if exit_price >= round(entry_price + tick_size, 4):
-            logs = [f"[SINGLE_LEG_TP] {slot_name}: trigger down_entry entry={entry_price} exit={exit_price} tick={tick_size}"]
-            logs.extend(_cancel_entry_leg_real(executor, slot_name, plan.plan_id, "up_entry", "single_leg_profit"))
-            logs.extend(_post_real_exit_order(executor, slot_name, plan.plan_id, "down_entry", exit_price, "single_leg_profit"))
-            return logs
+    filled_leg, hedge_leg, exit_price, _qty = candidate
+    if exit_price <= 0:
+        return []
+    payload = broker_orders.get(filled_leg)
+    if not payload:
+        return []
+
+    ticket = plan.tickets[filled_leg]
+    entry_price = _extract_fill_price(ticket, payload)
+    best_bid, stop_bid, trailing_armed = _single_leg_trailing_fields(
+        payload,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        tick_size=tick_size,
+    )
+    logs = [
+        f"[SINGLE_LEG_TRAIL] {slot_name}: leg={filled_leg} entry={entry_price} "
+        f"bid_now={round(exit_price, 4)} best_bid={best_bid} trailing_armed={trailing_armed} stop_bid={stop_bid}"
+    ]
+
+    hedge_ticket = plan.tickets.get(hedge_leg)
+    if trailing_armed and hedge_ticket and hedge_ticket.filled_qty == 0:
+        logs.extend(_cancel_entry_leg_real(executor, slot_name, plan.plan_id, hedge_leg, "single_leg_trailing"))
+
+    if trailing_armed and exit_price <= stop_bid:
+        logs.append(
+            f"[SINGLE_LEG_EXIT] {slot_name}: trigger {filled_leg} entry={entry_price} "
+            f"exit={round(exit_price, 4)} stop_bid={stop_bid} best_bid={best_bid}"
+        )
+        logs.extend(_post_real_exit_order(executor, slot_name, plan.plan_id, filled_leg, exit_price, "single_leg_trailing"))
+        return logs
+
     return []
 
 

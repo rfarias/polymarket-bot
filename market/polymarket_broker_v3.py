@@ -10,7 +10,15 @@ from market.broker_types import BrokerHealth, BrokerOrder, BrokerOrderRequest
 
 try:
     from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType, OpenOrderParams
+    from py_clob_client.clob_types import (
+        ApiCreds,
+        OrderArgs,
+        OrderType,
+        OpenOrderParams,
+        BalanceAllowanceParams,
+        AssetType,
+        MarketOrderArgs,
+    )
     from py_clob_client.order_builder.constants import BUY, SELL
 except Exception:  # pragma: no cover
     ClobClient = None
@@ -18,6 +26,9 @@ except Exception:  # pragma: no cover
     OrderArgs = None
     OrderType = None
     OpenOrderParams = None
+    BalanceAllowanceParams = None
+    AssetType = None
+    MarketOrderArgs = None
     BUY = "BUY"
     SELL = "SELL"
 
@@ -176,6 +187,57 @@ class PolymarketBrokerV3(BrokerInterface):
             raw={"response": resp},
         )
 
+    def place_market_order(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        amount: float,
+        order_type: str = "FAK",
+        market_slug: Optional[str] = None,
+        outcome: Optional[str] = None,
+    ) -> BrokerOrder:
+        if MarketOrderArgs is None or OrderType is None:
+            raise RuntimeError("py-clob-client market order helpers unavailable")
+        normalized_side = str(side).upper()
+        market_args = MarketOrderArgs(
+            token_id=token_id,
+            amount=float(amount),
+            side=normalized_side,
+            order_type=getattr(OrderType, str(order_type).upper(), OrderType.FAK),
+        )
+        signed = self.client.create_market_order(market_args)
+        resp = self.client.post_order(signed, market_args.order_type)
+        if isinstance(resp, dict):
+            order_id = str(resp.get("orderID") or resp.get("order_id") or resp.get("id") or "")
+            if order_id:
+                return BrokerOrder(
+                    order_id=order_id,
+                    token_id=token_id,
+                    side=normalized_side,
+                    price=float(resp.get("price") or 0.0),
+                    original_size=float(resp.get("original_size") or resp.get("size") or amount),
+                    size_matched=float(resp.get("size_matched") or 0.0),
+                    status=str(resp.get("status") or "posted").lower(),
+                    outcome=outcome,
+                    market_slug=market_slug,
+                    order_type=str(order_type).upper(),
+                    raw=resp,
+                )
+            return self._map_order(resp)
+        return BrokerOrder(
+            order_id=str(resp),
+            token_id=token_id,
+            side=normalized_side,
+            price=0.0,
+            original_size=float(amount),
+            status="posted",
+            market_slug=market_slug,
+            outcome=outcome,
+            order_type=str(order_type).upper(),
+            raw={"response": resp},
+        )
+
     def cancel_order(self, order_id: str) -> dict:
         return self.client.cancel(order_id)
 
@@ -185,3 +247,23 @@ class PolymarketBrokerV3(BrokerInterface):
         if hasattr(self.client, "cancel_all") and market is None and asset_id is None:
             return self.client.cancel_all()
         raise RuntimeError("CLOB client missing market cancel method")
+
+    def get_balance_allowance(self, *, asset_type: str, token_id: Optional[str] = None) -> Dict[str, Any]:
+        if BalanceAllowanceParams is None or AssetType is None:
+            raise RuntimeError("py-clob-client balance allowance helpers unavailable")
+        normalized_type = str(asset_type or "").strip().upper()
+        params = BalanceAllowanceParams(
+            asset_type=getattr(AssetType, normalized_type),
+            token_id=token_id,
+        )
+        return self.client.get_balance_allowance(params)
+
+    def update_balance_allowance(self, *, asset_type: str, token_id: Optional[str] = None) -> Dict[str, Any]:
+        if BalanceAllowanceParams is None or AssetType is None:
+            raise RuntimeError("py-clob-client balance allowance helpers unavailable")
+        normalized_type = str(asset_type or "").strip().upper()
+        params = BalanceAllowanceParams(
+            asset_type=getattr(AssetType, normalized_type),
+            token_id=token_id,
+        )
+        return self.client.update_balance_allowance(params)

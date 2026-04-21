@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "saved_at": 1776541757.0184524,
+  "plan_ids": [
+    "659cb64b-132c-4056-8df6-77c2ad8add7f"
+  ],
+  "slots": {
+    "next_1": {
+      "focus": true,
+      "last_decision_key": "plan_created|ok|{'slot_name': 'next_1', 'sum_asks': 0.99, 'sum_bids': 1.01, 'exit_gap_total': 0.0}",
+      "active_plan_id": "659cb64b-132c-4056-8df6-77c2ad8add7f",
+      "tickets": [
+        {
+          "ticket_id": "f95dba81-7b10-4ba3-a1a1-798b9bb1e3ea",
+          "slot_name": "next_1",
+          "event_slug": "btc-updown-5m-1776542100",
+          "signal": "armed",
+          "decision": "plan_created",
+          "reason": "ok",
+          "created_at": 1776541753.8458643,
+          "details": {
+            "sum_asks": 0.99,
+            "sum_bids": 1.01,
+            "edge_asks": 0.01,
+            "edge_bids": 0.01,
+            "exit_gap_total": 0.0,
+            "slot_name": "next_1",
+            "secs_to_end": 648
+          }
+        }
+      ]
+    },
+    "next_2": {
+      "focus": false,
+      "last_decision_key": null,
+      "active_plan_id": null,
+      "tickets": []
+    }
+  },
+  "plan_broker_orders": {
+    "659cb64b-132c-4056-8df6-77c2ad8add7f": {
+      "up_entry": {
+        "mode": "real",
+        "request": {
+          "token_id": "42654454273500675552976793768320277988699231012169621649598559351022263519464",
+          "side": "BUY",
+          "price": 0.5,
+          "size": 5.0,
+          "order_type": "GTC",
+          "market_slug": "btc-updown-5m-1776542100",
+          "outcome": "UP",
+          "client_order_key": "659cb64b-132c-4056-8df6-77c2ad8add7f:up_entry"
+        },
+        "order": {
+          "order_id": "0x40dbbbcf45d517a181e0afda83b1327924b73887574cbceba9f06fc535962433",
+          "token_id": "42654454273500675552976793768320277988699231012169621649598559351022263519464",
+          "side": "BUY",
+          "price": 0.5,
+          "original_size": 5.0,
+          "size_matched": 0.0,
+          "status": "LIVE",
+          "outcome": "Up",
+          "market": "0x627e12f39ae899e15439b40a92925414f08ca75d3e1632ba3a56c707ae774f49",
+          "market_slug": null,
+          "order_type": "GTC",
+          "raw": {
+            "id": "0x40dbbbcf45d517a181e0afda83b1327924b73887574cbceba9f06fc535962433",
+            "status": "LIVE",
+            "owner": "9929f8a2-c0e4-b74a-0969-6826b4e39ab3",
+            "maker_address": "0x5B6de64A1F420B3ef827EA47D64528bcd8581f07",
+            "market": "0x627e12f39ae899e15439b40a92925414f08ca75d3e1632ba3a56c707ae774f49",
+            "asset_id": "42654454273500675552976793768320277988699231012169621649598559351022263519464",
+            "side": "BUY",
+            "original_size": "5",
+            "size_matched": "0",
+            "price": "0.5",
+            "outcome": "Up",
+            "expiration": "0",
+            "order_type": "GTC",
+            "associate_trades": [],
+            "created_at": 1776541760
+          },
+          "remaining_size": 5.0
+        }
+      },
+      "down_entry": {
+        "mode": "real",
+        "request": {
+          "token_id": "62638147108676098104412552023494449013091215166575501428142496617072844524455",
+          "side": "BUY",
+          "price": 0.49,
+          "size": 5.0,
+          "order_type": "GTC",
+          "market_slug": "btc-updown-5m-1776542100",
+          "outcome": "DOWN",
+          "client_order_key": "659cb64b-132c-4056-8df6-77c2ad8add7f:down_entry"
+        },
+        "order": {
+          "order_id": "0x01e92bfebd3387777bf0e23bf0d9379a4c3c0014f0ca50c5913aa69a4893ff16",
+          "token_id": "62638147108676098104412552023494449013091215166575501428142496617072844524455",
+          "side": "BUY",
+          "price": 0.49,
+          "original_size": 5.0,
+          "size_matched": 0.0,
+          "status": "LIVE",
+          "outcome": "Down",
+          "market": "0x627e12f39ae899e15439b40a92925414f08ca75d3e1632ba3a56c707ae774f49",
+          "market_slug": null,
+          "order_type": "GTC",
+          "raw": {
+            "id": "0x01e92bfebd3387777bf0e23bf0d9379a4c3c0014f0ca50c5913aa69a4893ff16",
+            "status": "LIVE",
+            "owner": "9929f8a2-c0e4-b74a-0969-6826b4e39ab3",
+            "maker_address": "0x5B6de64A1F420B3ef827EA47D64528bcd8581f07",
+            "market": "0x627e12f39ae899e15439b40a92925414f08ca75d3e1632ba3a56c707ae774f49",
+            "asset_id": "62638147108676098104412552023494449013091215166575501428142496617072844524455",
+            "side": "BUY",
+            "original_size": "5",
+            "size_matched": "0",
+            "price": "0.49",
+            "outcome": "Down",
+            "expiration": "0",
+            "order_type": "GTC",
+            "associate_trades": [],
+            "created_at": 1776541760
+          },
+          "remaining_size": 5.0
+        }
+      }
+    }
+  },
+  "active_plans": {
+    "659cb64b-132c-4056-8df6-77c2ad8add7f": {
+      "plan_id": "659cb64b-132c-4056-8df6-77c2ad8add7f",
+      "event_slug": "btc-updown-5m-1776542100",
+      "slot_name": "next_1",
+      "up_price": 0.5,
+      "down_price": 0.49,
+      "qty_per_leg": 5,
+      "state": "working",
+      "duplicate_blocked": false,
+      "logs": [
+        "plan created | qty_per_leg=5"
+      ],
+      "tickets": {
+        "up_entry": {
+          "plan_id": "659cb64b-132c-4056-8df6-77c2ad8add7f",
+          "event_slug": "btc-updown-5m-1776542100",
+          "slot_name": "next_1",
+          "leg": "up_entry",
+          "outcome": "up",
+          "side": "buy",
+          "price": 0.5,
+          "requested_qty": 5,
+          "filled_qty": 0,
+          "remaining_qty": 5,
+          "status": "open",
+          "order_id": "91876cc2-c91d-49ff-99b3-c7da7c66caca",
+          "notes": []
+        },
+        "down_entry": {
+          "plan_id": "659cb64b-132c-4056-8df6-77c2ad8add7f",
+          "event_slug": "btc-updown-5m-1776542100",
+          "slot_name": "next_1",
+          "leg": "down_entry",
+          "outcome": "down",
+          "side": "buy",
+          "price": 0.49,
+          "requested_qty": 5,
+          "filled_qty": 0,
+          "remaining_qty": 5,
+          "status": "open",
+          "order_id": "d3fe9a52-174d-4f9b-976e-8882602674c3",
+          "notes": []
+        }
+      }
+    }
+  }
+}
