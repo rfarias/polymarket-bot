@@ -64,3 +64,18 @@ Runner real de `current scalp`:
 python run_live_current_scalp_real_v1.py --preflight-only
 python run_live_current_scalp_real_v1.py --seconds 1800
 ```
+
+Runner real de `current almost resolved`:
+
+```bash
+python run_live_current_almost_resolved_real_v1.py --preflight-only
+python run_live_current_almost_resolved_real_v1.py --seconds 300
+```
+
+Esse runner fica armado apenas com `POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED=true`. A primeira versao real e dedicada ao setup de quase resolvidos, bloqueia startup se houver ordens abertas e nao deve ser executada junto com o `next1 scalp real` enquanto a validacao simultanea ainda nao estiver pronta.
+
+Para smoke curto com reinicio automatico:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\watch_current_almost_resolved_real.ps1 -RunSeconds 300 -PollSeconds 0.5 -Qty 5
+```
