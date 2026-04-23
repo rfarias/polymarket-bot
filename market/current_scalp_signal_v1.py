@@ -236,16 +236,11 @@ class CurrentScalpResearchV1:
                 "allow": False,
                 "reason": "missing_external_reference_price",
             }
-        if up_mid is None or down_mid is None:
-            return {
-                "setup": "no_edge",
-                "side": None,
-                "allow": False,
-                "reason": "missing_market_midpoint",
-            }
-
-        self.samples.append(_SpotSample(ts=now_ts, reference_price=float(reference_price), up_mid=float(up_mid)))
         self._trim(now_ts)
+
+        if up_mid is not None and down_mid is not None:
+            self.samples.append(_SpotSample(ts=now_ts, reference_price=float(reference_price), up_mid=float(up_mid)))
+            self._trim(now_ts)
 
         sample_5s = _find_sample_before(self.samples, now_ts, 5)
         sample_15s = _find_sample_before(self.samples, now_ts, 15)
@@ -254,11 +249,46 @@ class CurrentScalpResearchV1:
         spot_delta_5s_bps = _bps_change(reference_price, sample_5s.reference_price if sample_5s else None)
         spot_delta_15s_bps = _bps_change(reference_price, sample_15s.reference_price if sample_15s else None)
         spot_delta_30s_bps = _bps_change(reference_price, sample_30s.reference_price if sample_30s else None)
-        market_delta_5s = round(float(up_mid) - float(sample_5s.up_mid), 6) if sample_5s is not None else None
-        market_delta_15s = round(float(up_mid) - float(sample_15s.up_mid), 6) if sample_15s is not None else None
-        market_range_15s = _range_up_mid(self.samples, now_ts, 15)
-        market_range_30s = _range_up_mid(self.samples, now_ts, 30)
+        market_delta_5s = round(float(up_mid) - float(sample_5s.up_mid), 6) if up_mid is not None and sample_5s is not None else None
+        market_delta_15s = round(float(up_mid) - float(sample_15s.up_mid), 6) if up_mid is not None and sample_15s is not None else None
+        market_range_15s = _range_up_mid(self.samples, now_ts, 15) if up_mid is not None else None
+        market_range_30s = _range_up_mid(self.samples, now_ts, 30) if up_mid is not None else None
         distance_from_open_bps = _bps_change(reference_price, opening_reference_price)
+
+        if up_mid is None or down_mid is None:
+            return {
+                "setup": "no_edge",
+                "side": None,
+                "allow": False,
+                "reason": "missing_market_midpoint",
+                "secs_to_end": secs_to_end,
+                "elapsed_from_open_secs": elapsed_from_open_secs,
+                "reference_price": reference_price,
+                "opening_reference_price": opening_reference_price,
+                "distance_from_open_bps": distance_from_open_bps,
+                "source_divergence_bps": source_divergence_bps,
+                "up_mid": up_mid,
+                "down_mid": down_mid,
+                "up_bid": best_up_bid,
+                "up_ask": best_up_ask,
+                "down_bid": best_down_bid,
+                "down_ask": best_down_ask,
+                "spread_up": spread_up,
+                "spread_down": spread_down,
+                "combined_bid_depth_top3": combined_bid_depth,
+                "combined_ask_depth_top3": combined_ask_depth,
+                "combined_depth_top3": combined_depth,
+                "spot_delta_5s_bps": spot_delta_5s_bps,
+                "spot_delta_15s_bps": spot_delta_15s_bps,
+                "spot_delta_30s_bps": spot_delta_30s_bps,
+                "market_delta_5s": market_delta_5s,
+                "market_delta_15s": market_delta_15s,
+                "market_range_15s": market_range_15s,
+                "market_range_30s": market_range_30s,
+                "target_ticks": self.cfg.target_ticks,
+                "stop_ticks": self.cfg.stop_ticks,
+                "max_hold_secs": self.cfg.max_hold_secs,
+            }
 
         reasons: List[str] = []
         if secs_to_end is None or secs_to_end < self.cfg.min_secs_to_end:

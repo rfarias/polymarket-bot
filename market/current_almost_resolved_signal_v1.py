@@ -11,6 +11,12 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(default)
 
 
+def _limit_or_default(value: Optional[float], default: float = 999.0) -> float:
+    if value is None:
+        return float(default)
+    return float(value)
+
+
 @dataclass
 class CurrentAlmostResolvedConfigV1:
     min_secs_to_end: int = 15
@@ -23,6 +29,15 @@ class CurrentAlmostResolvedConfigV1:
     min_price_to_beat_distance_bps: float = 5.0
     min_price_to_beat_buffer_bps: float = 2.0
     max_reversal_share_of_open_distance: float = 0.6
+    min_price_to_beat_distance_usd: float = 40.0
+    min_price_to_beat_buffer_usd: float = 15.0
+    healthy_pullback_max_usd: float = 12.0
+    healthy_pullback_share_of_open_distance: float = 0.35
+    strong_distance_relaxed_threshold_usd: float = 60.0
+    strong_distance_relaxed_max_exit_distance: float = 0.09
+    strong_distance_relaxed_market_range_30s: float = 0.08
+    soft_counter_price_alert: float = 0.10
+    strong_counter_price_block: float = 0.22
     max_spread: float = 0.015
     max_leader_counter_price: float = 0.06
     min_depth_top3: float = 15.0
@@ -103,11 +118,18 @@ def evaluate_current_almost_resolved_v1(
         result["reason"] = "outside_time_window"
         return result
 
+    context_reason = str((reference_signal or {}).get("reason") or "")
+    if up_buy >= 0.9 and down_buy >= 0.9:
+        result["reason"] = "invalid_book_both_sides_rich"
+        return result
+
     spot_delta_5s = _safe_float((reference_signal or {}).get("spot_delta_5s_bps"), 0.0)
     spot_delta_15s = _safe_float((reference_signal or {}).get("spot_delta_15s_bps"), 0.0)
     spot_delta_30s = _safe_float((reference_signal or {}).get("spot_delta_30s_bps"), 0.0)
     distance_from_open = _safe_float((reference_signal or {}).get("distance_from_open_bps"), 0.0)
     missing_open_reference = "missing_open_reference_price" in str((reference_signal or {}).get("reason") or "")
+    reference_price = _safe_float((reference_signal or {}).get("reference_price"), 0.0)
+    opening_reference_price = _safe_float((reference_signal or {}).get("opening_reference_price"), 0.0)
     market_delta_5s = _safe_float((reference_signal or {}).get("market_delta_5s"), 0.0)
     market_delta_15s = _safe_float((reference_signal or {}).get("market_delta_15s"), 0.0)
     market_range_15s = _safe_float((reference_signal or {}).get("market_range_15s"), 0.0)
@@ -118,39 +140,107 @@ def evaluate_current_almost_resolved_v1(
     up_exit_distance = round(cfg.target_exit_price - up_buy, 6) if up_buy > 0 else None
     down_exit_distance = round(cfg.target_exit_price - down_buy, 6) if down_buy > 0 else None
     distance_to_price_to_beat_bps = round(abs(distance_from_open), 4)
+    distance_to_price_to_beat_usd = (
+        round(abs(reference_price - opening_reference_price), 4)
+        if reference_price > 0 and opening_reference_price > 0
+        else 0.0
+    )
     up_adverse_spot_bps = round(max(0.0, -spot_delta_5s, -spot_delta_15s, -spot_delta_30s), 4)
     down_adverse_spot_bps = round(max(0.0, spot_delta_5s, spot_delta_15s, spot_delta_30s), 4)
+    up_adverse_spot_usd = round(reference_price * up_adverse_spot_bps / 10000.0, 4) if reference_price > 0 else 0.0
+    down_adverse_spot_usd = round(reference_price * down_adverse_spot_bps / 10000.0, 4) if reference_price > 0 else 0.0
     up_price_to_beat_buffer_bps = round(distance_to_price_to_beat_bps - up_adverse_spot_bps, 4)
     down_price_to_beat_buffer_bps = round(distance_to_price_to_beat_bps - down_adverse_spot_bps, 4)
+    up_price_to_beat_buffer_usd = round(distance_to_price_to_beat_usd - up_adverse_spot_usd, 4)
+    down_price_to_beat_buffer_usd = round(distance_to_price_to_beat_usd - down_adverse_spot_usd, 4)
+    pullback_usd_cap = max(
+        cfg.healthy_pullback_max_usd,
+        round(distance_to_price_to_beat_usd * cfg.healthy_pullback_share_of_open_distance, 4),
+    )
     result["up_edge_vs_counter"] = up_edge_vs_counter
     result["down_edge_vs_counter"] = down_edge_vs_counter
     result["up_exit_distance"] = up_exit_distance
     result["down_exit_distance"] = down_exit_distance
     result["distance_to_price_to_beat_bps"] = distance_to_price_to_beat_bps
+    result["distance_to_price_to_beat_usd"] = distance_to_price_to_beat_usd
     result["up_adverse_spot_bps"] = up_adverse_spot_bps
     result["down_adverse_spot_bps"] = down_adverse_spot_bps
+    result["up_adverse_spot_usd"] = up_adverse_spot_usd
+    result["down_adverse_spot_usd"] = down_adverse_spot_usd
     result["up_price_to_beat_buffer_bps"] = up_price_to_beat_buffer_bps
     result["down_price_to_beat_buffer_bps"] = down_price_to_beat_buffer_bps
+    result["up_price_to_beat_buffer_usd"] = up_price_to_beat_buffer_usd
+    result["down_price_to_beat_buffer_usd"] = down_price_to_beat_buffer_usd
+    up_counter_pressure_ok = down_buy <= cfg.strong_counter_price_block
+    down_counter_pressure_ok = up_buy <= cfg.strong_counter_price_block
+
+    result["pullback_usd_cap"] = pullback_usd_cap
     result["market_range_15s"] = market_range_15s
     result["market_range_30s"] = market_range_30s
     result["missing_open_reference"] = missing_open_reference
+    result["missing_market_midpoint_context"] = "missing_market_midpoint" in context_reason
+    result["up_counter_pressure_ok"] = up_counter_pressure_ok
+    result["down_counter_pressure_ok"] = down_counter_pressure_ok
+    result["up_counter_alert"] = down_buy >= cfg.soft_counter_price_alert
+    result["down_counter_alert"] = up_buy >= cfg.soft_counter_price_alert
+
+    up_distance_relaxed_ok = (
+        distance_to_price_to_beat_usd >= cfg.min_price_to_beat_distance_usd
+        and up_price_to_beat_buffer_usd >= cfg.min_price_to_beat_buffer_usd
+        and up_adverse_spot_usd <= pullback_usd_cap
+        and up_counter_pressure_ok
+        and market_range_30s
+        <= (
+            cfg.strong_distance_relaxed_market_range_30s
+            if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
+            else cfg.max_market_range_30s
+        )
+        and _safe_float(up_exit_distance, 999.0)
+        <= (
+            cfg.strong_distance_relaxed_max_exit_distance
+            if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
+            else cfg.max_exit_distance
+        )
+    )
+    down_distance_relaxed_ok = (
+        distance_to_price_to_beat_usd >= cfg.min_price_to_beat_distance_usd
+        and down_price_to_beat_buffer_usd >= cfg.min_price_to_beat_buffer_usd
+        and down_adverse_spot_usd <= pullback_usd_cap
+        and down_counter_pressure_ok
+        and market_range_30s
+        <= (
+            cfg.strong_distance_relaxed_market_range_30s
+            if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
+            else cfg.max_market_range_30s
+        )
+        and _safe_float(down_exit_distance, 999.0)
+        <= (
+            cfg.strong_distance_relaxed_max_exit_distance
+            if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
+            else cfg.max_exit_distance
+        )
+    )
 
     if (
         cfg.min_entry_price <= up_buy <= cfg.max_entry_price
-        and _safe_float(up_exit_distance, 999.0) <= cfg.max_exit_distance
-        and down_buy <= cfg.max_leader_counter_price
-        and _safe_float(up_edge_vs_counter, 0.0) >= cfg.min_leader_edge_vs_counter
-        and (up_spread or 999.0) <= cfg.max_spread
+        and _limit_or_default(up_spread) <= max(cfg.max_spread, 0.02 if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd else cfg.max_spread)
         and up_depth >= cfg.min_depth_top3
         and distance_from_open >= cfg.min_price_to_beat_distance_bps
-        and up_adverse_spot_bps <= distance_to_price_to_beat_bps * cfg.max_reversal_share_of_open_distance
-        and up_price_to_beat_buffer_bps >= cfg.min_price_to_beat_buffer_bps
-        and spot_delta_5s >= -cfg.max_adverse_spot_5s_bps
-        and spot_delta_15s >= -cfg.max_adverse_spot_15s_bps
-        and market_delta_5s >= -cfg.max_adverse_market_5s
-        and market_delta_15s >= -cfg.max_adverse_market_15s
-        and market_range_15s <= cfg.max_market_range_15s
-        and market_range_30s <= cfg.max_market_range_30s
+        and up_counter_pressure_ok
+        and (
+            (
+                _safe_float(up_exit_distance, 999.0) <= cfg.max_exit_distance
+                and up_adverse_spot_bps <= distance_to_price_to_beat_bps * cfg.max_reversal_share_of_open_distance
+                and up_price_to_beat_buffer_bps >= cfg.min_price_to_beat_buffer_bps
+                and spot_delta_5s >= -cfg.max_adverse_spot_5s_bps
+                and spot_delta_15s >= -cfg.max_adverse_spot_15s_bps
+                and market_delta_5s >= -cfg.max_adverse_market_5s
+                and market_delta_15s >= -cfg.max_adverse_market_15s
+                and market_range_15s <= cfg.max_market_range_15s
+                and market_range_30s <= cfg.max_market_range_30s
+            )
+            or up_distance_relaxed_ok
+        )
     ):
         result.update(
             {
@@ -166,16 +256,20 @@ def evaluate_current_almost_resolved_v1(
     if (
         (not cfg.fallback_requires_missing_open_reference or missing_open_reference)
         and cfg.min_entry_price <= up_buy <= cfg.fallback_max_entry_price
-        and _safe_float(up_exit_distance, 999.0) <= cfg.max_exit_distance
-        and down_buy <= cfg.fallback_max_counter_price
-        and _safe_float(up_edge_vs_counter, 0.0) >= cfg.fallback_min_leader_edge_vs_counter
-        and (up_spread or 999.0) <= cfg.max_spread
+        and _limit_or_default(up_spread) <= max(cfg.max_spread, 0.02)
         and up_depth >= cfg.min_depth_top3
-        and up_adverse_spot_bps <= cfg.fallback_max_adverse_spot_30s_bps
-        and spot_delta_15s >= -cfg.max_adverse_spot_15s_bps
-        and spot_delta_30s >= -0.5
-        and market_range_15s <= cfg.max_market_range_15s
-        and market_range_30s <= cfg.fallback_max_market_range_30s
+        and up_counter_pressure_ok
+        and (
+            (
+                _safe_float(up_exit_distance, 999.0) <= cfg.max_exit_distance
+                and up_adverse_spot_bps <= cfg.fallback_max_adverse_spot_30s_bps
+                and spot_delta_15s >= -cfg.max_adverse_spot_15s_bps
+                and spot_delta_30s >= -0.5
+                and market_range_15s <= cfg.max_market_range_15s
+                and market_range_30s <= cfg.fallback_max_market_range_30s
+            )
+            or up_distance_relaxed_ok
+        )
     ):
         result.update(
             {
@@ -190,20 +284,24 @@ def evaluate_current_almost_resolved_v1(
 
     if (
         cfg.min_entry_price <= down_buy <= cfg.max_entry_price
-        and _safe_float(down_exit_distance, 999.0) <= cfg.max_exit_distance
-        and up_buy <= cfg.max_leader_counter_price
-        and _safe_float(down_edge_vs_counter, 0.0) >= cfg.min_leader_edge_vs_counter
-        and (down_spread or 999.0) <= cfg.max_spread
+        and _limit_or_default(down_spread) <= max(cfg.max_spread, 0.02 if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd else cfg.max_spread)
         and down_depth >= cfg.min_depth_top3
         and distance_from_open <= -cfg.min_price_to_beat_distance_bps
-        and down_adverse_spot_bps <= distance_to_price_to_beat_bps * cfg.max_reversal_share_of_open_distance
-        and down_price_to_beat_buffer_bps >= cfg.min_price_to_beat_buffer_bps
-        and spot_delta_5s <= cfg.max_adverse_spot_5s_bps
-        and spot_delta_15s <= cfg.max_adverse_spot_15s_bps
-        and market_delta_5s <= cfg.max_adverse_market_5s
-        and market_delta_15s <= cfg.max_adverse_market_15s
-        and market_range_15s <= cfg.max_market_range_15s
-        and market_range_30s <= cfg.max_market_range_30s
+        and down_counter_pressure_ok
+        and (
+            (
+                _safe_float(down_exit_distance, 999.0) <= cfg.max_exit_distance
+                and down_adverse_spot_bps <= distance_to_price_to_beat_bps * cfg.max_reversal_share_of_open_distance
+                and down_price_to_beat_buffer_bps >= cfg.min_price_to_beat_buffer_bps
+                and spot_delta_5s <= cfg.max_adverse_spot_5s_bps
+                and spot_delta_15s <= cfg.max_adverse_spot_15s_bps
+                and market_delta_5s <= cfg.max_adverse_market_5s
+                and market_delta_15s <= cfg.max_adverse_market_15s
+                and market_range_15s <= cfg.max_market_range_15s
+                and market_range_30s <= cfg.max_market_range_30s
+            )
+            or down_distance_relaxed_ok
+        )
     ):
         result.update(
             {
@@ -219,16 +317,20 @@ def evaluate_current_almost_resolved_v1(
     if (
         (not cfg.fallback_requires_missing_open_reference or missing_open_reference)
         and cfg.min_entry_price <= down_buy <= cfg.fallback_max_entry_price
-        and _safe_float(down_exit_distance, 999.0) <= cfg.max_exit_distance
-        and up_buy <= cfg.fallback_max_counter_price
-        and _safe_float(down_edge_vs_counter, 0.0) >= cfg.fallback_min_leader_edge_vs_counter
-        and (down_spread or 999.0) <= cfg.max_spread
+        and _limit_or_default(down_spread) <= max(cfg.max_spread, 0.02)
         and down_depth >= cfg.min_depth_top3
-        and down_adverse_spot_bps <= cfg.fallback_max_adverse_spot_30s_bps
-        and spot_delta_15s <= cfg.max_adverse_spot_15s_bps
-        and spot_delta_30s <= 0.5
-        and market_range_15s <= cfg.max_market_range_15s
-        and market_range_30s <= cfg.fallback_max_market_range_30s
+        and down_counter_pressure_ok
+        and (
+            (
+                _safe_float(down_exit_distance, 999.0) <= cfg.max_exit_distance
+                and down_adverse_spot_bps <= cfg.fallback_max_adverse_spot_30s_bps
+                and spot_delta_15s <= cfg.max_adverse_spot_15s_bps
+                and spot_delta_30s <= 0.5
+                and market_range_15s <= cfg.max_market_range_15s
+                and market_range_30s <= cfg.fallback_max_market_range_30s
+            )
+            or down_distance_relaxed_ok
+        )
     ):
         result.update(
             {
