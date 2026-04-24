@@ -1,0 +1,69 @@
+#pm-manual-assist-ext {
+  position: fixed;
+  top: 86px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  min-width: 330px;
+  max-width: 420px;
+  background: rgba(16, 20, 24, 0.96);
+  color: #ecf1f7;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: Consolas, monospace;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  cursor: move;
+  user-select: none;
+}
+
+#pm-manual-assist-ext .pm-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #98a7b8;
+}
+
+#pm-manual-assist-ext .pm-label {
+  color: #cbd5e1;
+}
+
+#pm-manual-assist-ext .pm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#pm-manual-assist-ext .pm-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+#pm-manual-assist-ext .pm-badge {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  color: #ecf1f7;
+}
+
+#pm-manual-assist-ext .pm-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+#pm-manual-assist-ext button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#pm-manual-assist-ext .pm-fill {
+  background: #ecf1f7;
+  color: #101418;
+}
+
+#pm-manual-assist-ext .pm-hide {
+  background: #26313b;
+  color: #ecf1f7;
+}

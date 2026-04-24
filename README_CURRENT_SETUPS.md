@@ -154,3 +154,48 @@ Para virar setups reais simultaneos com seguranca, ainda faltam:
 - restore/recovery equivalente ao padrao do `next1 scalp`
 
 Hoje o `current scalp` ja deu o primeiro passo com runner real dedicado. O que falta e endurecer o restante da camada operacional, sobretudo para o `almost resolved`.
+
+## 8. Overlay manual
+
+Existe agora um overlay desktop simples para suporte a operacao manual:
+
+- runner: `run_manual_overlay_v1.py`
+- fonte de contexto: `market/current_scalp_signal_v1.py`
+- fonte de decisao almost resolved: `market/current_almost_resolved_signal_v1.py`
+
+Uso:
+
+```bash
+python run_manual_overlay_v1.py
+```
+
+O overlay atualiza a cada ~2s e mostra:
+
+- direcao/tendencia inferida do spot
+- risco de reversao
+- distancia ate o `price to beat`
+- buffer restante depois do pullback adverso
+- leitura operacional `SAFE`, `CAUTION`, `UNSAFE` ou `BLOCKED`
+
+### 8.1 Modo browser assist
+
+Para operar manualmente sem cobrir a interface, existe tambem um bridge local + userscript:
+
+- servidor local do sinal: `run_manual_signal_server_v1.py`
+- userscript do navegador: `scripts/polymarket_manual_assist.user.js`
+
+Uso:
+
+```bash
+python run_manual_signal_server_v1.py --qty 6
+```
+
+Depois carregue o userscript no navegador.
+
+Esse modo:
+
+- desenha um painel compacto acima do grafico
+- limita a leitura a uma janela util por mercado de 5m
+- pode preencher `lado`, `preco` e `quantidade`
+- nao clica em `Trade`
+- deixa o clique final e a confirmacao da wallet com voce
