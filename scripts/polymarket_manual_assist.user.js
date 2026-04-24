@@ -175,6 +175,12 @@
     return `<div style="margin-top:4px;font-size:12px;color:#98a7b8;"><span style="color:#cbd5e1;">${label}:</span> ${value}</div>`;
   }
 
+  function sideArrow(side) {
+    if (side === "UP") return "↑";
+    if (side === "DOWN") return "↓";
+    return "→";
+  }
+
   function render(state) {
     const panel = ensurePanel();
     const mode = classifyState(state);
@@ -195,6 +201,7 @@
     ;
     const lines = [];
     lines.push(row("Status", `${mode} | secs=${state.secs_to_end ?? "-"} | score=${state.manual_score ?? 0}`));
+    lines.push(row("Action", `${state.suggested_action || "-"} | ${state.suggested_detail || "-"}`));
     if (hasValue(state.watch_window_eta_secs) && Number(state.watch_window_eta_secs) > 0) {
       lines.push(row("Watch In", fmt(state.watch_window_eta_secs, 0, "s")));
     }
@@ -208,15 +215,11 @@
       lines.push(row("Reversal", state.reversal_risk));
     }
     if (hasValue(state.price_to_beat_bps)) {
-      lines.push(row("Price To Beat", fmt(state.price_to_beat_bps, 2, "bps")));
+      lines.push(row("Price To Beat", `${sideArrow(state.price_to_beat_side)} ${fmt(state.price_to_beat_bps, 2, "bps")}`));
     }
     if (hasValue(state.buffer_bps)) {
       lines.push(row("Buffer", fmt(state.buffer_bps, 2, "bps")));
     }
-    if (state.setup_side || hasValue(state.entry_price)) {
-      lines.push(row("Entry", `${state.setup_side || "-"} ${fmt(state.entry_price, 2)} x ${state.default_qty || 6}`));
-    }
-    lines.push(row("Note", state.status_note || secondary));
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
         <div style="font-size:14px;font-weight:700;">${headline}</div>
@@ -261,6 +264,6 @@
     }
   }
 
-  setInterval(tick, 2000);
+  setInterval(tick, 100);
   tick();
 })();

@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -8,6 +9,9 @@ from market.queue_5m_v2 import build_5m_queue_v2
 from market.slug_discovery import fetch_event_by_slug
 
 CLOB_API = "https://clob.polymarket.com"
+BOOK_TIMEOUT = 3.0
+_META_TTL_SECONDS = 5.0
+_META_CACHE: Dict[str, tuple[float, Dict[str, Any] | None]] = {}
 
 
 def _as_list(value):
@@ -25,12 +29,19 @@ def _as_list(value):
 
 
 def fetch_market_metadata_from_slug(slug: str) -> Optional[Dict[str, Any]]:
+    cached = _META_CACHE.get(slug)
+    now = time.monotonic()
+    if cached and now - cached[0] <= _META_TTL_SECONDS:
+        return cached[1]
+
     event = fetch_event_by_slug(slug)
     if not event:
+        _META_CACHE[slug] = (now, None)
         return None
 
     markets = event.get("markets") or []
     if not markets:
+        _META_CACHE[slug] = (now, None)
         return None
 
     market = markets[0]
@@ -45,7 +56,7 @@ def fetch_market_metadata_from_slug(slug: str) -> Optional[Dict[str, Any]]:
             "token_id": str(token_id),
         })
 
-    return {
+    meta = {
         "event_title": event.get("title"),
         "event_slug": event.get("slug"),
         "market_question": market.get("question"),
@@ -57,6 +68,8 @@ def fetch_market_metadata_from_slug(slug: str) -> Optional[Dict[str, Any]]:
         "volumeClob": market.get("volumeClob"),
         "endDate": market.get("endDate") or event.get("endDate"),
     }
+    _META_CACHE[slug] = (now, meta)
+    return meta
 
 
 def fetch_books_for_tokens(token_ids: List[str]) -> List[Dict[str, Any]]:
@@ -68,7 +81,7 @@ def fetch_books_for_tokens(token_ids: List[str]) -> List[Dict[str, Any]]:
     print(f"[BOOK] Fetching {len(token_ids)} token books from {url}")
 
     try:
-        res = requests.post(url, json=payload, timeout=20)
+        res = requests.post(url, json=payload, timeout=BOOK_TIMEOUT)
         res.raise_for_status()
         data = res.json()
         print(f"[BOOK] Books received: {len(data)}")

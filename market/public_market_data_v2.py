@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional
 
 import requests
 
 CLOB_API = "https://clob.polymarket.com"
-TIMEOUT = 20
+TIMEOUT = 3.0
 
 
 def fetch_price(token_id: str, side: str) -> Optional[float]:
@@ -26,7 +27,10 @@ def fetch_price(token_id: str, side: str) -> Optional[float]:
 
 
 def fetch_token_executable_prices(token_id: str) -> Dict[str, Optional[float]]:
-    return {
-        "BUY": fetch_price(token_id, "BUY"),
-        "SELL": fetch_price(token_id, "SELL"),
-    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        buy_future = pool.submit(fetch_price, token_id, "BUY")
+        sell_future = pool.submit(fetch_price, token_id, "SELL")
+        return {
+            "BUY": buy_future.result(),
+            "SELL": sell_future.result(),
+        }

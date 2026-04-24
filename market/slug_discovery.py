@@ -1,8 +1,14 @@
 import re
-import requests
+import time
 from typing import List, Dict, Any
+
+import requests
+
 from config.settings import GAMMA_API
 from market.page_discovery import discover_btc_fast_market_links
+
+_EVENT_TTL_SECONDS = 2.0
+_EVENT_CACHE: Dict[str, tuple[float, Dict[str, Any] | None]] = {}
 
 
 def normalize_event_slug(link: str) -> str | None:
@@ -37,6 +43,11 @@ def discover_unique_event_slugs() -> List[str]:
 
 
 def fetch_event_by_slug(slug: str) -> Dict[str, Any] | None:
+    cached = _EVENT_CACHE.get(slug)
+    now = time.monotonic()
+    if cached and now - cached[0] <= _EVENT_TTL_SECONDS:
+        return cached[1]
+
     url = f"{GAMMA_API}/events/slug/{slug}"
     print(f"[API] Fetching event by slug: {slug}")
 
@@ -44,9 +55,11 @@ def fetch_event_by_slug(slug: str) -> Dict[str, Any] | None:
         res = requests.get(url, timeout=20)
         res.raise_for_status()
         data = res.json()
+        _EVENT_CACHE[slug] = (now, data)
         return data
     except Exception as e:
         print(f"[ERROR] Failed to fetch event slug={slug}: {e}")
+        _EVENT_CACHE[slug] = (now, None)
         return None
 
 

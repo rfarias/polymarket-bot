@@ -9,6 +9,7 @@ from pathlib import Path
 from pprint import pprint
 
 from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
+from market.manual_overlay_v1 import ManualOverlayEngineV1
 from market.current_scalp_signal_v1 import (
     CurrentScalpConfigV1,
     CurrentScalpResearchV1,
@@ -37,6 +38,9 @@ class PaperTrade:
     exit_reason: str | None = None
     pnl_ticks: float | None = None
     hold_to_resolution: bool = False
+    setup_variant: str | None = None
+    entry_buffer_bps: float | None = None
+    entry_distance_bps: float | None = None
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -85,6 +89,12 @@ def _paper_enter(signal: dict, tick_size: float, now: float, cfg: CurrentAlmostR
     trade.target_price = round(min(0.99, _safe_float(signal.get("exit_price"), 0.99)), 6)
     trade.stop_price = round(max(0.01, trade.entry_price - cfg.stop_ticks * tick_size), 6)
     trade.created_at = now
+    trade.setup_variant = str(signal.get("setup_variant") or "standard")
+    trade.entry_buffer_bps = _safe_float(
+        signal.get("up_price_to_beat_buffer_bps" if trade.side == "UP" else "down_price_to_beat_buffer_bps"),
+        0.0,
+    )
+    trade.entry_distance_bps = abs(_safe_float(signal.get("distance_to_price_to_beat_bps"), 0.0))
     return trade
 
 
@@ -111,6 +121,10 @@ def _paper_manage(
     market_range_30s = _safe_float(signal.get("market_range_30s"), 0.0)
     edge_vs_counter = _safe_float(signal.get("up_edge_vs_counter" if side == "UP" else "down_edge_vs_counter"), 0.0)
     adverse_spot_bps = _safe_float(signal.get("up_adverse_spot_bps" if side == "UP" else "down_adverse_spot_bps"), 0.0)
+    market_range_15s = _safe_float(signal.get("market_range_15s"), 0.0)
+    setup_variant = str(trade.setup_variant or signal.get("setup_variant") or "standard")
+    entry_buffer_bps = _safe_float(trade.entry_buffer_bps, buffer_bps)
+    entry_distance_bps = _safe_float(trade.entry_distance_bps, open_distance_bps)
 
     if (
         secs_to_end is not None
@@ -121,6 +135,31 @@ def _paper_manage(
         and market_range_30s <= cfg.paper_profit_take_on_market_range_30s
     ):
         trade.hold_to_resolution = True
+
+    if (
+        setup_variant == "controlled_late_entry"
+        and pnl_ticks_now > 0
+        and (
+            market_range_15s >= cfg.controlled_late_max_market_range_15s
+            or adverse_spot_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
+            or buffer_bps <= max(cfg.paper_structural_stop_buffer_bps, entry_buffer_bps * 0.7)
+            or open_distance_bps <= max(cfg.min_price_to_beat_distance_bps, entry_distance_bps * 0.7)
+        )
+    ):
+        trade.mode = "idle"
+        trade.exit_price = bid_now
+        trade.exit_reason = "controlled_late_profit_take"
+    elif (
+        setup_variant == "resolved_pullback_limit"
+        and (
+            market_range_15s >= cfg.near_end_max_market_range_15s
+            or market_range_30s >= cfg.paper_profit_take_on_market_range_30s
+            or adverse_spot_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
+        )
+    ):
+        trade.mode = "idle"
+        trade.exit_price = bid_now if bid_now > 0 else trade.entry_price
+        trade.exit_reason = "resolved_pullback_exit"
 
     if bid_now >= _safe_float(trade.target_price):
         trade.mode = "idle"
@@ -195,10 +234,14 @@ def main() -> int:
     signal_cfg = CurrentAlmostResolvedConfigV1()
     scalp_cfg = CurrentScalpConfigV1()
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg)
+    overlay_engine = ManualOverlayEngineV1(scalp_cfg=scalp_cfg, signal_cfg=signal_cfg)
     trade = PaperTrade()
     log_path = Path(args.log_file) if args.log_file else _build_default_log_path()
     completed: list[dict] = []
     blocked_reasons = Counter()
+    allowed_variants = Counter()
+    entered_variants = Counter()
+    exit_reasons = Counter()
 
     print("[CURRENT_ALMOST_RESOLVED_CONFIG]")
     pprint(signal_cfg.as_dict())
@@ -253,6 +296,8 @@ def main() -> int:
 
         if not signal.get("allow"):
             blocked_reasons[str(signal.get("reason") or "unknown")] += 1
+        else:
+            allowed_variants[str(signal.get("setup_variant") or "standard")] += 1
 
         print("\n===== CURRENT ALMOST RESOLVED PAPER V1 =====")
         print(
@@ -276,10 +321,39 @@ def main() -> int:
             },
         )
 
-        if trade.mode == "idle" and signal.get("allow"):
+        suggested_action, suggested_detail, risk_plan, exit_alert = overlay_engine._suggested_action(
+            current_secs=current_secs,
+            setup_side=str(signal.get("side") or ""),
+            trend_side=str(current_scalp_signal.get("side") or "NEUTRAL"),
+            almost_signal=signal,
+            scalp_signal=current_scalp_signal,
+            reversal_risk=overlay_engine._infer_reversal_risk(signal, current_scalp_signal),
+            score=overlay_engine._manual_score(
+                signal,
+                current_scalp_signal,
+                overlay_engine._infer_reversal_risk(signal, current_scalp_signal),
+                overlay_engine._infer_trend(current_scalp_signal)[1],
+            ),
+        )
+        print(f"[SUGGESTED_ACTION] {suggested_action} | {suggested_detail} | {risk_plan} | {exit_alert}")
+
+        if trade.mode == "idle" and signal.get("allow") and (
+            suggested_action.startswith("COMPRAR ") or suggested_action.startswith("LIMITE ")
+        ):
             tick_size = _tick_size_from_snap(current_snap, signal.get("side") or "UP")
             trade = _paper_enter(signal, tick_size, now, signal_cfg)
-            _append_jsonl(log_path, {"type": "enter", "ts": now, "signal": signal, "trade": asdict(trade)})
+            entered_variants[str(trade.setup_variant or "standard")] += 1
+            _append_jsonl(
+                log_path,
+                {
+                    "type": "enter",
+                    "ts": now,
+                    "signal": signal,
+                    "suggested_action": suggested_action,
+                    "suggested_detail": suggested_detail,
+                    "trade": asdict(trade),
+                },
+            )
             print("[PAPER_ENTER]")
             pprint(asdict(trade))
 
@@ -299,6 +373,7 @@ def main() -> int:
             pprint(asdict(trade))
             if trade.mode == "idle" and trade.exit_reason is not None:
                 completed.append(asdict(trade))
+                exit_reasons[str(completed[-1].get("exit_reason") or "unknown")] += 1
                 _append_jsonl(log_path, {"type": "exit", "ts": now, "trade": completed[-1]})
                 print("[PAPER_EXIT]")
                 pprint(completed[-1])
@@ -310,6 +385,9 @@ def main() -> int:
     pprint(
         {
             "stats": _trade_stats(completed),
+            "allowed_variants": dict(allowed_variants),
+            "entered_variants": dict(entered_variants),
+            "exit_reasons": dict(exit_reasons),
             "blocked_reasons_top10": blocked_reasons.most_common(10),
             "log_file": str(log_path),
             "trades": completed,

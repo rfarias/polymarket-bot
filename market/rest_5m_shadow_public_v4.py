@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Tuple
 
 from market.book_5m import fetch_books_for_tokens, fetch_market_metadata_from_slug
@@ -6,7 +7,7 @@ from market.queue_5m_v5 import build_5m_queue_v5, UNFILLED_EXIT_TRIGGER_SECS_TO_
 from market.setup1_policy import ARBITRAGE_SUM_ASKS_MAX, classify_signal
 from market.setup1_broker_executor_v3 import Setup1BrokerExecutorV3
 from market.dryrun_broker import DryRunBroker
-from market.public_market_data_v1 import fetch_midpoints, fetch_spread
+from market.public_market_data_v1 import fetch_midpoints
 from market.public_market_data_v2 import fetch_token_executable_prices
 
 MIN_STABLE_SNAPSHOTS = 2
@@ -71,6 +72,14 @@ def _display_price(midpoint: Optional[float], spread: Optional[float], last_trad
     return None, "none"
 
 
+def _computed_spread(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[float]:
+    if best_bid is None or best_ask is None:
+        return None
+    if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        return None
+    return round(best_ask - best_bid, 6)
+
+
 def _fetch_slot_state(slot_bundle: Dict[str, Any]) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     for slot_name, slot in slot_bundle["slots"].items():
@@ -81,10 +90,20 @@ def _fetch_slot_state(slot_bundle: Dict[str, Any]) -> Dict[str, Any]:
         meta = slot["meta"]
         token_mapping = meta.get("token_mapping") or []
         token_ids = [str(x["token_id"]) for x in token_mapping if x.get("token_id")]
-        raw_books = fetch_books_for_tokens(token_ids)
+        with ThreadPoolExecutor(max_workers=max(2, len(token_ids) + 2)) as pool:
+            books_future = pool.submit(fetch_books_for_tokens, token_ids)
+            midpoints_future = pool.submit(fetch_midpoints, token_ids)
+            executable_futures = {
+                token_id: pool.submit(fetch_token_executable_prices, token_id)
+                for token_id in token_ids
+            }
+            raw_books = books_future.result()
+            midpoints = midpoints_future.result()
+            executable_prices = {
+                token_id: future.result()
+                for token_id, future in executable_futures.items()
+            }
         by_id = {_raw_book_id(b): b for b in raw_books}
-        midpoints = fetch_midpoints(token_ids)
-
         joined = []
         for mapping in token_mapping:
             token_id = str(mapping["token_id"])
@@ -92,8 +111,8 @@ def _fetch_slot_state(slot_bundle: Dict[str, Any]) -> Dict[str, Any]:
             best_bid = _best_bid(book)
             best_ask = _best_ask(book)
             midpoint = midpoints.get(token_id)
-            spread = fetch_spread(token_id)
-            executable = fetch_token_executable_prices(token_id)
+            spread = _computed_spread(best_bid, best_ask)
+            executable = executable_prices.get(token_id) or {}
             display_price, display_source = _display_price(midpoint, spread, book.get("last_trade_price"))
             top_bids = []
             top_asks = []

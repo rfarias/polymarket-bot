@@ -12,6 +12,7 @@ from market.manual_overlay_v1 import ManualOverlayEngineV1
 class _StateHandler(BaseHTTPRequestHandler):
     engine = ManualOverlayEngineV1()
     default_qty = 6
+    refresh_secs = 0.5
     cache_lock = threading.Lock()
     cache_payload: dict = {
         "ok": False,
@@ -26,6 +27,9 @@ class _StateHandler(BaseHTTPRequestHandler):
         now = time.time()
         last_ts = float(payload.get("last_update_ts") or now)
         elapsed = max(0.0, now - last_ts)
+        payload["snapshot_age_ms"] = round(elapsed * 1000.0, 1)
+        payload["server_now_ts"] = now
+        payload["refresh_secs"] = cls.refresh_secs
 
         secs_to_end = payload.get("secs_to_end")
         if secs_to_end is not None:
@@ -67,7 +71,9 @@ class _StateHandler(BaseHTTPRequestHandler):
 
 
 def _refresh_loop(interval_secs: float) -> None:
+    interval_secs = max(0.25, float(interval_secs))
     while True:
+        cycle_started = time.time()
         try:
             snap = _StateHandler.engine.read_snapshot()
             payload = snap.as_dict()
@@ -80,7 +86,7 @@ def _refresh_loop(interval_secs: float) -> None:
             }
         with _StateHandler.cache_lock:
             _StateHandler.cache_payload = payload
-        time.sleep(max(0.5, float(interval_secs)))
+        time.sleep(max(0.0, interval_secs - max(0.0, time.time() - cycle_started)))
 
 
 def main() -> int:
@@ -88,17 +94,18 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")
     parser.add_argument("--qty", type=int, default=6, help="Default quantity for autofill")
-    parser.add_argument("--refresh-secs", type=float, default=2.0, help="Background refresh interval")
+    parser.add_argument("--refresh-secs", type=float, default=0.5, help="Background refresh interval")
     args = parser.parse_args()
 
     _StateHandler.default_qty = max(1, int(args.qty))
+    _StateHandler.refresh_secs = max(0.25, float(args.refresh_secs))
     _StateHandler.cache_payload["default_qty"] = _StateHandler.default_qty
-    refresher = threading.Thread(target=_refresh_loop, args=(float(args.refresh_secs),), daemon=True)
+    refresher = threading.Thread(target=_refresh_loop, args=(_StateHandler.refresh_secs,), daemon=True)
     refresher.start()
     server = ThreadingHTTPServer((args.host, int(args.port)), _StateHandler)
     print(
         f"[MANUAL_SIGNAL_SERVER] http://{args.host}:{args.port}/state "
-        f"qty={_StateHandler.default_qty} refresh={float(args.refresh_secs):.1f}s"
+        f"qty={_StateHandler.default_qty} refresh={_StateHandler.refresh_secs:.2f}s"
     )
     try:
         server.serve_forever()

@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import requests
 
 CLOB_API = "https://clob.polymarket.com"
-TIMEOUT = 20
+TIMEOUT = 3.0
 
 
 def fetch_midpoints(token_ids: List[str]) -> Dict[str, Optional[float]]:
@@ -74,4 +74,7 @@ def fetch_prices(token_ids: List[str], sides: List[str]) -> Dict[str, Dict[str, 
         return out
     except Exception as e:
         print(f"[ERROR] Failed to fetch prices: {e}")
-        return {t: {s: None} for t, s in zip(token_ids, sides)}
+        out: Dict[str, Dict[str, Optional[float]]] = {}
+        for token_id, side in zip(token_ids, sides):
+            out.setdefault(token_id, {})[side] = None
+        return out

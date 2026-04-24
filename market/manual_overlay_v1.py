@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import requests
 
 from market.book_5m import fetch_market_metadata_from_slug
+from market.current_market_ws_cache import CurrentMarketWsCache
 from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
 from market.current_scalp_signal_v1 import (
     BINANCE_PRICE_URL,
@@ -17,6 +19,7 @@ from market.current_scalp_signal_v1 import (
     CurrentScalpResearchV1,
     fetch_binance_open_price_for_event_start_v1,
 )
+from market.rest_5m_shadow_public_v4 import DISPLAY_SPREAD_WIDE_THRESHOLD
 from market.rest_5m_shadow_public_v5 import _compute_executable_metrics, _fetch_slot_state, _slot_snapshot
 from market.slug_discovery import fetch_event_by_slug
 
@@ -81,7 +84,7 @@ def _fetch_current_item() -> Optional[dict]:
 
 def _fetch_fast_reference_price() -> Dict:
     try:
-        res = requests.get(BINANCE_PRICE_URL, params={"symbol": "BTCUSDT"}, timeout=TIMEOUT)
+        res = requests.get(BINANCE_PRICE_URL, params={"symbol": "BTCUSDT"}, timeout=min(TIMEOUT, 2.0))
         res.raise_for_status()
         data = res.json() or {}
         value = _safe_float(data.get("price"), 0.0)
@@ -129,7 +132,15 @@ class ManualOverlaySnapshotV1:
     window_id: str
     hold_to_resolution: bool
     last_update_ts: float
-    status_note: str
+    compute_started_ts: float
+    compute_finished_ts: float
+    compute_latency_ms: float
+    price_to_beat_side: str
+    suggested_action: str
+    suggested_detail: str
+    risk_plan: str = ""
+    exit_alert: str = ""
+    status_note: str = ""
 
     def as_dict(self) -> Dict:
         return {
@@ -168,6 +179,14 @@ class ManualOverlaySnapshotV1:
             "window_id": self.window_id,
             "hold_to_resolution": self.hold_to_resolution,
             "last_update_ts": self.last_update_ts,
+            "compute_started_ts": self.compute_started_ts,
+            "compute_finished_ts": self.compute_finished_ts,
+            "compute_latency_ms": self.compute_latency_ms,
+            "price_to_beat_side": self.price_to_beat_side,
+            "suggested_action": self.suggested_action,
+            "suggested_detail": self.suggested_detail,
+            "risk_plan": self.risk_plan,
+            "exit_alert": self.exit_alert,
             "status_note": self.status_note,
         }
 
@@ -190,6 +209,7 @@ class ManualOverlayEngineV1:
         self.window_consumed_by_slug: dict[str, bool] = {}
         self.hold_to_resolution_mode: bool = True
         self.use_fast_reference: bool = True
+        self.market_ws = CurrentMarketWsCache()
 
     def _ensure_slot_bundle(self) -> Dict:
         now = time.time()
@@ -207,6 +227,7 @@ class ManualOverlayEngineV1:
             if current_item:
                 meta = fetch_market_metadata_from_slug(str(current_item.get("slug") or ""))
                 if meta:
+                    self.market_ws.configure(str(current_item.get("slug") or ""), meta.get("token_mapping") or [])
                     current_slot = {"item": current_item, "meta": meta}
             self.slot_bundle = {
                 "queue": {"current": current_item},
@@ -220,6 +241,67 @@ class ManualOverlayEngineV1:
         else:
             self.last_queue_reason = "queue_empty_or_api_unavailable"
         return self.slot_bundle
+
+    def _build_ws_slot_state(self, slot_bundle: Dict) -> Optional[Dict[str, Any]]:
+        current_slot = (slot_bundle.get("slots") or {}).get("current")
+        current_item = (slot_bundle.get("queue") or {}).get("current")
+        if not current_slot or not current_item:
+            return None
+        snap = self.market_ws.snapshot(max_age_secs=2.0)
+        if not snap:
+            return None
+        if str(snap.get("slug") or "") != str(current_item.get("slug") or ""):
+            return None
+        up = snap.get("up")
+        down = snap.get("down")
+        if not up or not down:
+            return None
+
+        def _display_from_ws(item: dict) -> tuple[Optional[float], Optional[float], str]:
+            bid = _safe_float(item.get("best_bid"), 0.0)
+            ask = _safe_float(item.get("best_ask"), 0.0)
+            midpoint = round((bid + ask) / 2.0, 6) if bid > 0 and ask > 0 and ask >= bid else None
+            spread = round(max(0.0, ask - bid), 6) if bid > 0 and ask > 0 and ask >= bid else None
+            if midpoint is not None and spread is not None and spread <= DISPLAY_SPREAD_WIDE_THRESHOLD:
+                return midpoint, spread, "midpoint"
+            ltp = _safe_float(item.get("last_trade_price"), 0.0)
+            if ltp > 0:
+                return ltp, spread, "last_trade_price"
+            return midpoint, spread, "midpoint_fallback" if midpoint is not None else "none"
+
+        joined = []
+        for item in (up, down):
+            display_price, spread, display_source = _display_from_ws(item)
+            joined.append(
+                {
+                    "outcome": item.get("outcome"),
+                    "token_id": item.get("token_id"),
+                    "best_bid": item.get("best_bid"),
+                    "best_ask": item.get("best_ask"),
+                    "midpoint": round((_safe_float(item.get("best_bid"), 0.0) + _safe_float(item.get("best_ask"), 0.0)) / 2.0, 6)
+                    if _safe_float(item.get("best_bid"), 0.0) > 0 and _safe_float(item.get("best_ask"), 0.0) > 0 and _safe_float(item.get("best_ask"), 0.0) >= _safe_float(item.get("best_bid"), 0.0)
+                    else None,
+                    "spread": spread,
+                    "display_price": display_price,
+                    "display_source": display_source,
+                    "last_trade_price": item.get("last_trade_price"),
+                    "executable_buy": item.get("best_ask"),
+                    "executable_sell": item.get("best_bid"),
+                    "tick_size": item.get("tick_size"),
+                    "min_order_size": item.get("min_order_size"),
+                    "top_bids": item.get("top_bids") or [],
+                    "top_asks": item.get("top_asks") or [],
+                    "raw_book_id": item.get("token_id"),
+                    "has_raw_book": True,
+                }
+            )
+        return {
+            "current": {
+                "item": current_slot["item"],
+                "meta": current_slot["meta"],
+                "books": joined,
+            }
+        }
 
     def _ensure_open_reference(self, current_item: dict) -> None:
         slug = str(current_item.get("slug") or "")
@@ -429,12 +511,124 @@ class ManualOverlayEngineV1:
         distance = _safe_float(scalp_signal.get("distance_from_open_bps"), 0.0)
         return "UP" if distance >= 0 else "DOWN"
 
+    def _suggested_action(
+        self,
+        *,
+        current_secs: Optional[int],
+        setup_side: str,
+        trend_side: str,
+        almost_signal: Dict,
+        scalp_signal: Dict,
+        reversal_risk: str,
+        score: int,
+    ) -> tuple[str, str, str, str]:
+        allow = bool(almost_signal.get("allow"))
+        reason = str(almost_signal.get("reason") or "")
+        side = setup_side if setup_side in ("UP", "DOWN") else trend_side if trend_side in ("UP", "DOWN") else "NEUTRAL"
+        exit_distance = _safe_float(
+            almost_signal.get("up_exit_distance" if side == "UP" else "down_exit_distance"),
+            999.0,
+        )
+        buffer_bps = _safe_float(
+            almost_signal.get("up_price_to_beat_buffer_bps" if side == "UP" else "down_price_to_beat_buffer_bps"),
+            0.0,
+        )
+        buffer_usd = _safe_float(
+            almost_signal.get("up_price_to_beat_buffer_usd" if side == "UP" else "down_price_to_beat_buffer_usd"),
+            0.0,
+        )
+        distance_bps = _safe_float(almost_signal.get("distance_to_price_to_beat_bps"), 0.0)
+        distance_usd = _safe_float(almost_signal.get("distance_to_price_to_beat_usd"), 0.0)
+        leader_price = _safe_float(almost_signal.get("up_buy" if side == "UP" else "down_buy"), -1.0)
+        counter_price = _safe_float(almost_signal.get("down_buy" if side == "UP" else "up_buy"), -1.0)
+        market_range_15s = _safe_float(almost_signal.get("market_range_15s"), 0.0)
+        market_range_30s = _safe_float(almost_signal.get("market_range_30s"), 0.0)
+        spot_delta_5s = _safe_float(scalp_signal.get("spot_delta_5s_bps"), 0.0)
+        spot_delta_15s = _safe_float(scalp_signal.get("spot_delta_15s_bps"), 0.0)
+        side_sign = 1.0 if side == "UP" else -1.0 if side == "DOWN" else 0.0
+        adverse_5s = -side_sign * spot_delta_5s if side_sign else 0.0
+        adverse_15s = -side_sign * spot_delta_15s if side_sign else 0.0
+        controlled_late_window = (
+            side in ("UP", "DOWN")
+            and current_secs is not None
+            and self.signal_cfg.controlled_late_min_secs <= current_secs <= self.signal_cfg.controlled_late_max_secs
+            and self.signal_cfg.controlled_late_min_distance_usd <= distance_usd <= self.signal_cfg.controlled_late_max_distance_usd
+            and self.signal_cfg.controlled_late_min_entry_price <= leader_price <= self.signal_cfg.controlled_late_max_entry_price
+            and 0.0 <= counter_price <= self.signal_cfg.controlled_late_max_counter_price
+            and market_range_30s > 0
+            and market_range_30s <= max(self.signal_cfg.controlled_late_max_market_range_30s, distance_bps / 10000.0)
+            and market_range_15s <= max(self.signal_cfg.controlled_late_max_market_range_15s, market_range_30s)
+        )
+        exit_alert = "MANTER"
+        if side in ("UP", "DOWN"):
+            if adverse_5s >= 1.2 or adverse_15s >= 1.8 or reversal_risk == "high":
+                exit_alert = "SAIR NA PRIMEIRA OSCILACAO CONTRA"
+            elif market_range_15s >= 0.02 or market_range_30s >= 0.03:
+                exit_alert = "REALIZAR RAPIDO EM OSCILACAO"
+            elif current_secs is not None and current_secs <= 12 and buffer_bps >= 4.0:
+                exit_alert = "HOLD ATE O FINAL SE DISTANCIA ABRIR"
+
+        if not allow:
+            if reason == "outside_time_window" and current_secs is not None and current_secs > self.signal_cfg.max_secs_to_end:
+                if side in ("UP", "DOWN"):
+                    return f"OBSERVAR {side}", "aguarde a janela operacional e confirme continuidade do spot", "SEM ENTRADA", exit_alert
+                return "AGUARDAR", "fora da janela operacional", "SEM ENTRADA", exit_alert
+            if (
+                controlled_late_window
+                and adverse_5s <= self.signal_cfg.controlled_late_max_adverse_spot_5s_bps
+                and adverse_15s <= self.signal_cfg.controlled_late_max_adverse_spot_15s_bps
+                and buffer_bps >= self.signal_cfg.controlled_late_min_buffer_bps
+                and buffer_usd >= self.signal_cfg.controlled_late_min_buffer_usd
+            ):
+                return (
+                    f"COMPRAR {side}",
+                    "ENTRADA PEQUENA 95-98 | HOLD SE DISTANCIA ABRIR",
+                    "RISCO PEQUENO | SAIR RAPIDO EM OSCILACAO CONTRA",
+                    exit_alert,
+                )
+            if (
+                side in ("UP", "DOWN")
+                and current_secs is not None
+                and current_secs <= self.signal_cfg.resolved_pullback_max_secs
+                and leader_price >= self.signal_cfg.resolved_pullback_min_leader_price
+                and counter_price <= self.signal_cfg.resolved_pullback_max_counter_price
+                and reversal_risk != "high"
+            ):
+                return (
+                    f"LIMITE {side} 0.98",
+                    "pullback final controlado sem troca clara do lado vencedor",
+                    "RISCO MUITO PEQUENO | CANCELAR SE HOUVER PRESSAO CONTRARIA",
+                    "SAIR IMEDIATO SE O PULLBACK VIER COM REVERSAO",
+                )
+            if reversal_risk == "high" or reason in ("invalid_book_both_sides_rich", "leader_not_stable_enough_or_not_priced_for_ticks"):
+                return "EVITAR", "spot ou book sem estabilidade suficiente para entrada manual", "SEM ENTRADA", exit_alert
+            if side in ("UP", "DOWN") and distance_bps >= max(3.0, self.signal_cfg.min_price_to_beat_distance_bps * 0.6):
+                return f"OBSERVAR {side}", "direcao provável existe, mas ainda sem confirmação para clicar", "SEM ENTRADA", exit_alert
+            return "AGUARDAR", "sem vantagem clara agora", "SEM ENTRADA", exit_alert
+
+        if reversal_risk == "high" or score < 55:
+            return "EVITAR", "setup existe, mas o risco de reversão ainda está alto", "SEM ENTRADA", exit_alert
+        if side not in ("UP", "DOWN"):
+            return "AGUARDAR", "lado ainda indefinido", "SEM ENTRADA", exit_alert
+        if controlled_late_window:
+            return (
+                f"COMPRAR {side}",
+                "ENTRADA PEQUENA 95-98 | HOLD SE DISTANCIA ABRIR",
+                "RISCO PEQUENO | REDUZIR RAPIDO SE OSCILAR CONTRA",
+                exit_alert,
+            )
+        if self.hold_to_resolution_mode and exit_distance > 0.015 and buffer_bps >= max(4.0, self.signal_cfg.min_price_to_beat_buffer_bps):
+            return f"COMPRAR {side}", "HOLD ATE RESOLUCAO", "RISCO NORMAL | SEGURAR ENQUANTO DISTANCIA ABRIR", exit_alert
+        return f"COMPRAR {side}", "BATER 0.99", "RISCO NORMAL | REALIZAR NO PRIMEIRO PRECO BOM", exit_alert
+
     def read_snapshot(self) -> ManualOverlaySnapshotV1:
-        now = time.time()
+        compute_started_ts = time.time()
+        now = compute_started_ts
         try:
             slot_bundle = self._ensure_slot_bundle()
             current_item = slot_bundle["queue"].get("current")
             if not current_item:
+                compute_finished_ts = time.time()
                 return ManualOverlaySnapshotV1(
                     ok=False,
                     title="Current slot unavailable",
@@ -470,16 +664,28 @@ class ManualOverlayEngineV1:
                     one_shot_ready=False,
                     window_id="",
                     hold_to_resolution=self.hold_to_resolution_mode,
-                    last_update_ts=now,
+                    last_update_ts=compute_finished_ts,
+                    compute_started_ts=compute_started_ts,
+                    compute_finished_ts=compute_finished_ts,
+                    compute_latency_ms=round(max(0.0, compute_finished_ts - compute_started_ts) * 1000.0, 1),
+                    price_to_beat_side="NEUTRAL",
+                    suggested_action="AGUARDAR",
+                    suggested_detail="feed atual indisponivel",
+                    risk_plan="SEM ENTRADA",
+                    exit_alert="AGUARDAR NOVO SNAPSHOT",
                     status_note=f"Current missing: {self.last_queue_reason}. This is data feed/API absence, not a setup signal.",
                 )
 
             self._ensure_open_reference(current_item)
-            slot_state = _fetch_slot_state(slot_bundle)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                ws_slot_state = self._build_ws_slot_state(slot_bundle)
+                slot_state_future = None if ws_slot_state is not None else pool.submit(_fetch_slot_state, slot_bundle)
+                reference_future = pool.submit(_fetch_fast_reference_price)
+                slot_state = ws_slot_state if ws_slot_state is not None else slot_state_future.result()
+                reference = reference_future.result()
             current_snap = _slot_snapshot(slot_state, "current")
             current_exec, _ = _compute_executable_metrics(current_snap)
             current_secs = _slot_secs_to_end(current_item)
-            reference = _fetch_fast_reference_price() if self.use_fast_reference else _fetch_fast_reference_price()
             scalp_signal = self.current_scalp.evaluate(
                 snap=current_snap,
                 secs_to_end=current_secs,
@@ -563,6 +769,19 @@ class ManualOverlayEngineV1:
                     status_note = f"Waiting for setup window. Starts in {int(round(watch_window_eta_secs or 0))}s."
                 elif current_secs is not None and current_secs < self.signal_cfg.min_secs_to_end:
                     status_note = "Too late for this market. Wait for next 5m window."
+            price_to_beat_side = setup_side if setup_side in ("UP", "DOWN") else trend_side if trend_side in ("UP", "DOWN") else "NEUTRAL"
+            suggested_action, suggested_detail, risk_plan, exit_alert = self._suggested_action(
+                current_secs=current_secs,
+                setup_side=setup_side,
+                trend_side=trend_side,
+                almost_signal=almost_signal,
+                scalp_signal=scalp_signal,
+                reversal_risk=reversal_risk,
+                score=score,
+            )
+            if exit_alert:
+                suggested_detail = f"{suggested_detail} | {exit_alert}"
+            compute_finished_ts = time.time()
 
             return ManualOverlaySnapshotV1(
                 ok=True,
@@ -599,10 +818,19 @@ class ManualOverlayEngineV1:
                 one_shot_ready=one_shot_ready,
                 window_id=window_id,
                 hold_to_resolution=self.hold_to_resolution_mode,
-                last_update_ts=now,
+                last_update_ts=compute_finished_ts,
+                compute_started_ts=compute_started_ts,
+                compute_finished_ts=compute_finished_ts,
+                compute_latency_ms=round(max(0.0, compute_finished_ts - compute_started_ts) * 1000.0, 1),
+                price_to_beat_side=price_to_beat_side,
+                suggested_action=suggested_action,
+                suggested_detail=suggested_detail,
+                risk_plan=risk_plan,
+                exit_alert=exit_alert,
                 status_note=status_note,
             )
         except Exception as exc:
+            compute_finished_ts = time.time()
             return ManualOverlaySnapshotV1(
                 ok=False,
                 title="Overlay error",
@@ -638,6 +866,12 @@ class ManualOverlayEngineV1:
                 one_shot_ready=False,
                 window_id="",
                 hold_to_resolution=self.hold_to_resolution_mode,
-                last_update_ts=now,
+                last_update_ts=compute_finished_ts,
+                compute_started_ts=compute_started_ts,
+                compute_finished_ts=compute_finished_ts,
+                compute_latency_ms=round(max(0.0, compute_finished_ts - compute_started_ts) * 1000.0, 1),
+                price_to_beat_side="NEUTRAL",
+                suggested_action="AGUARDAR",
+                suggested_detail="erro no cálculo do snapshot",
                 status_note=str(exc),
             )

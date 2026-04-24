@@ -121,6 +121,12 @@
     return `<div class="pm-row"><span class="pm-label">${label}:</span> ${value}</div>`;
   }
 
+  function sideArrow(side) {
+    if (side === "UP") return "↑";
+    if (side === "DOWN") return "↓";
+    return "→";
+  }
+
   function render(state) {
     const panel = ensurePanel();
     const mode = statusMode(state);
@@ -133,12 +139,11 @@
           : mode;
 
     const lines = [
+      row("Acao", `${state.suggested_action || "-"} | ${state.suggested_detail || "-"}`),
       row("Tendência", state.trend_label || "-"),
       row("Reversão", state.reversal_risk || "-"),
-      row("Price to Beat", `${fmt(state.price_to_beat_usd, 2, "usd")} (${fmt(state.price_to_beat_bps, 2, "bps")})`),
+      row("Price to Beat", `${sideArrow(state.price_to_beat_side)} ${fmt(state.price_to_beat_usd, 2, "usd")} (${fmt(state.price_to_beat_bps, 2, "bps")})`),
       row("Buffer", fmt(state.buffer_bps, 2, "bps")),
-      row("Entrada", `${state.setup_side || "-"} ${fmt(state.entry_price, 2)} x ${state.default_qty || 6}`),
-      row("Nota", state.status_note || "-"),
     ];
 
     panel.innerHTML = `
@@ -146,7 +151,7 @@
         <div class="pm-title">${headline}</div>
         <div class="pm-badge" style="background:${badge}">${mode}</div>
       </div>
-      ${row("Mercado", `${state.title || "-"} | fim em ${state.secs_to_end ?? "-"}s`)}
+      ${row("Fim", `${state.secs_to_end ?? "-"}s`)}
       ${row("Reação", fmt(state.reaction_deadline_secs, 0, "s"))}
       ${lines.join("")}
       <div class="pm-actions">
@@ -201,6 +206,6 @@
     }
   }
 
-  setInterval(tick, 1000);
+  setInterval(tick, 100);
   tick();
 })();

@@ -67,6 +67,38 @@ class CurrentAlmostResolvedConfigV1:
     paper_structural_stop_buffer_bps: float = 1.0
     paper_structural_stop_market_range_30s: float = 0.035
     paper_structural_stop_edge_vs_counter: float = 0.80
+    near_end_relaxation_secs: int = 30
+    near_end_max_entry_price: float = 0.985
+    near_end_max_exit_distance: float = 0.06
+    near_end_min_price_to_beat_buffer_bps: float = 1.2
+    near_end_min_price_to_beat_buffer_usd: float = 10.0
+    near_end_min_depth_top3: float = 10.0
+    near_end_max_adverse_spot_15s_bps: float = 1.6
+    near_end_max_adverse_market_15s: float = 0.02
+    near_end_max_market_range_15s: float = 0.03
+    near_end_max_market_range_30s: float = 0.045
+    rich_book_relaxation_secs: int = 35
+    rich_book_min_leader_edge: float = 0.18
+    rich_book_max_counter_price: float = 0.80
+    rich_book_min_price_to_beat_buffer_bps: float = 1.0
+    rich_book_min_price_to_beat_buffer_usd: float = 10.0
+    controlled_late_min_secs: int = 25
+    controlled_late_max_secs: int = 35
+    controlled_late_min_distance_usd: float = 40.0
+    controlled_late_max_distance_usd: float = 70.0
+    controlled_late_min_entry_price: float = 0.93
+    controlled_late_max_entry_price: float = 0.99
+    controlled_late_max_counter_price: float = 0.18
+    controlled_late_min_buffer_bps: float = 0.8
+    controlled_late_min_buffer_usd: float = 8.0
+    controlled_late_max_market_range_15s: float = 0.02
+    controlled_late_max_market_range_30s: float = 0.03
+    controlled_late_max_adverse_spot_5s_bps: float = 1.0
+    controlled_late_max_adverse_spot_15s_bps: float = 1.6
+    resolved_pullback_max_secs: int = 20
+    resolved_pullback_min_leader_price: float = 0.985
+    resolved_pullback_max_counter_price: float = 0.03
+    resolved_pullback_limit_price: float = 0.98
 
     def as_dict(self) -> Dict:
         return asdict(self)
@@ -98,6 +130,7 @@ def evaluate_current_almost_resolved_v1(
 
     result = {
         "setup": "almost_resolved",
+        "setup_variant": "standard",
         "allow": False,
         "side": None,
         "reason": "no_edge",
@@ -117,11 +150,7 @@ def evaluate_current_almost_resolved_v1(
     if secs_to_end is None or secs_to_end < cfg.min_secs_to_end or secs_to_end > cfg.max_secs_to_end:
         result["reason"] = "outside_time_window"
         return result
-
-    context_reason = str((reference_signal or {}).get("reason") or "")
-    if up_buy >= 0.9 and down_buy >= 0.9:
-        result["reason"] = "invalid_book_both_sides_rich"
-        return result
+    late_window = secs_to_end <= cfg.near_end_relaxation_secs
 
     spot_delta_5s = _safe_float((reference_signal or {}).get("spot_delta_5s_bps"), 0.0)
     spot_delta_15s = _safe_float((reference_signal or {}).get("spot_delta_15s_bps"), 0.0)
@@ -178,66 +207,194 @@ def evaluate_current_almost_resolved_v1(
     result["market_range_15s"] = market_range_15s
     result["market_range_30s"] = market_range_30s
     result["missing_open_reference"] = missing_open_reference
+    context_reason = str((reference_signal or {}).get("reason") or "")
     result["missing_market_midpoint_context"] = "missing_market_midpoint" in context_reason
     result["up_counter_pressure_ok"] = up_counter_pressure_ok
     result["down_counter_pressure_ok"] = down_counter_pressure_ok
     result["up_counter_alert"] = down_buy >= cfg.soft_counter_price_alert
     result["down_counter_alert"] = up_buy >= cfg.soft_counter_price_alert
 
+    rich_book_late_window = secs_to_end <= cfg.rich_book_relaxation_secs
+    controlled_late_window = (
+        secs_to_end >= cfg.controlled_late_min_secs
+        and secs_to_end <= cfg.controlled_late_max_secs
+    )
+    if up_buy >= 0.9 and down_buy >= 0.9:
+        rich_up_ok = (
+            rich_book_late_window
+            and up_edge_vs_counter is not None
+            and up_edge_vs_counter >= cfg.rich_book_min_leader_edge
+            and down_buy <= cfg.rich_book_max_counter_price
+            and up_price_to_beat_buffer_bps >= cfg.rich_book_min_price_to_beat_buffer_bps
+            and up_price_to_beat_buffer_usd >= cfg.rich_book_min_price_to_beat_buffer_usd
+            and spot_delta_5s >= -cfg.max_adverse_spot_5s_bps
+            and spot_delta_15s >= -cfg.near_end_max_adverse_spot_15s_bps
+            and distance_from_open >= cfg.min_price_to_beat_distance_bps
+        )
+        rich_down_ok = (
+            rich_book_late_window
+            and down_edge_vs_counter is not None
+            and down_edge_vs_counter >= cfg.rich_book_min_leader_edge
+            and up_buy <= cfg.rich_book_max_counter_price
+            and down_price_to_beat_buffer_bps >= cfg.rich_book_min_price_to_beat_buffer_bps
+            and down_price_to_beat_buffer_usd >= cfg.rich_book_min_price_to_beat_buffer_usd
+            and spot_delta_5s <= cfg.max_adverse_spot_5s_bps
+            and spot_delta_15s <= cfg.near_end_max_adverse_spot_15s_bps
+            and distance_from_open <= -cfg.min_price_to_beat_distance_bps
+        )
+        if not rich_up_ok and not rich_down_ok:
+            result["reason"] = "invalid_book_both_sides_rich"
+            return result
+
     up_distance_relaxed_ok = (
         distance_to_price_to_beat_usd >= cfg.min_price_to_beat_distance_usd
-        and up_price_to_beat_buffer_usd >= cfg.min_price_to_beat_buffer_usd
+        and up_price_to_beat_buffer_usd >= (cfg.near_end_min_price_to_beat_buffer_usd if late_window else cfg.min_price_to_beat_buffer_usd)
         and up_adverse_spot_usd <= pullback_usd_cap
         and up_counter_pressure_ok
         and market_range_30s
         <= (
             cfg.strong_distance_relaxed_market_range_30s
             if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
-            else cfg.max_market_range_30s
+            else (cfg.near_end_max_market_range_30s if late_window else cfg.max_market_range_30s)
         )
         and _safe_float(up_exit_distance, 999.0)
         <= (
             cfg.strong_distance_relaxed_max_exit_distance
             if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
-            else cfg.max_exit_distance
+            else (cfg.near_end_max_exit_distance if late_window else cfg.max_exit_distance)
         )
     )
     down_distance_relaxed_ok = (
         distance_to_price_to_beat_usd >= cfg.min_price_to_beat_distance_usd
-        and down_price_to_beat_buffer_usd >= cfg.min_price_to_beat_buffer_usd
+        and down_price_to_beat_buffer_usd >= (cfg.near_end_min_price_to_beat_buffer_usd if late_window else cfg.min_price_to_beat_buffer_usd)
         and down_adverse_spot_usd <= pullback_usd_cap
         and down_counter_pressure_ok
         and market_range_30s
         <= (
             cfg.strong_distance_relaxed_market_range_30s
             if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
-            else cfg.max_market_range_30s
+            else (cfg.near_end_max_market_range_30s if late_window else cfg.max_market_range_30s)
         )
         and _safe_float(down_exit_distance, 999.0)
         <= (
             cfg.strong_distance_relaxed_max_exit_distance
             if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd
-            else cfg.max_exit_distance
+            else (cfg.near_end_max_exit_distance if late_window else cfg.max_exit_distance)
         )
     )
 
+    up_controlled_late_ok = (
+        controlled_late_window
+        and cfg.controlled_late_min_entry_price <= up_buy <= cfg.controlled_late_max_entry_price
+        and down_buy <= cfg.controlled_late_max_counter_price
+        and distance_from_open >= cfg.min_price_to_beat_distance_bps
+        and cfg.controlled_late_min_distance_usd <= distance_to_price_to_beat_usd <= cfg.controlled_late_max_distance_usd
+        and up_price_to_beat_buffer_bps >= cfg.controlled_late_min_buffer_bps
+        and up_price_to_beat_buffer_usd >= cfg.controlled_late_min_buffer_usd
+        and up_counter_pressure_ok
+        and spot_delta_5s >= -cfg.controlled_late_max_adverse_spot_5s_bps
+        and spot_delta_15s >= -cfg.controlled_late_max_adverse_spot_15s_bps
+        and market_range_30s > 0
+        and market_range_30s <= max(cfg.controlled_late_max_market_range_30s, distance_to_price_to_beat_bps / 10000.0)
+        and market_range_15s <= max(cfg.controlled_late_max_market_range_15s, market_range_30s)
+    )
+    down_controlled_late_ok = (
+        controlled_late_window
+        and cfg.controlled_late_min_entry_price <= down_buy <= cfg.controlled_late_max_entry_price
+        and up_buy <= cfg.controlled_late_max_counter_price
+        and distance_from_open <= -cfg.min_price_to_beat_distance_bps
+        and cfg.controlled_late_min_distance_usd <= distance_to_price_to_beat_usd <= cfg.controlled_late_max_distance_usd
+        and down_price_to_beat_buffer_bps >= cfg.controlled_late_min_buffer_bps
+        and down_price_to_beat_buffer_usd >= cfg.controlled_late_min_buffer_usd
+        and down_counter_pressure_ok
+        and spot_delta_5s <= cfg.controlled_late_max_adverse_spot_5s_bps
+        and spot_delta_15s <= cfg.controlled_late_max_adverse_spot_15s_bps
+        and market_range_30s > 0
+        and market_range_30s <= max(cfg.controlled_late_max_market_range_30s, distance_to_price_to_beat_bps / 10000.0)
+        and market_range_15s <= max(cfg.controlled_late_max_market_range_15s, market_range_30s)
+    )
+
+    if up_controlled_late_ok:
+        result.update(
+            {
+                "allow": True,
+                "side": "UP",
+                "setup_variant": "controlled_late_entry",
+                "reason": "leader_up_controlled_late_entry",
+                "entry_price": up_buy,
+                "exit_price": min(cfg.target_exit_price, 0.99),
+                "target_limit_price": min(cfg.target_exit_price, 0.99),
+            }
+        )
+        return result
+
+    if down_controlled_late_ok:
+        result.update(
+            {
+                "allow": True,
+                "side": "DOWN",
+                "setup_variant": "controlled_late_entry",
+                "reason": "leader_down_controlled_late_entry",
+                "entry_price": down_buy,
+                "exit_price": min(cfg.target_exit_price, 0.99),
+                "target_limit_price": min(cfg.target_exit_price, 0.99),
+            }
+        )
+        return result
+
     if (
-        cfg.min_entry_price <= up_buy <= cfg.max_entry_price
+        secs_to_end <= cfg.resolved_pullback_max_secs
+        and up_buy >= cfg.resolved_pullback_min_leader_price
+        and down_buy <= cfg.resolved_pullback_max_counter_price
+    ):
+        result.update(
+            {
+                "allow": True,
+                "side": "UP",
+                "setup_variant": "resolved_pullback_limit",
+                "reason": "leader_up_resolved_pullback_limit",
+                "entry_price": min(cfg.resolved_pullback_limit_price, up_buy),
+                "exit_price": min(cfg.target_exit_price, 0.99),
+                "target_limit_price": cfg.resolved_pullback_limit_price,
+            }
+        )
+        return result
+
+    if (
+        secs_to_end <= cfg.resolved_pullback_max_secs
+        and down_buy >= cfg.resolved_pullback_min_leader_price
+        and up_buy <= cfg.resolved_pullback_max_counter_price
+    ):
+        result.update(
+            {
+                "allow": True,
+                "side": "DOWN",
+                "setup_variant": "resolved_pullback_limit",
+                "reason": "leader_down_resolved_pullback_limit",
+                "entry_price": min(cfg.resolved_pullback_limit_price, down_buy),
+                "exit_price": min(cfg.target_exit_price, 0.99),
+                "target_limit_price": cfg.resolved_pullback_limit_price,
+            }
+        )
+        return result
+
+    if (
+        cfg.min_entry_price <= up_buy <= (cfg.near_end_max_entry_price if late_window else cfg.max_entry_price)
         and _limit_or_default(up_spread) <= max(cfg.max_spread, 0.02 if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd else cfg.max_spread)
-        and up_depth >= cfg.min_depth_top3
+        and up_depth >= (cfg.near_end_min_depth_top3 if late_window else cfg.min_depth_top3)
         and distance_from_open >= cfg.min_price_to_beat_distance_bps
         and up_counter_pressure_ok
         and (
             (
-                _safe_float(up_exit_distance, 999.0) <= cfg.max_exit_distance
+                _safe_float(up_exit_distance, 999.0) <= (cfg.near_end_max_exit_distance if late_window else cfg.max_exit_distance)
                 and up_adverse_spot_bps <= distance_to_price_to_beat_bps * cfg.max_reversal_share_of_open_distance
-                and up_price_to_beat_buffer_bps >= cfg.min_price_to_beat_buffer_bps
+                and up_price_to_beat_buffer_bps >= (cfg.near_end_min_price_to_beat_buffer_bps if late_window else cfg.min_price_to_beat_buffer_bps)
                 and spot_delta_5s >= -cfg.max_adverse_spot_5s_bps
-                and spot_delta_15s >= -cfg.max_adverse_spot_15s_bps
+                and spot_delta_15s >= -(cfg.near_end_max_adverse_spot_15s_bps if late_window else cfg.max_adverse_spot_15s_bps)
                 and market_delta_5s >= -cfg.max_adverse_market_5s
-                and market_delta_15s >= -cfg.max_adverse_market_15s
-                and market_range_15s <= cfg.max_market_range_15s
-                and market_range_30s <= cfg.max_market_range_30s
+                and market_delta_15s >= -(cfg.near_end_max_adverse_market_15s if late_window else cfg.max_adverse_market_15s)
+                and market_range_15s <= (cfg.near_end_max_market_range_15s if late_window else cfg.max_market_range_15s)
+                and market_range_30s <= (cfg.near_end_max_market_range_30s if late_window else cfg.max_market_range_30s)
             )
             or up_distance_relaxed_ok
         )
@@ -246,6 +403,7 @@ def evaluate_current_almost_resolved_v1(
             {
                 "allow": True,
                 "side": "UP",
+                "setup_variant": "standard",
                 "reason": "leader_up_near_resolution_without_reversal",
                 "entry_price": up_buy,
                 "exit_price": min(cfg.target_exit_price, 0.99),
@@ -275,6 +433,7 @@ def evaluate_current_almost_resolved_v1(
             {
                 "allow": True,
                 "side": "UP",
+                "setup_variant": "fallback_missing_open",
                 "reason": "leader_up_fallback_without_open_reference",
                 "entry_price": up_buy,
                 "exit_price": min(cfg.target_exit_price, 0.99),
@@ -283,22 +442,22 @@ def evaluate_current_almost_resolved_v1(
         return result
 
     if (
-        cfg.min_entry_price <= down_buy <= cfg.max_entry_price
+        cfg.min_entry_price <= down_buy <= (cfg.near_end_max_entry_price if late_window else cfg.max_entry_price)
         and _limit_or_default(down_spread) <= max(cfg.max_spread, 0.02 if distance_to_price_to_beat_usd >= cfg.strong_distance_relaxed_threshold_usd else cfg.max_spread)
-        and down_depth >= cfg.min_depth_top3
+        and down_depth >= (cfg.near_end_min_depth_top3 if late_window else cfg.min_depth_top3)
         and distance_from_open <= -cfg.min_price_to_beat_distance_bps
         and down_counter_pressure_ok
         and (
             (
-                _safe_float(down_exit_distance, 999.0) <= cfg.max_exit_distance
+                _safe_float(down_exit_distance, 999.0) <= (cfg.near_end_max_exit_distance if late_window else cfg.max_exit_distance)
                 and down_adverse_spot_bps <= distance_to_price_to_beat_bps * cfg.max_reversal_share_of_open_distance
-                and down_price_to_beat_buffer_bps >= cfg.min_price_to_beat_buffer_bps
+                and down_price_to_beat_buffer_bps >= (cfg.near_end_min_price_to_beat_buffer_bps if late_window else cfg.min_price_to_beat_buffer_bps)
                 and spot_delta_5s <= cfg.max_adverse_spot_5s_bps
-                and spot_delta_15s <= cfg.max_adverse_spot_15s_bps
+                and spot_delta_15s <= (cfg.near_end_max_adverse_spot_15s_bps if late_window else cfg.max_adverse_spot_15s_bps)
                 and market_delta_5s <= cfg.max_adverse_market_5s
-                and market_delta_15s <= cfg.max_adverse_market_15s
-                and market_range_15s <= cfg.max_market_range_15s
-                and market_range_30s <= cfg.max_market_range_30s
+                and market_delta_15s <= (cfg.near_end_max_adverse_market_15s if late_window else cfg.max_adverse_market_15s)
+                and market_range_15s <= (cfg.near_end_max_market_range_15s if late_window else cfg.max_market_range_15s)
+                and market_range_30s <= (cfg.near_end_max_market_range_30s if late_window else cfg.max_market_range_30s)
             )
             or down_distance_relaxed_ok
         )
@@ -307,6 +466,7 @@ def evaluate_current_almost_resolved_v1(
             {
                 "allow": True,
                 "side": "DOWN",
+                "setup_variant": "standard",
                 "reason": "leader_down_near_resolution_without_reversal",
                 "entry_price": down_buy,
                 "exit_price": min(cfg.target_exit_price, 0.99),
@@ -336,6 +496,7 @@ def evaluate_current_almost_resolved_v1(
             {
                 "allow": True,
                 "side": "DOWN",
+                "setup_variant": "fallback_missing_open",
                 "reason": "leader_down_fallback_without_open_reference",
                 "entry_price": down_buy,
                 "exit_price": min(cfg.target_exit_price, 0.99),
