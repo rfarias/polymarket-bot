@@ -73,9 +73,27 @@ python run_live_current_almost_resolved_real_v1.py --seconds 300
 ```
 
 Esse runner fica armado apenas com `POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED=true`. A primeira versao real e dedicada ao setup de quase resolvidos, bloqueia startup se houver ordens abertas e nao deve ser executada junto com o `next1 scalp real` enquanto a validacao simultanea ainda nao estiver pronta.
+Residual microscopico abaixo de `POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY` e arquivado como poeira para nao travar o runner em `pending_exit`.
 
 Para smoke curto com reinicio automatico:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\watch_current_almost_resolved_real.ps1 -RunSeconds 300 -PollSeconds 0.5 -Qty 5
+powershell -ExecutionPolicy Bypass -File scripts\watch_current_almost_resolved_real.ps1 -RunSeconds 300 -PollSeconds 0.5 -Qty 6
 ```
+
+Settlement de portfólio (`merge` + `redeem` / claim, opcional e desativado por padrão):
+
+```bash
+python run_portfolio_settlement_v1.py --preflight-only
+python run_portfolio_settlement_v1.py --seconds 3600
+```
+
+Watchdog:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\watch_portfolio_settlement.ps1 -RunSeconds 3600 -PollSeconds 60
+```
+
+Esse processo é separado dos runners de trading e deve continuar desligado enquanto o auto redeem do portfólio estiver suficiente. Ele varre posições `mergeable` e `redeemable`, tenta primeiro `merge` de pares completos e depois `redeem` das vencedoras resolvidas, tudo via relayer da carteira proxy/safe. Em 23 de abril de 2026, a documentação oficial lista `Conditional Tokens = 0x4D97DCd97eC945f40cF65F87097ACe5EA0476045` e `pUSD = 0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`; esses valores ficam parametrizados por env para evitar acoplamento rígido.
+
+Importante: no ambiente atual, as credenciais de trading `POLY_API_*` autenticam no CLOB, mas o relayer respondeu `401 invalid authorization`. Portanto, para execução real do settlement, configure `POLY_BUILDER_API_KEY`, `POLY_BUILDER_API_SECRET` e `POLY_BUILDER_PASSPHRASE` próprios do relayer/builder. O preflight já acusa isso claramente.

@@ -18,6 +18,7 @@ from market.current_scalp_signal_v1 import (
 )
 from market.executor_state_store_v1 import clear_executor_state_v1, flush_executor_state_v1, load_executor_state_v1, reset_executor_state_v1
 from market.live_guarded_config import load_live_guarded_config
+from market.dryrun_broker import DryRunBroker
 from market.polymarket_broker_v3 import PolymarketBrokerV3
 from market.real_execution_workflow_v2 import (
     cleanup_terminal_plan_v2,
@@ -59,6 +60,34 @@ def _tick_size_from_snap(snap: Dict, outcome: str) -> float:
     return max(0.001, tick)
 
 
+def _collateral_balance_usd(broker) -> float:
+    try:
+        payload = broker.get_balance_allowance(asset_type="COLLATERAL")
+        raw_balance = float(payload.get("balance") or 0.0)
+        return round(raw_balance / 1_000_000.0, 6)
+    except Exception:
+        return 0.0
+
+
+def _token_balance_qty(broker, token_id: Optional[str]) -> float:
+    if not token_id:
+        return 0.0
+    try:
+        payload = broker.get_balance_allowance(asset_type="CONDITIONAL", token_id=token_id)
+        raw_balance = float(payload.get("balance") or 0.0)
+        return round(raw_balance / 1_000_000.0, 6)
+    except Exception:
+        return 0.0
+
+
+def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: float, buffer_usd: float = 0.25) -> bool:
+    if str(getattr(broker, "mode", "") or "") == "dry_run":
+        return True
+    required = round(float(entry_price) * float(qty) + float(buffer_usd), 6)
+    available = _collateral_balance_usd(broker)
+    return available >= required
+
+
 @dataclass
 class CurrentTradeStateV1:
     strategy: Optional[str] = None  # scalp | almost_resolved
@@ -96,6 +125,19 @@ def _validate_cfg(cfg) -> bool:
         return False
     if cfg.min_shares_per_leg != 5:
         print("[GUARD] live_multi_setup_v1 expects POLY_GUARDED_MIN_SHARES=5")
+        return False
+    return True
+
+
+def _validate_shadow_cfg(cfg) -> bool:
+    if not cfg.enabled:
+        print("[GUARD] Disabled. Set POLY_GUARDED_ENABLED=true to arm this runner.")
+        return False
+    if cfg.allow_next_2:
+        print("[GUARD] live_multi_setup_v1 requires POLY_GUARDED_ALLOW_NEXT_2=false")
+        return False
+    if cfg.max_active_plans != 1:
+        print("[GUARD] live_multi_setup_v1 requires POLY_GUARDED_MAX_ACTIVE_PLANS=1")
         return False
     return True
 
@@ -180,7 +222,9 @@ def _post_current_entry(
 
 
 def _post_current_exit(broker, state: CurrentTradeStateV1, *, bid_now: float, now: float, reason: str) -> CurrentTradeStateV1:
-    qty = round(float(state.filled_qty or 0.0), 6)
+    qty = _token_balance_qty(broker, state.token_id) if not state.shadow_only else round(float(state.filled_qty or 0.0), 6)
+    if qty <= 0:
+        qty = round(float(state.filled_qty or 0.0), 6)
     if qty <= 0:
         return _reset_current_trade(now)
 
@@ -209,6 +253,21 @@ def _post_current_exit(broker, state: CurrentTradeStateV1, *, bid_now: float, no
     return state
 
 
+def _live_exit_bid_from_state(broker, state: CurrentTradeStateV1, current_snap: Dict) -> float:
+    executable, _ = _compute_executable_metrics(current_snap)
+    if executable is not None:
+        bid_now = _safe_float(executable.get("up_bid" if state.outcome == "UP" else "down_bid"), 0.0)
+        if bid_now > 0:
+            return bid_now
+    if state.token_id:
+        raw_books = fetch_books_for_tokens([state.token_id])
+        if raw_books:
+            price = _best_bid(raw_books[0] or {})
+            if price > 0:
+                return price
+    return 0.0
+
+
 def _manage_current_trade(
     broker,
     state: CurrentTradeStateV1,
@@ -217,6 +276,9 @@ def _manage_current_trade(
     secs_to_end: Optional[int],
     cfg_scalp: CurrentScalpConfigV1,
     cfg_resolved: CurrentAlmostResolvedConfigV1,
+    entry_timeout_secs: int,
+    position_timeout_secs: int,
+    exit_repost_secs: int,
     now: float,
 ) -> CurrentTradeStateV1:
     if state.mode == "idle":
@@ -240,70 +302,93 @@ def _manage_current_trade(
             if order and getattr(order, "remaining_size", 0.0) > 0:
                 print("[CURRENT_ENTRY_CANCEL_REMAINDER]", broker.cancel_order(state.entry_order_id))
             return state
-        timeout = cfg_resolved.max_hold_secs if state.strategy == "almost_resolved" else cfg_scalp.entry_timeout_secs
+        timeout = cfg_resolved.max_hold_secs if state.strategy == "almost_resolved" else entry_timeout_secs
         if now - state.created_at >= timeout:
             print("[CURRENT_ENTRY_TIMEOUT_CANCEL]", broker.cancel_order(state.entry_order_id))
             return _reset_current_trade(now)
         return state
 
     executable, _ = _compute_executable_metrics(current_snap)
-    if executable is None:
-        return state
-    bid_now = _safe_float(executable.get("up_bid" if state.outcome == "UP" else "down_bid"), 0.0)
+    bid_now = _safe_float(executable.get("up_bid" if state.outcome == "UP" else "down_bid"), 0.0) if executable is not None else 0.0
 
     if state.mode == "open_position":
+        if bid_now <= 0:
+            return state
         if bid_now >= _safe_float(state.target_price, 0.0):
             return _post_current_exit(broker, state, bid_now=bid_now, now=now, reason="target")
         if bid_now <= _safe_float(state.stop_price, 0.0):
             return _post_current_exit(broker, state, bid_now=bid_now, now=now, reason="stop")
         if secs_to_end is not None and secs_to_end <= 8:
             return _post_current_exit(broker, state, bid_now=bid_now, now=now, reason="expiry_near")
-        timeout = cfg_resolved.max_hold_secs if state.strategy == "almost_resolved" else cfg_scalp.position_timeout_secs
+        timeout = cfg_resolved.max_hold_secs if state.strategy == "almost_resolved" else position_timeout_secs
         if now - state.updated_at >= timeout:
             return _post_current_exit(broker, state, bid_now=bid_now, now=now, reason="timeout")
         return state
 
     if state.mode == "pending_exit":
         order = _get_order_status(broker, state.exit_order_id or "")
-        if order is None:
+        remaining_qty = _token_balance_qty(broker, state.token_id)
+        if remaining_qty <= 0:
             return _reset_current_trade(now)
+        if order is None:
+            live_bid = _live_exit_bid_from_state(broker, state, current_snap)
+            if live_bid > 0:
+                print(f"[CURRENT_EXIT_REPOST_MISSING_ORDER] remaining={remaining_qty} bid={live_bid}")
+                state.filled_qty = remaining_qty
+                return _post_current_exit(broker, state, bid_now=live_bid, now=now, reason="cleanup_missing_order")
+            return state
         status = str(getattr(order, "status", "") or "").lower()
         if status in ("filled", "closed", "resolved"):
             return _reset_current_trade(now)
-        timeout = cfg_resolved.max_hold_secs if state.strategy == "almost_resolved" else cfg_scalp.position_timeout_secs
-        if now - state.updated_at >= timeout:
-            print("[CURRENT_EXIT_TIMEOUT_CANCEL]", broker.cancel_order(state.exit_order_id))
-            return _reset_current_trade(now)
+        if now - state.updated_at >= max(1, int(exit_repost_secs)):
+            print("[CURRENT_EXIT_REPOST_CANCEL]", broker.cancel_order(state.exit_order_id))
+            live_bid = _live_exit_bid_from_state(broker, state, current_snap)
+            if live_bid > 0:
+                print(f"[CURRENT_EXIT_REPOST] remaining={remaining_qty} bid={live_bid}")
+                state.filled_qty = remaining_qty
+                return _post_current_exit(broker, state, bid_now=live_bid, now=now, reason="repost_remainder")
+            return state
     return state
 
 
 def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
     cfg = load_live_guarded_config()
     print("[LIVE_GUARDED_CONFIG]", cfg.as_dict())
-    if not _validate_cfg(cfg):
+    shadow_mode = _env_bool("POLY_MULTI_SHADOW_MODE", False)
+    print("[MULTI_SHADOW_MODE]", shadow_mode)
+    if shadow_mode:
+        if not _validate_shadow_cfg(cfg):
+            return
+    elif not _validate_cfg(cfg):
         return
 
     next1_deadline_secs = _env_int("POLY_MULTI_NEXT1_CANCEL_SECS", 360)
     run_for = int(duration_seconds or max(cfg.run_seconds, _env_int("POLY_MULTI_RUN_SECONDS", 900)))
     current_scalp_cfg = CurrentScalpConfigV1()
     current_resolved_cfg = CurrentAlmostResolvedConfigV1()
-    current_scalp_shadow_only = _env_bool("POLY_CURRENT_SCALP_SHADOW_ONLY", True)
     current_almost_resolved_shadow_only = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_SHADOW_ONLY", True)
+    current_scalp_entry_timeout_secs = _env_int("POLY_CURRENT_SCALP_ENTRY_TIMEOUT_SECS", 12)
+    current_scalp_position_timeout_secs = _env_int("POLY_CURRENT_SCALP_POSITION_TIMEOUT_SECS", current_scalp_cfg.max_hold_secs)
+    current_exit_repost_secs = _env_int("POLY_CURRENT_EXIT_REPOST_SECS", 2)
+    current_almost_resolved_qty = max(1, _env_int("POLY_CURRENT_ALMOST_RESOLVED_QTY", 6))
     print(
         "[MULTI_SETUP_CONFIG]",
         {
             "run_for": run_for,
             "next1_deadline_secs": next1_deadline_secs,
-            "current_scalp_shadow_only": current_scalp_shadow_only,
             "current_almost_resolved_shadow_only": current_almost_resolved_shadow_only,
+            "current_almost_resolved_qty": current_almost_resolved_qty,
+            "current_scalp_entry_timeout_secs": current_scalp_entry_timeout_secs,
+            "current_scalp_position_timeout_secs": current_scalp_position_timeout_secs,
+            "current_exit_repost_secs": current_exit_repost_secs,
             "current_scalp": current_scalp_cfg.as_dict(),
             "current_almost_resolved": current_resolved_cfg.as_dict(),
         },
     )
 
-    broker = PolymarketBrokerV3.from_env()
-    executor = Setup1BrokerExecutorV4(broker=broker, shadow_only=False, min_shares_per_leg=cfg.min_shares_per_leg)
-    restore_report = load_executor_state_v1(executor)
+    broker = DryRunBroker() if shadow_mode else PolymarketBrokerV3.from_env()
+    executor = Setup1BrokerExecutorV4(broker=broker, shadow_only=shadow_mode, min_shares_per_leg=cfg.min_shares_per_leg)
+    restore_report = {"shadow_mode": True, "restored_plan_ids": []} if shadow_mode else load_executor_state_v1(executor)
     print("[PERSIST_RESTORE]", restore_report)
 
     health = broker.healthcheck()
@@ -315,12 +400,15 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
     startup_orders = broker.get_open_orders()[:50]
     print("[BROKER_OPEN_ORDERS_STARTUP]")
     print([o.as_dict() for o in startup_orders])
-    allowed, startup_report = evaluate_startup_guard(executor, startup_orders)
+    if shadow_mode:
+        allowed, startup_report = True, {"shadow_mode": True, "tracked_count": 0, "unknown_open_orders": []}
+    else:
+        allowed, startup_report = evaluate_startup_guard(executor, startup_orders)
     print("[STARTUP_GUARD]")
     print(startup_report)
 
     restored_plan_ids = restore_report.get("restored_plan_ids") or []
-    if restored_plan_ids and not startup_orders and startup_report.get("tracked_count", 0) == 0:
+    if not shadow_mode and restored_plan_ids and not startup_orders and startup_report.get("tracked_count", 0) == 0:
         print("[PERSIST_STALE] restored state has no matching broker orders; clearing local persistence")
         print("[PERSIST_RESET_EXECUTOR]", reset_executor_state_v1(executor))
         print("[PERSIST_CLEAR]", clear_executor_state_v1())
@@ -331,26 +419,39 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
     if not allowed:
         print("[GUARD] Startup blocked because external or unknown open orders exist in the broker account.")
         return
-    print("[PERSIST_FLUSH_STARTUP]", flush_executor_state_v1(executor))
+    print("[PERSIST_FLUSH_STARTUP]", {"shadow_mode": True} if shadow_mode else flush_executor_state_v1(executor))
 
-    slot_bundle = _build_slot_bundle()
     continuation_filter = ContinuationRiskFilterV1()
     current_research = CurrentScalpResearchV1(cfg=current_scalp_cfg)
     current_trade = _reset_current_trade(time.time())
     current_open_reference: Dict[str, Optional[float]] = {"slug": None, "price": None}
     pending_almost_resolved_window = False
+    pending_almost_resolved_slug: Optional[str] = None
+    last_current_slug: Optional[str] = None
 
     started_at = time.time()
     display_stable_next1 = 0
 
     while time.time() - started_at < run_for:
         now = time.time()
+        slot_bundle = _build_slot_bundle()
         slot_state = _fetch_slot_state(slot_bundle)
 
         current_item = slot_bundle["queue"].get("current")
         next1_item = slot_bundle["queue"].get("next_1")
         current_secs = _current_secs_to_end(current_item.get("seconds_to_end") if current_item else None, started_at)
         next1_secs = _current_secs_to_end(next1_item.get("seconds_to_end") if next1_item else None, started_at)
+        current_slug = str(current_item.get("slug") or "") if current_item else None
+
+        if current_slug != last_current_slug:
+            if last_current_slug is not None:
+                print(
+                    f"[CYCLE_ROLLOVER] current {last_current_slug} -> {current_slug} | "
+                    f"clearing pending_almost_resolved={pending_almost_resolved_window}"
+                )
+            pending_almost_resolved_window = False
+            pending_almost_resolved_slug = None
+            last_current_slug = current_slug
 
         current_snap = _slot_snapshot(slot_state, "current")
         next1_snap = _slot_snapshot(slot_state, "next_1")
@@ -381,6 +482,11 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
 
         runtime = executor.slots["next_1"]
         plan = executor.order_manager.get_plan(runtime.active_plan_id) if runtime.active_plan_id else None
+        if plan is not None and str(getattr(plan, "state", "") or "") == "hedged":
+            print(
+                f"[CYCLE_BLOCKED_BY_NEXT1_HEDGE] next1_plan_id={plan.plan_id} "
+                f"current_slug={current_slug} next1_secs={next1_secs}"
+            )
         if plan is None and next1_item and tradable_signal_next1 == cfg.require_signal and next1_secs and next1_secs > next1_deadline_secs:
             logs = executor.evaluate_slot(
                 slot_name="next_1",
@@ -392,7 +498,7 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
             )
             for line in logs:
                 print(line)
-            print("[PERSIST_FLUSH_AFTER_EVALUATE]", flush_executor_state_v1(executor))
+            print("[PERSIST_FLUSH_AFTER_EVALUATE]", {"shadow_mode": True} if shadow_mode else flush_executor_state_v1(executor))
 
         broker_open_orders = broker.get_open_orders()[:50]
         sync_logs, reconcile = sync_executor_from_broker_open_orders_v4(executor, broker_open_orders)
@@ -415,6 +521,8 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
             print(line)
         if any("deadline with no fills -> aborted cleanly" in line for line in deadline_logs):
             pending_almost_resolved_window = True
+            pending_almost_resolved_slug = current_slug
+            print(f"[CYCLE_ARM_ALMOST_RESOLVED] current_slug={current_slug} next1_secs={next1_secs}")
         fc_logs = maybe_post_force_close_exits_v2(executor, slot_name="next_1", metrics=tradable_metrics_next1)
         for line in fc_logs:
             print(line)
@@ -422,7 +530,7 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
         for line in cleanup_logs:
             print(line)
         print("[BROKER_RECONCILE]", reconcile)
-        print("[PERSIST_FLUSH_AFTER_SYNC]", flush_executor_state_v1(executor))
+        print("[PERSIST_FLUSH_AFTER_SYNC]", {"shadow_mode": True} if shadow_mode else flush_executor_state_v1(executor))
 
         if current_item and current_item["slug"] != current_open_reference.get("slug"):
             raw_event = fetch_event_by_slug(current_item["slug"])
@@ -453,41 +561,42 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
         print(
             f"[CURRENT] secs={current_secs} scalp_setup={current_signal.get('setup')} "
             f"scalp_allow={current_signal.get('allow')} almost_allow={almost_resolved_signal.get('allow')} "
-            f"pending_almost_resolved_window={pending_almost_resolved_window} current_trade_mode={current_trade.mode}"
+            f"pending_almost_resolved_window={pending_almost_resolved_window} "
+            f"pending_almost_resolved_slug={pending_almost_resolved_slug} "
+            f"current_trade_mode={current_trade.mode}"
         )
 
         if current_trade.mode == "idle" and current_item:
-            if runtime.active_plan_id and current_signal.get("allow") and current_signal.get("setup") in ("continuation", "reversal"):
-                side = current_signal.get("side")
-                token_id = str((current_snap.get("up") if side == "UP" else current_snap.get("down") or {}).get("token_id") or "")
-                tick = _tick_size_from_snap(current_snap, side)
-                current_trade = _post_current_entry(
-                    broker,
-                    current_trade,
-                    event_slug=current_item["slug"],
-                    token_id=token_id,
-                    outcome=side,
-                    entry_price=float(current_signal.get("entry_price")),
-                    qty=1.0,
-                    tick_size=tick,
-                    strategy="scalp",
-                    now=now,
-                    target_ticks=current_scalp_cfg.target_ticks,
-                    stop_ticks=current_scalp_cfg.stop_ticks,
-                    shadow_only=current_scalp_shadow_only,
-                )
-            elif pending_almost_resolved_window and almost_resolved_signal.get("allow"):
+            if (
+                pending_almost_resolved_window
+                and pending_almost_resolved_slug
+                and current_slug == pending_almost_resolved_slug
+                and almost_resolved_signal.get("allow")
+            ):
                 side = almost_resolved_signal.get("side")
                 token_id = str((current_snap.get("up") if side == "UP" else current_snap.get("down") or {}).get("token_id") or "")
                 tick = _tick_size_from_snap(current_snap, side)
+                planned_entry_price = float(almost_resolved_signal.get("entry_price"))
+                if not _has_sufficient_collateral_for_entry(
+                    broker,
+                    entry_price=planned_entry_price,
+                    qty=current_almost_resolved_qty,
+                ):
+                    print(
+                        f"[CURRENT_ALMOST_RESOLVED_BLOCKED] insufficient_collateral "
+                        f"required={round(planned_entry_price * current_almost_resolved_qty + 0.25, 6)} "
+                        f"available={_collateral_balance_usd(broker)}"
+                    )
+                    time.sleep(2.0)
+                    continue
                 current_trade = _post_current_entry(
                     broker,
                     current_trade,
                     event_slug=current_item["slug"],
                     token_id=token_id,
                     outcome=side,
-                    entry_price=float(almost_resolved_signal.get("entry_price")),
-                    qty=1.0,
+                    entry_price=planned_entry_price,
+                    qty=float(current_almost_resolved_qty),
                     tick_size=tick,
                     strategy="almost_resolved",
                     now=now,
@@ -496,6 +605,7 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
                     shadow_only=current_almost_resolved_shadow_only,
                 )
                 pending_almost_resolved_window = False
+                pending_almost_resolved_slug = None
 
         current_trade = _manage_current_trade(
             broker,
@@ -504,6 +614,9 @@ def monitor_live_multi_setup_v1(duration_seconds: int | None = None) -> None:
             secs_to_end=current_secs,
             cfg_scalp=current_scalp_cfg,
             cfg_resolved=current_resolved_cfg,
+            entry_timeout_secs=current_scalp_entry_timeout_secs,
+            position_timeout_secs=current_scalp_position_timeout_secs,
+            exit_repost_secs=current_exit_repost_secs,
             now=now,
         )
 

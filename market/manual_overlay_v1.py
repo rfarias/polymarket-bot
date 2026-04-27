@@ -12,6 +12,7 @@ import requests
 from market.book_5m import fetch_market_metadata_from_slug
 from market.current_market_ws_cache import CurrentMarketWsCache
 from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
+from market.current_early_overresolved_signal_v1 import CurrentEarlyOverresolvedResearchV1
 from market.current_scalp_signal_v1 import (
     BINANCE_PRICE_URL,
     TIMEOUT,
@@ -138,6 +139,13 @@ class ManualOverlaySnapshotV1:
     price_to_beat_side: str
     suggested_action: str
     suggested_detail: str
+    active_setup_name: str = ""
+    active_setup_market: str = ""
+    active_action: str = ""
+    active_side: str = ""
+    active_price: Optional[float] = None
+    market_context: str = ""
+    next_seconds_outlook: str = ""
     risk_plan: str = ""
     exit_alert: str = ""
     status_note: str = ""
@@ -185,10 +193,31 @@ class ManualOverlaySnapshotV1:
             "price_to_beat_side": self.price_to_beat_side,
             "suggested_action": self.suggested_action,
             "suggested_detail": self.suggested_detail,
+            "active_setup_name": self.active_setup_name,
+            "active_setup_market": self.active_setup_market,
+            "active_action": self.active_action,
+            "active_side": self.active_side,
+            "active_price": self.active_price,
+            "market_context": self.market_context,
+            "next_seconds_outlook": self.next_seconds_outlook,
             "risk_plan": self.risk_plan,
             "exit_alert": self.exit_alert,
             "status_note": self.status_note,
         }
+
+
+@dataclass
+class ManualActionPlanV1:
+    scope_id: str
+    slug: str
+    setup_name: str
+    side: str
+    entry_price: float
+    target_price: float
+    stop_price: float
+    created_at: float
+    expires_at: float
+    status: str = "active"  # active | consumed | canceled
 
 
 class ManualOverlayEngineV1:
@@ -201,12 +230,14 @@ class ManualOverlayEngineV1:
         self.scalp_cfg = scalp_cfg or CurrentScalpConfigV1()
         self.signal_cfg = signal_cfg or CurrentAlmostResolvedConfigV1()
         self.current_scalp = CurrentScalpResearchV1(cfg=self.scalp_cfg)
+        self.early_overresolved = CurrentEarlyOverresolvedResearchV1.from_mode(qty=50, mode="flex")
         self.slot_bundle: Optional[Dict] = None
         self.slot_bundle_refreshed_at: float = 0.0
         self.current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
         self.last_queue_reason: str = "not_initialized"
         self.last_window_slug: str = ""
         self.window_consumed_by_slug: dict[str, bool] = {}
+        self.manual_action_plans: dict[str, ManualActionPlanV1] = {}
         self.hold_to_resolution_mode: bool = True
         self.use_fast_reference: bool = True
         self.market_ws = CurrentMarketWsCache()
@@ -335,6 +366,271 @@ class ManualOverlayEngineV1:
         if distance <= -self.scalp_cfg.trend_distance_bps and d5 <= 0 and d15 <= 0:
             return "DOWN bias", "DOWN"
         return "Neutral", "NEUTRAL"
+
+    def _market_label(self, slug: str) -> str:
+        slug_l = str(slug or "").lower()
+        if "15m" in slug_l:
+            return "BTC 15min"
+        if "5m" in slug_l:
+            return "BTC 5min"
+        if "1h" in slug_l or "hour" in slug_l:
+            return "BTC 1h"
+        return "BTC current"
+
+    def _setup_display_name(self, setup: str, variant: str = "") -> str:
+        name = str(setup or "")
+        variant = str(variant or "")
+        if name == "early_overresolved_reversal":
+            return "current overresolved reversal"
+        if name == "almost_resolved":
+            if variant == "dual_rich_late_limit":
+                return "almost resolved dual rich"
+            if variant == "controlled_late_entry":
+                return "almost resolved late"
+            if variant == "resolved_pullback_limit":
+                return "almost resolved pullback"
+            return "almost resolved"
+        if name == "continuation":
+            return "scalp current continuation"
+        if name == "reversal":
+            return "scalp current reversal"
+        if name == "center_scalp":
+            return "scalp center book"
+        if name == "mid_book_maker":
+            return "scalp current maker"
+        if name == "range_reversion":
+            return "scalp range reversion"
+        if name == "micro_imbalance_refill":
+            return "scalp micro refill"
+        return name.replace("_", " ").strip() or "sem setup"
+
+    def _build_market_context(self, scalp_signal: Dict, almost_signal: Dict, early_signal: Dict, trend_label: str) -> str:
+        spot_5s = _safe_float(scalp_signal.get("spot_delta_5s_bps"), 0.0)
+        spot_15s = _safe_float(scalp_signal.get("spot_delta_15s_bps"), 0.0)
+        market_5s = _safe_float(scalp_signal.get("market_delta_5s"), 0.0)
+        range_15s = max(
+            _safe_float(scalp_signal.get("market_range_15s"), 0.0),
+            _safe_float(early_signal.get("market_range_window"), 0.0),
+            _safe_float(almost_signal.get("market_range_15s"), 0.0),
+        )
+        if abs(range_15s) <= 0.01 and abs(spot_5s) <= 0.2 and abs(spot_15s) <= 0.5:
+            return "book comprimido perto do centro, spot quase parado"
+        if spot_5s > 0.5 and market_5s > 0:
+            return f"spot puxando para cima e book acompanhando, {trend_label.lower()}"
+        if spot_5s < -0.5 and market_5s < 0:
+            return f"spot puxando para baixo e book acompanhando, {trend_label.lower()}"
+        if abs(spot_5s) <= 0.25 and abs(spot_15s) <= 0.75 and range_15s >= 0.02:
+            return "lateral curto com micro oscilacao no current"
+        if abs(spot_15s) >= 2.0:
+            return "spot esticado, risco de follow-through ou pullback rapido"
+        return f"mercado misto, {trend_label.lower()}"
+
+    def _build_next_seconds_outlook(self, scalp_signal: Dict, almost_signal: Dict, early_signal: Dict, selected: Dict) -> str:
+        setup = str(selected.get("setup") or "")
+        side = str(selected.get("side") or "")
+        spot_5s = _safe_float(scalp_signal.get("spot_delta_5s_bps"), 0.0)
+        market_5s = _safe_float(scalp_signal.get("market_delta_5s"), 0.0)
+        leader_ask = _safe_float(early_signal.get("leader_ask"), 0.0)
+        if setup == "early_overresolved_reversal":
+            if side == "UP":
+                return "agir so se up comecar a reagir no book"
+            if side == "DOWN":
+                return "agir so se down comecar a reagir no book"
+        if setup == "almost_resolved":
+            if side == "UP":
+                return "lado up ainda parece lider para os proximos segundos"
+            if side == "DOWN":
+                return "lado down ainda parece lider para os proximos segundos"
+        if setup in ("continuation", "reversal", "center_scalp", "mid_book_maker", "range_reversion", "micro_imbalance_refill"):
+            if side == "UP" and (spot_5s > 0 or market_5s > 0):
+                return "pressao curta favorece up nos proximos segundos"
+            if side == "DOWN" and (spot_5s < 0 or market_5s < 0):
+                return "pressao curta favorece down nos proximos segundos"
+            if leader_ask >= 0.9:
+                return "mercado esticado, buscar 1 tick e sair rapido"
+            return "janela curta, agir rapido e nao carregar"
+        return "sem direcao curta suficientemente clara"
+
+    def _manual_odds_confirmed_for_early_reversal(self, early_signal: Dict, scalp_signal: Dict) -> tuple[bool, str]:
+        side = str(early_signal.get("side") or "")
+        market_5s = _safe_float(early_signal.get("market_delta_5s", scalp_signal.get("market_delta_5s")), 0.0)
+        market_15s = _safe_float(early_signal.get("market_delta_15s", scalp_signal.get("market_delta_15s")), 0.0)
+        spot_5s = _safe_float(early_signal.get("spot_delta_5s_bps", scalp_signal.get("spot_delta_5s_bps")), 0.0)
+        leader_side = str(early_signal.get("leader_side") or "")
+        leader_ask = _safe_float(early_signal.get("leader_ask"), 0.0)
+        counter_ask = _safe_float(early_signal.get("counter_ask"), 0.0)
+
+        if side == "UP":
+            odds_turning = market_5s >= 0.01 and market_15s >= -0.005
+            spot_not_fighting = spot_5s >= -0.10
+            if odds_turning and spot_not_fighting:
+                return True, "odds do up reagindo"
+            return False, "up ainda nao reagiu nas odds"
+
+        if side == "DOWN":
+            odds_turning = market_5s <= -0.01 and market_15s <= 0.005
+            spot_not_fighting = spot_5s <= 0.10
+            if odds_turning and spot_not_fighting:
+                return True, "odds do down reagindo"
+            return False, "down ainda nao reagiu nas odds"
+
+        if leader_side and leader_ask > 0 and counter_ask > 0:
+            return False, f"lider {leader_side} ainda esticado"
+        return False, "odds ainda contra a entrada"
+
+    def _choose_active_setup(
+        self,
+        *,
+        slug: str,
+        current_secs: Optional[int],
+        scalp_signal: Dict,
+        almost_signal: Dict,
+        early_signal: Dict,
+        suggested_action: str,
+        setup_side: str,
+    ) -> Dict[str, Any]:
+        market_label = self._market_label(slug)
+        candidates: list[dict[str, Any]] = []
+
+        if early_signal.get("allow"):
+            early_ok, early_manual_reason = self._manual_odds_confirmed_for_early_reversal(early_signal, scalp_signal)
+            if early_ok:
+                candidates.append(
+                    {
+                        "priority": 100 if current_secs is not None and current_secs >= 90 else 70,
+                        "setup": str(early_signal.get("setup") or ""),
+                        "setup_name": self._setup_display_name(early_signal.get("setup")),
+                        "market": market_label,
+                        "action": f"comprar {early_signal.get('side')}".strip(),
+                        "side": str(early_signal.get("side") or ""),
+                        "price": early_signal.get("entry_price"),
+                        "reason": str(early_signal.get("reason") or ""),
+                    }
+                )
+            else:
+                candidates.append(
+                    {
+                        "priority": 15,
+                        "setup": str(early_signal.get("setup") or ""),
+                        "setup_name": self._setup_display_name(early_signal.get("setup")),
+                        "market": market_label,
+                        "action": "aguardar",
+                        "side": str(early_signal.get("side") or ""),
+                        "price": None,
+                        "reason": early_manual_reason,
+                    }
+                )
+
+        scalp_setup = str(scalp_signal.get("setup") or "")
+        if scalp_signal.get("allow") and scalp_setup != "no_edge":
+            candidates.append(
+                {
+                    "priority": 80 if scalp_setup in ("reversal", "continuation") else 65,
+                    "setup": scalp_setup,
+                    "setup_name": self._setup_display_name(scalp_setup),
+                    "market": market_label,
+                    "action": f"comprar {scalp_signal.get('side')}".strip(),
+                    "side": str(scalp_signal.get("side") or ""),
+                    "price": scalp_signal.get("entry_price"),
+                    "reason": str(scalp_signal.get("reason") or ""),
+                }
+            )
+
+        if almost_signal.get("allow"):
+            candidates.append(
+                {
+                    "priority": 90 if current_secs is not None and current_secs <= 60 else 60,
+                    "setup": str(almost_signal.get("setup") or ""),
+                    "setup_name": self._setup_display_name(almost_signal.get("setup"), almost_signal.get("setup_variant")),
+                    "market": market_label,
+                    "action": suggested_action.lower(),
+                    "side": setup_side,
+                    "price": almost_signal.get("entry_price"),
+                    "reason": str(almost_signal.get("reason") or ""),
+                }
+            )
+
+        if candidates:
+            candidates.sort(key=lambda item: item["priority"], reverse=True)
+            return candidates[0]
+
+        fallback_price = scalp_signal.get("entry_price")
+        fallback_side = str(scalp_signal.get("side") or setup_side or "")
+        return {
+            "priority": 0,
+            "setup": str(scalp_signal.get("setup") or "no_edge"),
+            "setup_name": self._setup_display_name(scalp_signal.get("setup")),
+            "market": market_label,
+            "action": suggested_action.lower(),
+            "side": fallback_side,
+            "price": fallback_price,
+            "reason": str(scalp_signal.get("reason") or almost_signal.get("reason") or "sem setup"),
+        }
+
+    def _plan_scope_id(self, slug: str, setup_name: str, side: str) -> str:
+        return f"{slug}:{setup_name}:{side}"
+
+    def _current_side_ask(self, snap: Dict, side: str) -> Optional[float]:
+        side_book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
+        ask = _safe_float(side_book.get("executable_buy") or side_book.get("best_ask"), -1.0)
+        return ask if ask > 0 else None
+
+    def _apply_manual_plan(self, *, slug: str, snap: Dict, active_setup: Dict[str, Any], now_ts: float) -> Dict[str, Any]:
+        setup_name = str(active_setup.get("setup_name") or "")
+        action = str(active_setup.get("action") or "").lower()
+        side = str(active_setup.get("side") or "")
+        entry_price = _safe_float(active_setup.get("price"), -1.0)
+        if not setup_name or side not in ("UP", "DOWN") or entry_price <= 0 or not (action.startswith("comprar") or action.startswith("limite")):
+            return active_setup
+
+        scope_id = self._plan_scope_id(slug, setup_name, side)
+        current_ask = self._current_side_ask(snap, side)
+        existing = self.manual_action_plans.get(scope_id)
+
+        if existing and existing.slug != slug:
+            existing = None
+
+        if existing is None:
+            plan = ManualActionPlanV1(
+                scope_id=scope_id,
+                slug=slug,
+                setup_name=setup_name,
+                side=side,
+                entry_price=round(entry_price, 2),
+                target_price=round(min(0.99, entry_price + 0.01), 2),
+                stop_price=round(max(0.01, entry_price - 0.01), 2),
+                created_at=now_ts,
+                expires_at=now_ts + 8.0,
+            )
+            self.manual_action_plans[scope_id] = plan
+            active_setup["action"] = f"comprar {side} {plan.entry_price:.2f}"
+            active_setup["plan_message"] = f"alvo {plan.target_price:.2f}, stop {plan.stop_price:.2f}, valido 8s"
+            return active_setup
+
+        if existing.status != "active":
+            active_setup["action"] = "aguardar"
+            active_setup["price"] = None
+            active_setup["plan_message"] = "plano anterior encerrado, nao perseguir novo preco"
+            return active_setup
+
+        if current_ask is not None and (current_ask <= existing.stop_price or current_ask >= existing.target_price):
+            existing.status = "canceled"
+            active_setup["action"] = "aguardar"
+            active_setup["price"] = None
+            active_setup["plan_message"] = f"plano cancelado, perdeu {existing.entry_price:.2f}/{existing.target_price:.2f}"
+            return active_setup
+
+        if now_ts > existing.expires_at:
+            existing.status = "consumed"
+            active_setup["action"] = "aguardar"
+            active_setup["price"] = None
+            active_setup["plan_message"] = "janela de acao expirou, nao perseguir"
+            return active_setup
+
+        active_setup["action"] = f"comprar {existing.side} {existing.entry_price:.2f}"
+        active_setup["price"] = existing.entry_price
+        active_setup["plan_message"] = f"alvo {existing.target_price:.2f}, stop {existing.stop_price:.2f}, valido {max(0, int(round(existing.expires_at - now_ts)))}s"
+        return active_setup
 
     def _infer_reversal_risk(self, almost_signal: Dict, scalp_signal: Dict) -> str:
         side = str(almost_signal.get("side") or "")
@@ -667,14 +963,21 @@ class ManualOverlayEngineV1:
                     last_update_ts=compute_finished_ts,
                     compute_started_ts=compute_started_ts,
                     compute_finished_ts=compute_finished_ts,
-                    compute_latency_ms=round(max(0.0, compute_finished_ts - compute_started_ts) * 1000.0, 1),
-                    price_to_beat_side="NEUTRAL",
-                    suggested_action="AGUARDAR",
-                    suggested_detail="feed atual indisponivel",
-                    risk_plan="SEM ENTRADA",
-                    exit_alert="AGUARDAR NOVO SNAPSHOT",
-                    status_note=f"Current missing: {self.last_queue_reason}. This is data feed/API absence, not a setup signal.",
-                )
+                compute_latency_ms=round(max(0.0, compute_finished_ts - compute_started_ts) * 1000.0, 1),
+                price_to_beat_side="NEUTRAL",
+                suggested_action="AGUARDAR",
+                suggested_detail="feed atual indisponivel",
+                active_setup_name="sem setup",
+                active_setup_market="BTC 5min",
+                active_action="aguardar",
+                active_side="",
+                active_price=None,
+                market_context="feed atual indisponivel",
+                next_seconds_outlook="sem leitura curta disponivel",
+                risk_plan="SEM ENTRADA",
+                exit_alert="AGUARDAR NOVO SNAPSHOT",
+                status_note=f"Current missing: {self.last_queue_reason}. This is data feed/API absence, not a setup signal.",
+            )
 
             self._ensure_open_reference(current_item)
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -694,6 +997,16 @@ class ManualOverlayEngineV1:
                 reference_price=reference.get("reference_price"),
                 source_divergence_bps=reference.get("source_divergence_bps"),
                 opening_reference_price=self.current_open_reference.get("price"),
+            )
+            early_signal = self.early_overresolved.evaluate(
+                timeframe="5m",
+                slug=str(current_item.get("slug") or ""),
+                snap=current_snap,
+                secs_to_end=current_secs,
+                event_start_time=self.current_open_reference.get("event_start_time"),
+                opening_reference_price=self.current_open_reference.get("price"),
+                reference_payload=reference,
+                now_ts=now,
             )
             almost_signal = evaluate_current_almost_resolved_v1(
                 snap=current_snap,
@@ -779,8 +1092,27 @@ class ManualOverlayEngineV1:
                 reversal_risk=reversal_risk,
                 score=score,
             )
+            active_setup = self._choose_active_setup(
+                slug=str(current_item.get("slug") or ""),
+                current_secs=current_secs,
+                scalp_signal=scalp_signal,
+                almost_signal=almost_signal,
+                early_signal=early_signal,
+                suggested_action=suggested_action,
+                setup_side=setup_side,
+            )
+            active_setup = self._apply_manual_plan(
+                slug=str(current_item.get("slug") or ""),
+                snap=current_snap,
+                active_setup=active_setup,
+                now_ts=now,
+            )
+            market_context = self._build_market_context(scalp_signal, almost_signal, early_signal, trend_label)
+            next_seconds_outlook = self._build_next_seconds_outlook(scalp_signal, almost_signal, early_signal, active_setup)
             if exit_alert:
                 suggested_detail = f"{suggested_detail} | {exit_alert}"
+            if active_setup.get("plan_message"):
+                suggested_detail = str(active_setup.get("plan_message"))
             compute_finished_ts = time.time()
 
             return ManualOverlaySnapshotV1(
@@ -825,6 +1157,13 @@ class ManualOverlayEngineV1:
                 price_to_beat_side=price_to_beat_side,
                 suggested_action=suggested_action,
                 suggested_detail=suggested_detail,
+                active_setup_name=str(active_setup.get("setup_name") or "sem setup"),
+                active_setup_market=str(active_setup.get("market") or self._market_label(str(current_item.get("slug") or ""))),
+                active_action=str(active_setup.get("action") or suggested_action.lower()),
+                active_side=str(active_setup.get("side") or ""),
+                active_price=active_setup.get("price"),
+                market_context=market_context,
+                next_seconds_outlook=next_seconds_outlook,
                 risk_plan=risk_plan,
                 exit_alert=exit_alert,
                 status_note=status_note,
@@ -873,5 +1212,12 @@ class ManualOverlayEngineV1:
                 price_to_beat_side="NEUTRAL",
                 suggested_action="AGUARDAR",
                 suggested_detail="erro no cálculo do snapshot",
+                active_setup_name="sem setup",
+                active_setup_market="BTC 5min",
+                active_action="aguardar",
+                active_side="",
+                active_price=None,
+                market_context="erro ao ler book e spot",
+                next_seconds_outlook="sem leitura curta disponivel",
                 status_note=str(exc),
             )

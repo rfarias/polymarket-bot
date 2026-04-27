@@ -1,7 +1,7 @@
 param(
     [int]$RunSeconds = 300,
     [double]$PollSeconds = 0.5,
-    [int]$Qty = 5,
+    [int]$Qty = 6,
     [int]$RestartDelaySeconds = 5
 )
 

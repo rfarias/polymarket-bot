@@ -14,7 +14,10 @@
   }
 
   function statusMode(state) {
-    if (state.one_shot_ready && state.setup_side && state.entry_price !== null && state.entry_price !== undefined) {
+    const action = String(state.active_action || state.suggested_action || "").toLowerCase();
+    const price = state.active_price ?? state.entry_price;
+    const side = state.active_side || state.setup_side;
+    if ((action.includes("comprar") || action.includes("limite")) && side && price !== null && price !== undefined) {
       return "PRONTO";
     }
     if (state.setup_reason === "invalid_book_both_sides_rich" || state.safety_label === "UNSAFE") {
@@ -106,12 +109,14 @@
   }
 
   function autofillTicket(state) {
-    if (!state || !state.setup_side || state.entry_price === null || state.entry_price === undefined) return false;
-    const sideButton = chooseSide(state.setup_side);
+    const side = state.active_side || state.setup_side;
+    const price = state.active_price ?? state.entry_price;
+    if (!state || !side || price === null || price === undefined) return false;
+    const sideButton = chooseSide(side);
     const { priceInput, qtyInput } = detectInputs();
     if (!sideButton || !priceInput || !qtyInput) return false;
     sideButton.click();
-    setNativeValue(priceInput, Number(state.entry_price).toFixed(2));
+    setNativeValue(priceInput, Number(price).toFixed(2));
     setNativeValue(qtyInput, state.default_qty || 6);
     lastFilledWindowId = state.window_id || "";
     return true;
@@ -121,39 +126,33 @@
     return `<div class="pm-row"><span class="pm-label">${label}:</span> ${value}</div>`;
   }
 
-  function sideArrow(side) {
-    if (side === "UP") return "↑";
-    if (side === "DOWN") return "↓";
-    return "→";
-  }
-
   function render(state) {
     const panel = ensurePanel();
     const mode = statusMode(state);
     const badge = badgeColor(mode);
-    const headline =
-      mode === "PRONTO" && state.setup_side && state.entry_price !== null && state.entry_price !== undefined
-        ? `${mode} ${state.setup_side} ${fmt(state.entry_price, 2)} x ${state.default_qty || 6}`
-        : mode === "AGUARDE" && state.watch_window_eta_secs !== null && state.watch_window_eta_secs !== undefined && Number(state.watch_window_eta_secs) > 0
-          ? `${mode} ${fmt(state.watch_window_eta_secs, 0, "s")}`
-          : mode;
+    const activeSetup = state.active_setup_name || "sem setup";
+    const activeMarket = state.active_setup_market || state.title || "BTC current";
+    const activeAction = state.active_action || state.suggested_action || "-";
+    const activePrice = state.active_price ?? state.entry_price;
+    const side = state.active_side || state.setup_side || "";
 
-    const lines = [
-      row("Acao", `${state.suggested_action || "-"} | ${state.suggested_detail || "-"}`),
-      row("Tendência", state.trend_label || "-"),
-      row("Reversão", state.reversal_risk || "-"),
-      row("Price to Beat", `${sideArrow(state.price_to_beat_side)} ${fmt(state.price_to_beat_usd, 2, "usd")} (${fmt(state.price_to_beat_bps, 2, "bps")})`),
-      row("Buffer", fmt(state.buffer_bps, 2, "bps")),
-    ];
+    const headline =
+      mode === "PRONTO" && side && activePrice !== null && activePrice !== undefined
+        ? `${activeSetup} | ${activeAction} ${fmt(activePrice, 2)}`
+        : `${activeSetup} | ${mode}`;
+
+    const actionLine = `${activeMarket} | ${activeAction || "-"}${side ? ` ${side}` : ""}${activePrice !== null && activePrice !== undefined ? ` ${fmt(activePrice, 2)}` : ""}`;
+    const message = [state.market_context, state.next_seconds_outlook, state.suggested_detail]
+      .filter((part) => part && String(part).trim() && String(part).trim() !== "-")
+      .join(" | ");
 
     panel.innerHTML = `
       <div class="pm-head">
         <div class="pm-title">${headline}</div>
         <div class="pm-badge" style="background:${badge}">${mode}</div>
       </div>
-      ${row("Fim", `${state.secs_to_end ?? "-"}s`)}
-      ${row("Reação", fmt(state.reaction_deadline_secs, 0, "s"))}
-      ${lines.join("")}
+      ${row("Acao", actionLine)}
+      ${row("Mensagem", message || state.status_note || "-")}
       <div class="pm-actions">
         <button class="pm-fill" id="${PANEL_ID}-fill">Preencher</button>
         <button class="pm-hide" id="${PANEL_ID}-hide">Ocultar</button>
@@ -190,22 +189,19 @@
     } catch (err) {
       render({
         title: "Assistente Manual",
+        active_setup_name: "sem setup",
+        active_setup_market: "BTC current",
+        active_action: "aguardar",
+        active_side: "",
+        active_price: null,
+        market_context: "servidor local indisponivel",
+        next_seconds_outlook: "sem leitura curta disponivel",
         secs_to_end: "-",
-        reaction_deadline_secs: null,
-        trend_label: "-",
-        reversal_risk: "-",
-        price_to_beat_usd: null,
-        price_to_beat_bps: null,
-        buffer_bps: null,
-        setup_side: "",
-        entry_price: null,
-        default_qty: 6,
-        watch_window_eta_secs: null,
-        status_note: "Servidor local indisponível. Inicie python run_manual_signal_server_v1.py --qty 6",
+        suggested_detail: "inicie python run_manual_signal_server_v1.py --qty 6",
       });
     }
   }
 
-  setInterval(tick, 100);
+  setInterval(tick, 250);
   tick();
 })();
