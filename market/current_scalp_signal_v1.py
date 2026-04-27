@@ -43,6 +43,8 @@ class _SpotSample:
     ts: float
     reference_price: float
     up_mid: float
+    up_buy: float
+    down_buy: float
 
 
 def _safe_float(value) -> Optional[float]:
@@ -97,6 +99,25 @@ def _range_up_mid(samples: Deque[_SpotSample], now_ts: float, lookback_secs: int
     if not values:
         return None
     return round(max(values) - min(values), 6)
+
+
+def _range_reference_price(samples: Deque[_SpotSample], now_ts: float, lookback_secs: int) -> Optional[float]:
+    cutoff = now_ts - lookback_secs
+    values = [float(sample.reference_price) for sample in samples if sample.ts >= cutoff]
+    if not values:
+        return None
+    return round(max(values) - min(values), 6)
+
+
+def _max_buy_price(samples: Deque[_SpotSample], now_ts: float, lookback_secs: int, side: str) -> Optional[float]:
+    cutoff = now_ts - lookback_secs
+    if side == "UP":
+        values = [float(sample.up_buy) for sample in samples if sample.ts >= cutoff and sample.up_buy > 0]
+    else:
+        values = [float(sample.down_buy) for sample in samples if sample.ts >= cutoff and sample.down_buy > 0]
+    if not values:
+        return None
+    return round(max(values), 6)
 
 
 def _top_of_book_mid(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[float]:
@@ -239,20 +260,34 @@ class CurrentScalpResearchV1:
         self._trim(now_ts)
 
         if up_mid is not None and down_mid is not None:
-            self.samples.append(_SpotSample(ts=now_ts, reference_price=float(reference_price), up_mid=float(up_mid)))
+            self.samples.append(
+                _SpotSample(
+                    ts=now_ts,
+                    reference_price=float(reference_price),
+                    up_mid=float(up_mid),
+                    up_buy=float(best_up_ask or 0.0),
+                    down_buy=float(best_down_ask or 0.0),
+                )
+            )
             self._trim(now_ts)
 
         sample_5s = _find_sample_before(self.samples, now_ts, 5)
         sample_15s = _find_sample_before(self.samples, now_ts, 15)
         sample_30s = _find_sample_before(self.samples, now_ts, 30)
+        sample_60s = _find_sample_before(self.samples, now_ts, 60)
 
         spot_delta_5s_bps = _bps_change(reference_price, sample_5s.reference_price if sample_5s else None)
         spot_delta_15s_bps = _bps_change(reference_price, sample_15s.reference_price if sample_15s else None)
         spot_delta_30s_bps = _bps_change(reference_price, sample_30s.reference_price if sample_30s else None)
+        spot_delta_60s_bps = _bps_change(reference_price, sample_60s.reference_price if sample_60s else None)
         market_delta_5s = round(float(up_mid) - float(sample_5s.up_mid), 6) if up_mid is not None and sample_5s is not None else None
         market_delta_15s = round(float(up_mid) - float(sample_15s.up_mid), 6) if up_mid is not None and sample_15s is not None else None
         market_range_15s = _range_up_mid(self.samples, now_ts, 15) if up_mid is not None else None
         market_range_30s = _range_up_mid(self.samples, now_ts, 30) if up_mid is not None else None
+        market_range_60s = _range_up_mid(self.samples, now_ts, 60) if up_mid is not None else None
+        spot_range_60s_usd = _range_reference_price(self.samples, now_ts, 60)
+        up_buy_high_60s = _max_buy_price(self.samples, now_ts, 60, "UP")
+        down_buy_high_60s = _max_buy_price(self.samples, now_ts, 60, "DOWN")
         distance_from_open_bps = _bps_change(reference_price, opening_reference_price)
 
         if up_mid is None or down_mid is None:
@@ -281,10 +316,15 @@ class CurrentScalpResearchV1:
                 "spot_delta_5s_bps": spot_delta_5s_bps,
                 "spot_delta_15s_bps": spot_delta_15s_bps,
                 "spot_delta_30s_bps": spot_delta_30s_bps,
+                "spot_delta_60s_bps": spot_delta_60s_bps,
                 "market_delta_5s": market_delta_5s,
                 "market_delta_15s": market_delta_15s,
                 "market_range_15s": market_range_15s,
                 "market_range_30s": market_range_30s,
+                "market_range_60s": market_range_60s,
+                "spot_range_60s_usd": spot_range_60s_usd,
+                "up_buy_high_60s": up_buy_high_60s,
+                "down_buy_high_60s": down_buy_high_60s,
                 "target_ticks": self.cfg.target_ticks,
                 "stop_ticks": self.cfg.stop_ticks,
                 "max_hold_secs": self.cfg.max_hold_secs,
@@ -333,10 +373,15 @@ class CurrentScalpResearchV1:
             "spot_delta_5s_bps": spot_delta_5s_bps,
             "spot_delta_15s_bps": spot_delta_15s_bps,
             "spot_delta_30s_bps": spot_delta_30s_bps,
+            "spot_delta_60s_bps": spot_delta_60s_bps,
             "market_delta_5s": market_delta_5s,
             "market_delta_15s": market_delta_15s,
             "market_range_15s": market_range_15s,
             "market_range_30s": market_range_30s,
+            "market_range_60s": market_range_60s,
+            "spot_range_60s_usd": spot_range_60s_usd,
+            "up_buy_high_60s": up_buy_high_60s,
+            "down_buy_high_60s": down_buy_high_60s,
             "target_ticks": self.cfg.target_ticks,
             "stop_ticks": self.cfg.stop_ticks,
             "max_hold_secs": self.cfg.max_hold_secs,

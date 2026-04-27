@@ -95,10 +95,20 @@ class CurrentAlmostResolvedConfigV1:
     controlled_late_max_market_range_30s: float = 0.03
     controlled_late_max_adverse_spot_5s_bps: float = 1.0
     controlled_late_max_adverse_spot_15s_bps: float = 1.6
-    resolved_pullback_max_secs: int = 20
-    resolved_pullback_min_leader_price: float = 0.985
+    resolved_pullback_max_secs: int = 60
+    resolved_pullback_preferred_secs: int = 30
+    resolved_pullback_min_leader_price: float = 0.99
     resolved_pullback_max_counter_price: float = 0.03
     resolved_pullback_limit_price: float = 0.98
+    resolved_pullback_stop_price: float = 0.96
+    resolved_pullback_min_safe_distance_usd: float = 60.0
+    resolved_pullback_min_safe_distance_bps: float = 10.0
+    resolved_pullback_min_distance_vs_recent_vol_mult: float = 1.2
+    resolved_pullback_min_adverse_spot_5s_bps: float = 0.05
+    resolved_pullback_min_adverse_market_5s: float = 0.002
+    resolved_pullback_max_adverse_spot_5s_bps: float = 0.5
+    resolved_pullback_max_adverse_spot_15s_bps: float = 0.8
+    resolved_pullback_max_adverse_spot_30s_bps: float = 1.0
 
     def as_dict(self) -> Dict:
         return asdict(self)
@@ -163,6 +173,8 @@ def evaluate_current_almost_resolved_v1(
     market_delta_15s = _safe_float((reference_signal or {}).get("market_delta_15s"), 0.0)
     market_range_15s = _safe_float((reference_signal or {}).get("market_range_15s"), 0.0)
     market_range_30s = _safe_float((reference_signal or {}).get("market_range_30s"), 0.0)
+    market_range_60s = _safe_float((reference_signal or {}).get("market_range_60s"), 0.0)
+    spot_range_60s_usd = _safe_float((reference_signal or {}).get("spot_range_60s_usd"), 0.0)
 
     up_edge_vs_counter = round(up_buy - down_buy, 6) if up_buy > 0 and down_buy > 0 else None
     down_edge_vs_counter = round(down_buy - up_buy, 6) if up_buy > 0 and down_buy > 0 else None
@@ -206,6 +218,24 @@ def evaluate_current_almost_resolved_v1(
     result["pullback_usd_cap"] = pullback_usd_cap
     result["market_range_15s"] = market_range_15s
     result["market_range_30s"] = market_range_30s
+    result["market_range_60s"] = market_range_60s
+    result["spot_range_60s_usd"] = spot_range_60s_usd
+    recent_vol_floor_usd = max(spot_range_60s_usd, up_adverse_spot_usd, down_adverse_spot_usd)
+    resolved_pullback_safe_distance_ok = (
+        distance_to_price_to_beat_usd >= cfg.resolved_pullback_min_safe_distance_usd
+        and distance_to_price_to_beat_bps >= cfg.resolved_pullback_min_safe_distance_bps
+        and distance_to_price_to_beat_usd >= recent_vol_floor_usd * cfg.resolved_pullback_min_distance_vs_recent_vol_mult
+    )
+    result["resolved_pullback_recent_vol_floor_usd"] = round(recent_vol_floor_usd, 4)
+    result["resolved_pullback_safe_distance_ok"] = resolved_pullback_safe_distance_ok
+    result["resolved_pullback_retrace_up_ok"] = (
+        spot_delta_5s <= -cfg.resolved_pullback_min_adverse_spot_5s_bps
+        or market_delta_5s <= -cfg.resolved_pullback_min_adverse_market_5s
+    )
+    result["resolved_pullback_retrace_down_ok"] = (
+        spot_delta_5s >= cfg.resolved_pullback_min_adverse_spot_5s_bps
+        or market_delta_5s >= cfg.resolved_pullback_min_adverse_market_5s
+    )
     result["missing_open_reference"] = missing_open_reference
     context_reason = str((reference_signal or {}).get("reason") or "")
     result["missing_market_midpoint_context"] = "missing_market_midpoint" in context_reason
@@ -346,6 +376,11 @@ def evaluate_current_almost_resolved_v1(
         secs_to_end <= cfg.resolved_pullback_max_secs
         and up_buy >= cfg.resolved_pullback_min_leader_price
         and down_buy <= cfg.resolved_pullback_max_counter_price
+        and result["resolved_pullback_retrace_up_ok"]
+        and resolved_pullback_safe_distance_ok
+        and spot_delta_5s >= -cfg.resolved_pullback_max_adverse_spot_5s_bps
+        and spot_delta_15s >= -cfg.resolved_pullback_max_adverse_spot_15s_bps
+        and spot_delta_30s >= -cfg.resolved_pullback_max_adverse_spot_30s_bps
     ):
         result.update(
             {
@@ -353,9 +388,10 @@ def evaluate_current_almost_resolved_v1(
                 "side": "UP",
                 "setup_variant": "resolved_pullback_limit",
                 "reason": "leader_up_resolved_pullback_limit",
-                "entry_price": min(cfg.resolved_pullback_limit_price, up_buy),
+                "entry_price": cfg.resolved_pullback_limit_price,
                 "exit_price": min(cfg.target_exit_price, 0.99),
                 "target_limit_price": cfg.resolved_pullback_limit_price,
+                "stop_price": cfg.resolved_pullback_stop_price,
             }
         )
         return result
@@ -364,6 +400,11 @@ def evaluate_current_almost_resolved_v1(
         secs_to_end <= cfg.resolved_pullback_max_secs
         and down_buy >= cfg.resolved_pullback_min_leader_price
         and up_buy <= cfg.resolved_pullback_max_counter_price
+        and result["resolved_pullback_retrace_down_ok"]
+        and resolved_pullback_safe_distance_ok
+        and spot_delta_5s <= cfg.resolved_pullback_max_adverse_spot_5s_bps
+        and spot_delta_15s <= cfg.resolved_pullback_max_adverse_spot_15s_bps
+        and spot_delta_30s <= cfg.resolved_pullback_max_adverse_spot_30s_bps
     ):
         result.update(
             {
@@ -371,9 +412,10 @@ def evaluate_current_almost_resolved_v1(
                 "side": "DOWN",
                 "setup_variant": "resolved_pullback_limit",
                 "reason": "leader_down_resolved_pullback_limit",
-                "entry_price": min(cfg.resolved_pullback_limit_price, down_buy),
+                "entry_price": cfg.resolved_pullback_limit_price,
                 "exit_price": min(cfg.target_exit_price, 0.99),
                 "target_limit_price": cfg.resolved_pullback_limit_price,
+                "stop_price": cfg.resolved_pullback_stop_price,
             }
         )
         return result

@@ -151,6 +151,11 @@ class PolymarketBrokerV3(BrokerInterface):
                 return order
         return None
 
+    def get_trades(self, params: Optional[Any] = None) -> List[Dict[str, Any]]:
+        if not hasattr(self.client, "get_trades"):
+            raise RuntimeError("CLOB client missing get_trades")
+        return self.client.get_trades(params)
+
     def place_limit_order(self, req: BrokerOrderRequest) -> BrokerOrder:
         side = BUY if str(req.side).upper() == "BUY" else SELL
         order_args = OrderArgs(token_id=req.token_id, price=float(req.price), size=float(req.size), side=side)

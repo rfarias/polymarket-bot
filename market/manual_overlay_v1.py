@@ -596,9 +596,9 @@ class ManualOverlayEngineV1:
             ):
                 return (
                     f"LIMITE {side} 0.98",
-                    "pullback final controlado sem troca clara do lado vencedor",
-                    "RISCO MUITO PEQUENO | CANCELAR SE HOUVER PRESSAO CONTRARIA",
-                    "SAIR IMEDIATO SE O PULLBACK VIER COM REVERSAO",
+                    "somente com cotacao atual em 0.99, apos ja ter tocado 0.99, e com micro-reversao controlada para buscar o 0.98",
+                    "RISCO CONTROLADO | STOP 0.96 | ACEITAR FILL PARCIAL OU NENHUM FILL",
+                    "CANCELAR SE O SPOT MOSTRAR REVERSAO OU SE PERDER O ESTADO DE QUASE RESOLVIDO",
                 )
             if reversal_risk == "high" or reason in ("invalid_book_both_sides_rich", "leader_not_stable_enough_or_not_priced_for_ticks"):
                 return "EVITAR", "spot ou book sem estabilidade suficiente para entrada manual", "SEM ENTRADA", exit_alert

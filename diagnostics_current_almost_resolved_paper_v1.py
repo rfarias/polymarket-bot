@@ -87,7 +87,11 @@ def _paper_enter(signal: dict, tick_size: float, now: float, cfg: CurrentAlmostR
     trade.side = signal.get("side")
     trade.entry_price = _safe_float(signal.get("entry_price"), 0.0)
     trade.target_price = round(min(0.99, _safe_float(signal.get("exit_price"), 0.99)), 6)
-    trade.stop_price = round(max(0.01, trade.entry_price - cfg.stop_ticks * tick_size), 6)
+    explicit_stop = _safe_float(signal.get("stop_price"), 0.0)
+    if explicit_stop > 0:
+        trade.stop_price = round(max(0.01, explicit_stop), 6)
+    else:
+        trade.stop_price = round(max(0.01, trade.entry_price - cfg.stop_ticks * tick_size), 6)
     trade.created_at = now
     trade.setup_variant = str(signal.get("setup_variant") or "standard")
     trade.entry_buffer_bps = _safe_float(
@@ -125,6 +129,16 @@ def _paper_manage(
     setup_variant = str(trade.setup_variant or signal.get("setup_variant") or "standard")
     entry_buffer_bps = _safe_float(trade.entry_buffer_bps, buffer_bps)
     entry_distance_bps = _safe_float(trade.entry_distance_bps, open_distance_bps)
+    resolved_pullback_late_hold = (
+        setup_variant == "resolved_pullback_limit"
+        and secs_to_end is not None
+        and secs_to_end <= cfg.resolved_pullback_preferred_secs
+    )
+    resolved_pullback_early_target_ok = (
+        setup_variant == "resolved_pullback_limit"
+        and secs_to_end is not None
+        and secs_to_end > cfg.resolved_pullback_preferred_secs
+    )
 
     if (
         secs_to_end is not None
@@ -160,8 +174,10 @@ def _paper_manage(
         trade.mode = "idle"
         trade.exit_price = bid_now if bid_now > 0 else trade.entry_price
         trade.exit_reason = "resolved_pullback_exit"
+    elif resolved_pullback_late_hold:
+        trade.hold_to_resolution = True
 
-    if bid_now >= _safe_float(trade.target_price):
+    if bid_now >= _safe_float(trade.target_price) and (setup_variant != "resolved_pullback_limit" or resolved_pullback_early_target_ok):
         trade.mode = "idle"
         trade.exit_price = bid_now
         trade.exit_reason = "target"
@@ -171,6 +187,7 @@ def _paper_manage(
         trade.exit_reason = "stop"
     elif (
         pnl_ticks_now >= cfg.paper_profit_take_min_ticks
+        and not resolved_pullback_late_hold
         and (
             (secs_to_end is not None and secs_to_end <= cfg.paper_profit_take_late_secs)
             or buffer_bps <= cfg.paper_profit_take_on_reversal_buffer_bps
