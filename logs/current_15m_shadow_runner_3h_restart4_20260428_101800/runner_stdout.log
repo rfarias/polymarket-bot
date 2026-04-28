@@ -1,0 +1,2178 @@
+[CONFIG] Loaded settings
+[CURRENT_15M_SPECIAL_SETUPS_CONFIG]
+{'counter_entry_min_age_secs': 2.0,
+ 'counter_entry_touch_polls': 2,
+ 'counter_max_entry_price': 0.06,
+ 'counter_max_hold_secs': 150,
+ 'counter_max_secs_to_end': 840,
+ 'counter_min_bounce_market_5s': 0.003,
+ 'counter_min_bounce_spot_5s_bps': 0.08,
+ 'counter_min_distance_vs_recent_vol_mult': 1.5,
+ 'counter_min_entry_price': 0.02,
+ 'counter_min_entry_visible_size': 8.0,
+ 'counter_min_extreme_distance_bps': 9.0,
+ 'counter_min_extreme_distance_usd': 70.0,
+ 'counter_min_secs_to_end': 300,
+ 'counter_min_winner_price': 0.95,
+ 'counter_resting_entry_price_high': 0.04,
+ 'counter_resting_entry_price_low': 0.03,
+ 'counter_resting_max_loser_price': 0.1,
+ 'counter_resting_min_extreme_distance_bps': 20.0,
+ 'counter_resting_min_extreme_distance_usd': 180.0,
+ 'counter_resting_min_secs_to_end': 330,
+ 'counter_resting_timeout_secs': 90.0,
+ 'counter_stop_floor': 0.01,
+ 'counter_stop_loss_ratio': 0.5,
+ 'counter_structural_resume_winner_price': 0.985,
+ 'counter_target_cap_price': 0.12,
+ 'counter_target_profit_ratio': 0.5,
+ 'winner_entry_min_age_secs': 1.5,
+ 'winner_entry_touch_polls': 2,
+ 'winner_extreme_distance_bps': 15.0,
+ 'winner_extreme_distance_usd': 120.0,
+ 'winner_extreme_max_adverse_spot_15s_bps': 2.2,
+ 'winner_extreme_max_adverse_spot_30s_bps': 3.0,
+ 'winner_extreme_max_counter_price': 0.2,
+ 'winner_extreme_max_market_range_60s': 0.22,
+ 'winner_extreme_min_edge_vs_counter': 0.78,
+ 'winner_hold_to_resolution_secs': 120,
+ 'winner_max_adverse_spot_15s_bps': 1.2,
+ 'winner_max_adverse_spot_30s_bps': 1.8,
+ 'winner_max_counter_price': 0.14,
+ 'winner_max_entry_price': 0.985,
+ 'winner_max_hold_secs': 180,
+ 'winner_max_market_range_60s': 0.12,
+ 'winner_max_secs_to_end': 840,
+ 'winner_min_distance_vs_recent_vol_mult': 1.25,
+ 'winner_min_edge_vs_counter': 0.8,
+ 'winner_min_entry_price': 0.95,
+ 'winner_min_entry_visible_size': 5.0,
+ 'winner_min_pullback_market_5s': 0.002,
+ 'winner_min_pullback_spot_5s_bps': 0.04,
+ 'winner_min_safe_distance_bps': 5.0,
+ 'winner_min_safe_distance_usd': 35.0,
+ 'winner_min_secs_to_end': 120,
+ 'winner_min_trend_distance_bps': 6.0,
+ 'winner_resting_entry_discount': 0.01,
+ 'winner_resting_max_price': 0.98,
+ 'winner_resting_min_price': 0.95,
+ 'winner_resting_min_secs_to_end': 300,
+ 'winner_resting_timeout_secs': 45.0,
+ 'winner_short_distance_max_adverse_spot_15s_bps': 1.4,
+ 'winner_short_distance_max_adverse_spot_30s_bps': 2.0,
+ 'winner_short_distance_max_counter_price': 0.12,
+ 'winner_short_distance_max_market_range_60s': 0.14,
+ 'winner_short_distance_max_usd': 60.0,
+ 'winner_short_distance_min_bps': 5.0,
+ 'winner_short_distance_min_edge_vs_counter': 0.84,
+ 'winner_short_distance_min_usd': 40.0,
+ 'winner_short_distance_pullback_market_5s': 0.0005,
+ 'winner_short_distance_pullback_spot_5s_bps': 0.01,
+ 'winner_stop_price': 0.96,
+ 'winner_strong_distance_usd': 55.0,
+ 'winner_strong_edge_vs_counter': 0.88,
+ 'winner_strong_pullback_market_5s': 0.001,
+ 'winner_strong_pullback_spot_5s_bps': 0.02,
+ 'winner_strong_trend_distance_bps': 8.0,
+ 'winner_target_price': 0.99,
+ 'winner_very_strong_distance_bps': 12.0,
+ 'winner_very_strong_distance_usd': 100.0,
+ 'winner_very_strong_max_adverse_spot_15s_bps': 1.8,
+ 'winner_very_strong_max_adverse_spot_30s_bps': 2.4,
+ 'winner_very_strong_max_counter_price': 0.16,
+ 'winner_very_strong_max_market_range_60s': 0.18,
+ 'winner_very_strong_min_edge_vs_counter': 0.82,
+ 'winner_very_strong_pullback_market_5s': 0.0,
+ 'winner_very_strong_pullback_spot_5s_bps': 0.0}
+[CURRENT_CONTEXT_CONFIG]
+{'continuation_momentum_15s_bps': 2.0,
+ 'continuation_momentum_5s_bps': 1.0,
+ 'continuation_price_cap': 0.72,
+ 'max_hold_secs': 20,
+ 'max_source_divergence_bps': 6.0,
+ 'max_spread': 0.03,
+ 'min_depth_top3': 10.0,
+ 'min_elapsed_from_open_secs': 45,
+ 'min_secs_to_end': 25,
+ 'reversal_bounce_5s_bps': 2.5,
+ 'reversal_extension_bps': 7.0,
+ 'reversal_price_cap': 0.4,
+ 'reversal_reclaim_15s_bps': 0.5,
+ 'stop_ticks': 2,
+ 'target_ticks': 1,
+ 'trend_distance_bps': 5.0}
+[LOG_DIR]
+logs\current_15m_shadow_runner_3h_restart4_20260428_101800
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=719
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1618
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=711
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1611
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=706
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1606
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=701
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1600
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=695
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1595
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=690
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1589
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=685
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1584
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=679
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1579
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=674
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1573
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=668
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1568
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=663
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1563
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=658
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1558
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=653
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1553
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=648
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1548
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=643
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1542
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=637
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1537
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=631
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1531
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=626
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1525
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=620
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1520
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=615
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1515
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=610
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1509
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=605
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1504
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=600
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1499
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=594
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1494
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=589
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1489
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=584
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1484
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=579
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1479
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=574
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1474
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=569
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1469
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=564
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1464
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=559
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1458
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=553
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1453
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=548
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1448
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=543
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1443
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=538
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1438
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=533
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1432
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=528
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1427
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=523
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1422
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=517
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1417
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=512
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1412
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=507
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1407
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=502
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1401
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=496
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1396
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=491
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1391
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=486
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1385
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=481
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1380
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=475
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1375
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=470
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1370
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=465
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1364
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=460
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1359
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=455
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1354
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=449
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1349
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=444
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1344
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=439
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1339
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=434
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1333
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=428
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1328
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=423
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1322
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=417
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1317
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=411
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1311
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=406
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1305
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=401
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1300
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=395
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1295
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=390
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1289
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=385
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1284
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=379
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1279
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=373
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1273
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=368
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1267
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=363
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1262
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=357
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1257
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=352
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1251
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=346
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1245
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=341
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1240
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=335
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1235
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=330
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1229
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=324
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1224
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=319
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1218
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=313
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1213
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=308
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1208
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=303
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1202
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=297
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1197
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=292
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1191
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=286
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1185
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=281
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1180
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=275
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1175
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=270
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1170
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=265
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1164
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=260
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1159
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=254
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1153
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=249
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1148
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=243
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1143
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=238
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1138
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=233
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1133
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=228
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1127
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=222
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1122
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=217
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1117
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=211
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1111
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=206
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1105
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=200
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1099
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=194
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1094
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=189
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1089
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=184
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1083
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=179
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1078
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=173
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1073
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=167
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1067
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=162
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1061
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=157
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1056
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=151
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1050
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=145
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1045
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=140
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1040
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=135
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1034
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=129
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1029
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=124
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1023
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=119
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1018
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=113
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1012
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=108
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1007
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=102
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=1001
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=97
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=996
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=91
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=991
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=86
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=985
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=81
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=980
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=75
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=975
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=70
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=970
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=65
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=964
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=60
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=959
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=54
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=954
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=49
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=948
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=43
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=943
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=38
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=937
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=33
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=932
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=27
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=927
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=21
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=921
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=16
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=915
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=11
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=910
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=5
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=905
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777382100
+[API] Fetching event by slug: btc-updown-15m-1777382100
+[15M] Direct target ready: btc-updown-15m-1777382100 | secs_to_end=0
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=900
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=895
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1794
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=888
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1788
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=883
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1782
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=877
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1777
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=872
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1771
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=867
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1766
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=862
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1761
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=856
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1755
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=851
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1750
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=845
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1745
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=840
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1740
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=835
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1735
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=830
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1729
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=824
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1724
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=819
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1719
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=814
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1713
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=809
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1708
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=803
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1703
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=798
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1697
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=792
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1692
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=787
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1687
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=782
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1682
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=777
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1676
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=772
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1671
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=766
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1666
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=761
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1661
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=755
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1655
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=750
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1650
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=745
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1645
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=740
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1639
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=735
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1634
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=730
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1629
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=724
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1624
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=719
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1619
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=714
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1613
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=709
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1608
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=703
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1603
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=698
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1598
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=693
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1592
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=687
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1587
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=682
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1582
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=677
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1577
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=672
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1571
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=667
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1566
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=662
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1561
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=656
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1556
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=651
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1551
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=646
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1545
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=640
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1540
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=635
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1535
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=630
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1529
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=625
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1524
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=620
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1519
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=615
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1514
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=610
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1509
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=604
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1504
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=599
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1499
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=594
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1493
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=589
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1488
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=583
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1483
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=578
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1478
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=573
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1472
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=567
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1467
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=561
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1461
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=556
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1456
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=551
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1451
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=546
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1445
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=540
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1440
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=535
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1435
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=530
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1429
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=525
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1424
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000
+[API] Fetching event by slug: btc-updown-15m-1777383000
+[15M] Direct target ready: btc-updown-15m-1777383000 | secs_to_end=519
+[15M] Fetching direct target slug: btc-updown-15m-1777383900
+[API] Fetching event by slug: btc-updown-15m-1777383900
+[15M] Direct target ready: btc-updown-15m-1777383900 | secs_to_end=1419
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[BOOK] Fetching 2 token books from https://clob.polymarket.com/books
+[BOOK] Books received: 2
+[15M] Fetching direct target slug: btc-updown-15m-1777383000

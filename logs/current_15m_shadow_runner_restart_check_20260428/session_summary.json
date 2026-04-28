@@ -1,0 +1,13 @@
+{
+  "completed_trades": 0,
+  "wins": 0,
+  "losses": 0,
+  "flat": 0,
+  "total_pnl_ticks": 0,
+  "by_setup": {},
+  "blocked_reasons": {
+    "missing_current_15m": 5
+  },
+  "log_dir": "logs\\current_15m_shadow_runner_restart_check_20260428",
+  "log_file": "logs\\current_15m_shadow_runner_restart_check_20260428\\current_15m_shadow_runner.jsonl"
+}
