@@ -30,6 +30,7 @@ class PaperTrade:
     mode: str = "idle"  # idle | open
     side: str | None = None
     entry_price: float | None = None
+    qty: float = 0.0
     stop_price: float | None = None
     target_price: float | None = None
     best_bid: float | None = None
@@ -37,10 +38,24 @@ class PaperTrade:
     exit_price: float | None = None
     exit_reason: str | None = None
     pnl_ticks: float | None = None
+    pnl_quote: float | None = None
+    estimated_maker_rebate: float = 0.0
     hold_to_resolution: bool = False
     setup_variant: str | None = None
     entry_buffer_bps: float | None = None
     entry_distance_bps: float | None = None
+
+
+@dataclass
+class PaperOrder:
+    active: bool = False
+    slug: str | None = None
+    side: str | None = None
+    limit_price: float | None = None
+    total_qty: float = 50.0
+    filled_qty: float = 0.0
+    created_at: float = 0.0
+    updated_at: float = 0.0
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -81,11 +96,56 @@ def _bid_for_side(executable: dict | None, side: str) -> float:
     return _safe_float(executable.get("up_bid" if side == "UP" else "down_bid"), 0.0)
 
 
-def _paper_enter(signal: dict, tick_size: float, now: float, cfg: CurrentAlmostResolvedConfigV1) -> PaperTrade:
+def _side_book(snap: dict, side: str) -> dict:
+    return (snap.get("up") if side == "UP" else snap.get("down")) or {}
+
+
+def _first_level_price(book: dict, side: str, default: float = 0.0) -> float:
+    levels = book.get(side) or []
+    if not levels:
+        return float(default)
+    return _safe_float((levels[0] or {}).get("price"), default)
+
+
+def _ask_for_side(snap: dict, side: str) -> float:
+    book = _side_book(snap, side)
+    executable_buy = _safe_float(book.get("executable_buy"), 0.0)
+    if executable_buy > 0:
+        return executable_buy
+    best_ask = _safe_float(book.get("best_ask"), 0.0)
+    if best_ask > 0:
+        return best_ask
+    return _first_level_price(book, "top_asks", 0.0)
+
+
+def _available_ask_qty_at_or_below(snap: dict, side: str, limit_price: float) -> float:
+    executable_buy = _ask_for_side(snap, side)
+    if executable_buy > 0 and executable_buy <= limit_price:
+        return 1_000_000_000.0
+    qty = 0.0
+    for level in (_side_book(snap, side).get("top_asks") or []):
+        price = _safe_float((level or {}).get("price"), 999.0)
+        size = _safe_float((level or {}).get("size"), 0.0)
+        if price <= limit_price and size > 0:
+            qty += size
+        else:
+            break
+    return round(qty, 6)
+
+
+def _paper_enter(
+    signal: dict,
+    tick_size: float,
+    now: float,
+    cfg: CurrentAlmostResolvedConfigV1,
+    qty: float = 0.0,
+    maker_rebate_bps: float = 0.0,
+) -> PaperTrade:
     trade = PaperTrade()
     trade.mode = "open"
     trade.side = signal.get("side")
     trade.entry_price = _safe_float(signal.get("entry_price"), 0.0)
+    trade.qty = round(max(0.0, qty), 6)
     trade.target_price = round(min(0.99, _safe_float(signal.get("exit_price"), 0.99)), 6)
     explicit_stop = _safe_float(signal.get("stop_price"), 0.0)
     if explicit_stop > 0:
@@ -99,6 +159,36 @@ def _paper_enter(signal: dict, tick_size: float, now: float, cfg: CurrentAlmostR
         0.0,
     )
     trade.entry_distance_bps = abs(_safe_float(signal.get("distance_to_price_to_beat_bps"), 0.0))
+    trade.estimated_maker_rebate = round(trade.qty * trade.entry_price * maker_rebate_bps / 10000.0, 8)
+    return trade
+
+
+def _apply_passive_fill(
+    trade: PaperTrade,
+    *,
+    signal: dict,
+    fill_price: float,
+    fill_qty: float,
+    tick_size: float,
+    now: float,
+    cfg: CurrentAlmostResolvedConfigV1,
+    maker_rebate_bps: float,
+) -> PaperTrade:
+    if fill_qty <= 0:
+        return trade
+    if trade.mode != "open":
+        filled_signal = dict(signal)
+        filled_signal["entry_price"] = fill_price
+        return _paper_enter(filled_signal, tick_size, now, cfg, qty=fill_qty, maker_rebate_bps=maker_rebate_bps)
+    old_qty = _safe_float(trade.qty, 0.0)
+    old_notional = old_qty * _safe_float(trade.entry_price, 0.0)
+    new_qty = old_qty + fill_qty
+    trade.entry_price = round((old_notional + fill_qty * fill_price) / new_qty, 6) if new_qty > 0 else fill_price
+    trade.qty = round(new_qty, 6)
+    trade.estimated_maker_rebate = round(
+        _safe_float(trade.estimated_maker_rebate, 0.0) + fill_qty * fill_price * maker_rebate_bps / 10000.0,
+        8,
+    )
     return trade
 
 
@@ -227,25 +317,35 @@ def _paper_manage(
 
     if trade.mode == "idle" and trade.exit_price is not None and trade.entry_price is not None:
         trade.pnl_ticks = round((trade.exit_price - trade.entry_price) / tick_size, 4)
+        trade.pnl_quote = round((trade.exit_price - trade.entry_price) * _safe_float(trade.qty, 0.0), 6)
     return trade
 
 
 def _trade_stats(completed: list[dict]) -> dict:
     total_pnl_ticks = round(sum(_safe_float(t.get("pnl_ticks")) for t in completed), 4)
+    total_pnl_quote = round(sum(_safe_float(t.get("pnl_quote")) for t in completed), 6)
+    total_estimated_rebate = round(sum(_safe_float(t.get("estimated_maker_rebate")) for t in completed), 8)
+    total_qty = round(sum(_safe_float(t.get("qty")) for t in completed), 6)
     return {
         "completed_trades": len(completed),
         "wins": sum(1 for t in completed if _safe_float(t.get("pnl_ticks")) > 0),
         "losses": sum(1 for t in completed if _safe_float(t.get("pnl_ticks")) < 0),
         "flat": sum(1 for t in completed if _safe_float(t.get("pnl_ticks")) == 0),
         "total_pnl_ticks": total_pnl_ticks,
+        "total_pnl_quote": total_pnl_quote,
+        "total_estimated_rebate": total_estimated_rebate,
+        "total_filled_qty": total_qty,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Paper-trade the current almost-resolved setup in isolation")
-    parser.add_argument("--seconds", type=int, default=300, help="Run duration")
+    parser.add_argument("--seconds", type=int, default=300, help="Run duration. Use 0 to run indefinitely.")
     parser.add_argument("--poll-secs", type=float, default=2.0, help="Polling interval")
     parser.add_argument("--log-file", type=str, default=None, help="Optional JSONL log path")
+    parser.add_argument("--passive-capture-only", action="store_true", help="Only simulate passive extreme-liquidity-capture entries")
+    parser.add_argument("--order-qty", type=float, default=50.0, help="Passive paper order size in contracts")
+    parser.add_argument("--maker-rebate-bps", type=float, default=0.0, help="Estimated maker rebate in bps of filled notional")
     args = parser.parse_args()
 
     signal_cfg = CurrentAlmostResolvedConfigV1()
@@ -253,12 +353,15 @@ def main() -> int:
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg)
     overlay_engine = ManualOverlayEngineV1(scalp_cfg=scalp_cfg, signal_cfg=signal_cfg)
     trade = PaperTrade()
+    order = PaperOrder(total_qty=float(args.order_qty))
     log_path = Path(args.log_file) if args.log_file else _build_default_log_path()
     completed: list[dict] = []
     blocked_reasons = Counter()
     allowed_variants = Counter()
     entered_variants = Counter()
     exit_reasons = Counter()
+    order_events = Counter()
+    last_leader_price_by_key: dict[str, float] = {}
 
     print("[CURRENT_ALMOST_RESOLVED_CONFIG]")
     pprint(signal_cfg.as_dict())
@@ -270,7 +373,7 @@ def main() -> int:
     started_at = time.time()
     current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
 
-    while time.time() - started_at < args.seconds:
+    while args.seconds <= 0 or time.time() - started_at < args.seconds:
         now = time.time()
         slot_bundle = _build_slot_bundle()
         current_item = slot_bundle["queue"].get("current")
@@ -310,6 +413,10 @@ def main() -> int:
             reference_signal=current_scalp_signal,
             cfg=signal_cfg,
         )
+        if args.passive_capture_only and signal.get("setup_variant") != "passive_extreme_liquidity_capture":
+            signal = dict(signal)
+            signal["allow"] = False
+            signal["reason"] = f"passive_capture_only_skipped_{signal.get('setup_variant') or 'none'}"
 
         if not signal.get("allow"):
             blocked_reasons[str(signal.get("reason") or "unknown")] += 1
@@ -319,7 +426,8 @@ def main() -> int:
         print("\n===== CURRENT ALMOST RESOLVED PAPER V1 =====")
         print(
             f"current_secs={current_secs} exec_reason={current_exec_reason} "
-            f"allow={signal.get('allow')} side={signal.get('side')} trade_mode={trade.mode}"
+            f"allow={signal.get('allow')} side={signal.get('side')} trade_mode={trade.mode} "
+            f"order_active={order.active}"
         )
         print("[SIGNAL]")
         pprint(signal)
@@ -335,6 +443,7 @@ def main() -> int:
                 "current_scalp_context": current_scalp_signal,
                 "signal": signal,
                 "trade": asdict(trade),
+                "order": asdict(order),
             },
         )
 
@@ -354,8 +463,132 @@ def main() -> int:
         )
         print(f"[SUGGESTED_ACTION] {suggested_action} | {suggested_detail} | {risk_plan} | {exit_alert}")
 
-        if trade.mode == "idle" and signal.get("allow") and (
-            suggested_action.startswith("COMPRAR ") or suggested_action.startswith("LIMITE ")
+        passive_signal = (
+            signal.get("allow")
+            and signal.get("setup_variant") == "passive_extreme_liquidity_capture"
+            and signal.get("execution_style") == "post_only"
+        )
+        signal_side = str(signal.get("side") or "")
+        signal_slug = str(current_item.get("slug") or "")
+        leader_price = _safe_float(signal.get("leader_price"), 0.0)
+        leader_key = f"{signal_slug}:{signal_side}"
+        previous_leader_price = last_leader_price_by_key.get(leader_key)
+
+        if order.active:
+            order_still_valid = (
+                passive_signal
+                and order.slug == signal_slug
+                and order.side == signal_side
+                and _safe_float(signal.get("limit_price"), 0.0) >= _safe_float(order.limit_price, 0.0)
+            )
+            too_late = current_secs is not None and current_secs <= signal_cfg.min_secs_to_end
+            if not order_still_valid or too_late:
+                order_events["cancel"] += 1
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "cancel",
+                        "ts": now,
+                        "reason": "context_deteriorated_or_deadline",
+                        "current_secs": current_secs,
+                        "signal": signal,
+                        "order": asdict(order),
+                    },
+                )
+                print("[PAPER_CANCEL]")
+                pprint(asdict(order))
+                order = PaperOrder(total_qty=float(args.order_qty))
+            elif order.side:
+                tick_size = _tick_size_from_snap(current_snap, order.side)
+                remaining_qty = max(0.0, _safe_float(order.total_qty, args.order_qty) - _safe_float(order.filled_qty, 0.0))
+                available_qty = _available_ask_qty_at_or_below(current_snap, order.side, _safe_float(order.limit_price, 0.0))
+                fill_qty = round(min(remaining_qty, available_qty), 6)
+                if fill_qty > 0 and order.limit_price is not None:
+                    was_idle = trade.mode == "idle"
+                    order.filled_qty = round(_safe_float(order.filled_qty, 0.0) + fill_qty, 6)
+                    order.updated_at = now
+                    trade = _apply_passive_fill(
+                        trade,
+                        signal=signal,
+                        fill_price=_safe_float(order.limit_price, 0.0),
+                        fill_qty=fill_qty,
+                        tick_size=tick_size,
+                        now=now,
+                        cfg=signal_cfg,
+                        maker_rebate_bps=float(args.maker_rebate_bps),
+                    )
+                    if was_idle:
+                        entered_variants[str(trade.setup_variant or "standard")] += 1
+                    order_events["fill"] += 1
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "fill",
+                            "ts": now,
+                            "fill_qty": fill_qty,
+                            "available_qty": available_qty,
+                            "signal": signal,
+                            "order": asdict(order),
+                            "trade": asdict(trade),
+                        },
+                    )
+                    print("[PAPER_FILL]")
+                    pprint({"fill_qty": fill_qty, "order": asdict(order), "trade": asdict(trade)})
+                    if order.filled_qty >= order.total_qty:
+                        order = PaperOrder(total_qty=float(args.order_qty))
+
+        if passive_signal and trade.mode == "idle" and not order.active and signal_side in ("UP", "DOWN"):
+            tick_up_confirmed = previous_leader_price is None or leader_price > previous_leader_price
+            limit_price = _safe_float(signal.get("limit_price"), 0.0)
+            raw_ask = _ask_for_side(current_snap, signal_side)
+            if tick_up_confirmed and limit_price > 0 and (raw_ask <= 0 or limit_price < raw_ask):
+                order = PaperOrder(
+                    active=True,
+                    slug=signal_slug,
+                    side=signal_side,
+                    limit_price=limit_price,
+                    total_qty=float(args.order_qty),
+                    filled_qty=0.0,
+                    created_at=now,
+                    updated_at=now,
+                )
+                order_events["place"] += 1
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "place",
+                        "ts": now,
+                        "signal": signal,
+                        "suggested_action": suggested_action,
+                        "suggested_detail": suggested_detail,
+                        "tick_up_confirmed": tick_up_confirmed,
+                        "previous_leader_price": previous_leader_price,
+                        "raw_ask": raw_ask,
+                        "order": asdict(order),
+                    },
+                )
+                print("[PAPER_PLACE_PASSIVE]")
+                pprint(asdict(order))
+            else:
+                order_events["watch"] += 1
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "watch",
+                        "ts": now,
+                        "reason": "waiting_tick_up_or_post_only",
+                        "tick_up_confirmed": tick_up_confirmed,
+                        "previous_leader_price": previous_leader_price,
+                        "raw_ask": raw_ask,
+                        "signal": signal,
+                    },
+                )
+        elif (
+            not args.passive_capture_only
+            and not passive_signal
+            and trade.mode == "idle"
+            and signal.get("allow")
+            and (suggested_action.startswith("COMPRAR ") or suggested_action.startswith("LIMITE "))
         ):
             tick_size = _tick_size_from_snap(current_snap, signal.get("side") or "UP")
             trade = _paper_enter(signal, tick_size, now, signal_cfg)
@@ -373,6 +606,9 @@ def main() -> int:
             )
             print("[PAPER_ENTER]")
             pprint(asdict(trade))
+
+        if signal_side in ("UP", "DOWN") and leader_price > 0:
+            last_leader_price_by_key[leader_key] = leader_price
 
         if trade.mode == "open":
             tick_size = _tick_size_from_snap(current_snap, trade.side or "UP")
@@ -405,6 +641,7 @@ def main() -> int:
             "allowed_variants": dict(allowed_variants),
             "entered_variants": dict(entered_variants),
             "exit_reasons": dict(exit_reasons),
+            "order_events": dict(order_events),
             "blocked_reasons_top10": blocked_reasons.most_common(10),
             "log_file": str(log_path),
             "trades": completed,

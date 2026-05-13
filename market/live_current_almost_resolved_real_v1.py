@@ -69,6 +69,20 @@ def _state_path() -> Path:
     return Path("logs") / "current_almost_resolved_real_state.json"
 
 
+def _counter_reversal_state_path() -> Path:
+    return Path("logs") / "counter_reversal_real_state.json"
+
+
+def _state_file_active(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return str(payload.get("mode") or "idle") != "idle"
+
+
 def _save_state(path: Path, trade) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(trade), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -690,6 +704,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 exec_bid = _bid_for_side(current_exec, trade.side)
                 if exec_bid > 0:
                     active_bid = max(active_bid, exec_bid)
+            counter_reversal_active = _state_file_active(_counter_reversal_state_path())
 
             snapshot = {
                 "type": "snapshot",
@@ -703,6 +718,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "signal": signal,
                 "trade": _trade_summary(trade),
                 "active_bid": active_bid,
+                "counter_reversal_active": counter_reversal_active,
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -710,7 +726,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 f"side={signal.get('side')} mode={trade.mode} qty={trade.entry_qty_filled}/{trade.remaining_position_qty}"
             )
 
-            if trade.mode == "idle" and current_item and signal.get("allow"):
+            if trade.mode == "idle" and current_item and signal.get("allow") and not counter_reversal_active:
                 side = str(signal.get("side") or "")
                 tick_size = _tick_size_from_snap(current_snap, side)
                 trade = _post_entry_order(
@@ -726,6 +742,17 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 _append_jsonl(log_path, {"type": "enter", "ts": now, "session_id": session_id, "signal": signal, "trade": _trade_summary(trade)})
                 time.sleep(poll_secs)
                 continue
+            if trade.mode == "idle" and current_item and signal.get("allow") and counter_reversal_active:
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "entry_blocked",
+                        "ts": now,
+                        "session_id": session_id,
+                        "reason": "counter_reversal_active",
+                        "signal": signal,
+                    },
+                )
 
             if trade.mode in ("pending_entry", "open_position", "pending_exit", "exit_pending_confirm"):
                 trade = _sync_entry_order(broker, trade)
