@@ -356,6 +356,28 @@ If a position is already open, do not kill the terminal blindly; first check the
 If using -Continuous, Ctrl+C stops future cycles only after interrupting the current process.
 ```
 
+### Manual Guardian
+
+For manual entries, run the guardian that adopts manual current BTC 5m positions and manages exits:
+
+```powershell
+.\scripts\watch_manual_adopt_current_almost_resolved.ps1 -ArmReal -RunSeconds 1800 -PollSeconds 0.5 -MinAdoptQty 1
+```
+
+Behavior:
+
+```text
+entry remains manual
+adopts one manual BUY order, or an already-filled UP/DOWN token balance
+manages stop, structural_stop, and profit_protect
+does not take target by default
+holds winner to resolution by default
+after resolution writes awaiting_redeem and waits for manual claim/redeem
+state file: logs/current_almost_resolved_manual_adopt_state.json
+```
+
+Do not run this manual guardian together with the autonomous almost-resolved real runner on the same account.
+
 ### Counter-Reversal Runner
 
 Files:

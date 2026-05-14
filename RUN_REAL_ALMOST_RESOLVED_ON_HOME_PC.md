@@ -146,3 +146,33 @@ At that point the bot should not open a new entry until claim/redeem is handled.
 If no position is open, press `Ctrl+C`.
 
 If a position is open, avoid killing blindly. Check the current state/log first and let the runner either exit by stop/protection or reach `awaiting_redeem`.
+
+## 8. Manual Guardian
+
+For manual trading, use the manual guardian instead of the autonomous entry runner. You place the entry manually; the guardian adopts the current BTC 5m position/order and manages exits.
+
+Start it before entering manually:
+
+```powershell
+.\scripts\watch_manual_adopt_current_almost_resolved.ps1 -ArmReal -RunSeconds 1800 -PollSeconds 0.5 -MinAdoptQty 1
+```
+
+What it does:
+
+```text
+adopts one manual BUY order on the current BTC 5m market
+also adopts an already-filled UP/DOWN token balance on the current BTC 5m market
+posts exit orders for stop, structural_stop, or profit_protect
+does not take target by default
+holds winner to resolution by default
+marks awaiting_redeem after resolution and waits for manual claim/redeem
+```
+
+State and logs:
+
+```text
+logs\current_almost_resolved_manual_adopt_state.json
+logs\manual_adopt_current_almost_resolved_*
+```
+
+Do not run the autonomous almost-resolved real runner and the manual guardian on the same market/account at the same time.
