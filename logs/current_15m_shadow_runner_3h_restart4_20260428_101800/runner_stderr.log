@@ -1,0 +1,2 @@
+Exception ignored in thread started by <bound method Thread._bootstrap of <Thread(ThreadPoolExecutor-1599_3, initial)>>:
+MemoryError: 

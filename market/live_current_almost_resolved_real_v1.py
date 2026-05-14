@@ -5,7 +5,6 @@ import os
 import time
 import traceback
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +22,7 @@ from market.current_scalp_signal_v1 import (
 )
 from market.live_guarded_config import load_live_guarded_config
 from market.polymarket_broker_v3 import PolymarketBrokerV3
+from market.rest_5m_shadow_public_v5 import _build_slot_bundle, _compute_executable_metrics, _fetch_slot_state, _slot_snapshot
 from market.slug_discovery import fetch_event_by_slug
 
 
@@ -60,9 +60,6 @@ def _append_jsonl(path: Path, row: dict) -> None:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-FIVE_MINUTE_STEP = 300
-
-
 def _build_log_dir() -> Path:
     ts = time.strftime("%Y%m%d_%H%M%S")
     return Path("logs") / f"current_almost_resolved_real_{ts}"
@@ -72,8 +69,18 @@ def _state_path() -> Path:
     return Path("logs") / "current_almost_resolved_real_state.json"
 
 
-def _residuals_path() -> Path:
-    return Path("logs") / "current_almost_resolved_real_residuals.jsonl"
+def _counter_reversal_state_path() -> Path:
+    return Path("logs") / "counter_reversal_real_state.json"
+
+
+def _state_file_active(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return str(payload.get("mode") or "idle") != "idle"
 
 
 def _save_state(path: Path, trade) -> None:
@@ -101,12 +108,13 @@ def _clear_state(path: Path) -> None:
 
 @dataclass
 class LiveCurrentAlmostResolvedTradeState:
-    mode: str = "idle"  # idle | pending_entry | open_position | pending_exit | exit_pending_confirm
+    mode: str = "idle"  # idle | pending_entry | open_position | pending_exit | exit_pending_confirm | awaiting_redeem
     event_slug: Optional[str] = None
     side: Optional[str] = None
     token_id: Optional[str] = None
     entry_order_id: Optional[str] = None
     exit_order_id: Optional[str] = None
+    entry_order_style: str = "unknown"  # passive_limit | aggressive_limit | direct_limit | unknown
     entry_price: Optional[float] = None
     entry_qty_requested: float = 0.0
     entry_qty_filled: float = 0.0
@@ -119,7 +127,9 @@ class LiveCurrentAlmostResolvedTradeState:
     updated_at: float = 0.0
     confirm_started_at: float = 0.0
     confirm_polls: int = 0
-    entry_reprice_count: int = 0
+    resolution_detected_at: float = 0.0
+    redeem_attempted_at: float = 0.0
+    redeem_required: bool = False
     last_reason: Optional[str] = None
 
     @property
@@ -127,187 +137,8 @@ class LiveCurrentAlmostResolvedTradeState:
         return round(max(0.0, float(self.entry_qty_filled) - float(self.exit_qty_filled)), 6)
 
 
-@dataclass
-class CurrentSlotCache:
-    slug: Optional[str] = None
-    item: Optional[dict] = None
-    snap: Optional[dict] = None
-    event_start_time: Optional[str] = None
-    opening_reference_price: Optional[float] = None
-    reference_cache_ts: float = 0.0
-    reference_cache_payload: Optional[dict] = None
-
-
 def _trade_summary(trade: LiveCurrentAlmostResolvedTradeState) -> dict:
     return asdict(trade)
-
-
-def _parse_dt(value: Optional[str]):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def _round_down_to_current_5m_epoch(now_ts: int) -> int:
-    return (now_ts // FIVE_MINUTE_STEP) * FIVE_MINUTE_STEP
-
-
-def _normalize_current_event(event: dict) -> Optional[dict]:
-    if not event:
-        return None
-    slug = str(event.get("slug") or "")
-    if not slug.startswith("btc-updown-5m-"):
-        return None
-    markets = event.get("markets") or []
-    if not markets:
-        return None
-    market = markets[0]
-    if market.get("active") is not True:
-        return None
-    if market.get("closed") is True:
-        return None
-    if market.get("acceptingOrders") is not True:
-        return None
-    if market.get("enableOrderBook") is not True:
-        return None
-    end_dt = _parse_dt(event.get("endDate") or market.get("endDate"))
-    if not end_dt:
-        return None
-    now = datetime.now(timezone.utc)
-    secs_to_end = int(round((end_dt - now).total_seconds()))
-    if secs_to_end <= 0:
-        return None
-    raw_token_ids = market.get("clobTokenIds") or []
-    raw_outcomes = market.get("outcomes") or []
-    try:
-        token_ids = raw_token_ids if isinstance(raw_token_ids, list) else json.loads(raw_token_ids)
-    except Exception:
-        token_ids = []
-    try:
-        outcomes = raw_outcomes if isinstance(raw_outcomes, list) else json.loads(raw_outcomes)
-    except Exception:
-        outcomes = []
-    token_mapping = []
-    for idx, token_id in enumerate(token_ids):
-        outcome = str(outcomes[idx] if idx < len(outcomes) else f"OUTCOME_{idx}")
-        token_mapping.append({"outcome": outcome, "token_id": str(token_id)})
-    return {
-        "title": event.get("title"),
-        "slug": slug,
-        "market_slug": market.get("slug"),
-        "seconds_to_end": secs_to_end,
-        "endDate": event.get("endDate") or market.get("endDate"),
-        "event_start_time": market.get("eventStartTime") or event.get("startTime"),
-        "token_mapping": token_mapping,
-    }
-
-
-def _build_current_snap_from_event(event: dict) -> tuple[Optional[dict], Optional[dict]]:
-    item = _normalize_current_event(event)
-    if not item:
-        return None, None
-    token_ids = [str(x.get("token_id")) for x in (item.get("token_mapping") or []) if x.get("token_id")]
-    raw_books = fetch_books_for_tokens(token_ids)
-    by_id = {str(book.get("asset_id") or book.get("token_id") or ""): book for book in raw_books}
-
-    def _side_payload(mapping: dict) -> Optional[dict]:
-        token_id = str(mapping.get("token_id") or "")
-        book = by_id.get(token_id) or {}
-        if not book:
-            return None
-        top_bids = [{"price": lvl.get("price"), "size": lvl.get("size")} for lvl in (book.get("bids") or [])[:3]]
-        top_asks = [{"price": lvl.get("price"), "size": lvl.get("size")} for lvl in (book.get("asks") or [])[:3]]
-        return {
-            "outcome": mapping.get("outcome"),
-            "token_id": token_id,
-            "best_bid": _best_bid(book),
-            "best_ask": _safe_float(((book.get("asks") or [{}])[0] or {}).get("price")),
-            "executable_buy": _safe_float(((book.get("asks") or [{}])[0] or {}).get("price")),
-            "executable_sell": _best_bid(book),
-            "tick_size": _safe_float(book.get("tick_size"), 0.01),
-            "min_order_size": _safe_float(book.get("min_order_size"), 0.0),
-            "top_bids": top_bids,
-            "top_asks": top_asks,
-        }
-
-    up = None
-    down = None
-    for mapping in item.get("token_mapping") or []:
-        outcome = str(mapping.get("outcome") or "").lower()
-        if outcome == "up":
-            up = _side_payload(mapping)
-        elif outcome == "down":
-            down = _side_payload(mapping)
-    if not up or not down:
-        return item, None
-    return item, {"up": up, "down": down}
-
-
-def _fetch_current_item_and_snap(cache: CurrentSlotCache) -> tuple[Optional[dict], Optional[dict], str]:
-    target_slug = f"btc-updown-5m-{_round_down_to_current_5m_epoch(int(datetime.now(timezone.utc).timestamp()))}"
-    if cache.slug != target_slug or cache.item is None:
-        raw_event = fetch_event_by_slug(target_slug)
-        item, snap = _build_current_snap_from_event(raw_event or {})
-        cache.slug = target_slug
-        cache.item = item
-        cache.snap = snap
-        cache.event_start_time = item.get("event_start_time") if item else None
-        cache.opening_reference_price = None
-        if item and item.get("event_start_time"):
-            open_ref = fetch_binance_open_price_for_event_start_v1(str(item.get("event_start_time")))
-            cache.opening_reference_price = _safe_float(open_ref.get("open_price"))
-        return item, snap, "ok" if item and snap else "missing_current"
-    item = dict(cache.item or {})
-    end_dt = _parse_dt(item.get("endDate"))
-    if end_dt is not None:
-        item["seconds_to_end"] = max(0, int(round((end_dt - datetime.now(timezone.utc)).total_seconds())))
-    token_ids = [str(x.get("token_id")) for x in (item.get("token_mapping") or []) if x.get("token_id")]
-    raw_books = fetch_books_for_tokens(token_ids)
-    by_id = {str(book.get("asset_id") or book.get("token_id") or ""): book for book in raw_books}
-
-    def _from_book(mapping: dict) -> Optional[dict]:
-        token_id = str(mapping.get("token_id") or "")
-        book = by_id.get(token_id) or {}
-        if not book:
-            return None
-        return {
-            "outcome": mapping.get("outcome"),
-            "token_id": token_id,
-            "best_bid": _best_bid(book),
-            "best_ask": _safe_float(((book.get("asks") or [{}])[0] or {}).get("price")),
-            "executable_buy": _safe_float(((book.get("asks") or [{}])[0] or {}).get("price")),
-            "executable_sell": _best_bid(book),
-            "tick_size": _safe_float(book.get("tick_size"), 0.01),
-            "min_order_size": _safe_float(book.get("min_order_size"), 0.0),
-            "top_bids": [{"price": lvl.get("price"), "size": lvl.get("size")} for lvl in (book.get("bids") or [])[:3]],
-            "top_asks": [{"price": lvl.get("price"), "size": lvl.get("size")} for lvl in (book.get("asks") or [])[:3]],
-        }
-
-    up = None
-    down = None
-    for mapping in item.get("token_mapping") or []:
-        outcome = str(mapping.get("outcome") or "").lower()
-        if outcome == "up":
-            up = _from_book(mapping)
-        elif outcome == "down":
-            down = _from_book(mapping)
-    snap = {"up": up, "down": down} if up and down else None
-    cache.item = item
-    cache.snap = snap
-    return item, snap, "ok" if item and snap else "missing_current"
-
-
-def _cached_external_reference(cache: CurrentSlotCache, *, ttl_secs: float) -> dict:
-    now = time.time()
-    if cache.reference_cache_payload is not None and now - cache.reference_cache_ts <= ttl_secs:
-        return cache.reference_cache_payload
-    payload = fetch_external_btc_reference_v1()
-    cache.reference_cache_payload = payload
-    cache.reference_cache_ts = now
-    return payload
 
 
 def _tick_size_from_snap(snap: dict, side: str) -> float:
@@ -324,6 +155,16 @@ def _bid_for_side(executable: Optional[dict], side: str) -> float:
     if not executable:
         return 0.0
     return _safe_float(executable.get("up_bid" if side == "UP" else "down_bid"), 0.0)
+
+
+def _ask_for_side(executable: Optional[dict], side: str) -> float:
+    if not executable:
+        return 0.0
+    return _safe_float(executable.get("up_ask" if side == "UP" else "down_ask"), 0.0)
+
+
+def _side_winning(side: str, signed_distance_from_open_bps: float) -> bool:
+    return (side == "UP" and signed_distance_from_open_bps > 0) or (side == "DOWN" and signed_distance_from_open_bps < 0)
 
 
 def _fetch_active_book(trade: LiveCurrentAlmostResolvedTradeState) -> Optional[dict]:
@@ -403,176 +244,6 @@ def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: flo
     return _collateral_balance_usd(broker) >= required
 
 
-def _effective_entry_price(
-    *,
-    signal_entry_price: float,
-    target_exit_price: float,
-    tick_size: float,
-    premium_ticks: int,
-    min_profit_ticks_after_entry: int,
-) -> float:
-    base_price = max(0.01, float(signal_entry_price))
-    if premium_ticks <= 0 or tick_size <= 0:
-        return round(base_price, 6)
-    max_price_for_profit = max(
-        0.01,
-        float(target_exit_price) - max(1, int(min_profit_ticks_after_entry)) * float(tick_size),
-    )
-    bumped_price = base_price + int(premium_ticks) * float(tick_size)
-    return round(min(base_price if max_price_for_profit < base_price else bumped_price, max_price_for_profit), 6)
-
-
-def _reprice_entry_price(
-    *,
-    current_entry_price: float,
-    signal_entry_price: float,
-    target_exit_price: float,
-    tick_size: float,
-    reprice_ticks: int,
-    min_profit_ticks_after_entry: int,
-) -> float:
-    higher_base = max(float(current_entry_price), float(signal_entry_price)) + max(1, int(reprice_ticks)) * float(tick_size)
-    return _effective_entry_price(
-        signal_entry_price=higher_base,
-        target_exit_price=target_exit_price,
-        tick_size=tick_size,
-        premium_ticks=0,
-        min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-    )
-
-
-def _entry_execution_plan(
-    *,
-    signal: dict,
-    tick_size: float,
-    default_premium_ticks: int,
-    default_timeout_secs: float,
-    min_profit_ticks_after_entry: int,
-) -> dict:
-    secs = _safe_float(signal.get("secs_to_end"), 0.0)
-    reason = str(signal.get("reason") or "")
-    entry_price = _safe_float(signal.get("entry_price"), 0.0)
-    exit_price = _safe_float(signal.get("exit_price"), 0.99)
-    dist_usd = _safe_float(signal.get("distance_to_price_to_beat_usd"), 0.0)
-    range30 = _safe_float(signal.get("market_range_30s"), 0.0)
-
-    premium_ticks = int(default_premium_ticks)
-    timeout_secs = float(default_timeout_secs)
-
-    if reason in ("leader_up_dual_rich_late_limit", "leader_down_dual_rich_late_limit"):
-        premium_ticks = 0
-        timeout_secs = max(timeout_secs, 2.5 if secs >= 20 else 1.5)
-        target_limit_price = _safe_float(signal.get("target_limit_price"), 0.98)
-        effective_entry = min(max(0.01, target_limit_price), max(entry_price, 0.01))
-        return {
-            "premium_ticks": premium_ticks,
-            "timeout_secs": timeout_secs,
-            "entry_price": round(effective_entry, 6),
-        }
-    if reason in ("leader_up_extreme_dominance", "leader_down_extreme_dominance"):
-        premium_ticks = max(premium_ticks, 2)
-        timeout_secs = max(timeout_secs, 3.0)
-    elif dist_usd >= 90 and range30 <= 0.02 and secs >= 35:
-        premium_ticks = max(premium_ticks, 2)
-        timeout_secs = max(timeout_secs, 2.5)
-    elif secs <= 30 and dist_usd >= 55:
-        premium_ticks = max(premium_ticks, 2)
-        timeout_secs = max(timeout_secs, 1.5)
-
-    if exit_price - entry_price <= max(1, min_profit_ticks_after_entry) * tick_size:
-        premium_ticks = min(premium_ticks, 1)
-
-    effective_entry = _effective_entry_price(
-        signal_entry_price=entry_price,
-        target_exit_price=exit_price,
-        tick_size=tick_size,
-        premium_ticks=premium_ticks,
-        min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-    )
-    return {
-        "premium_ticks": premium_ticks,
-        "timeout_secs": timeout_secs,
-        "entry_price": effective_entry,
-    }
-
-
-def _maybe_reprice_pending_entry(
-    broker,
-    trade: LiveCurrentAlmostResolvedTradeState,
-    *,
-    signal: dict,
-    snap: Optional[dict],
-    qty: int,
-    now: float,
-    cfg: CurrentAlmostResolvedConfigV1,
-    min_profit_ticks_after_entry: int,
-    reprice_ticks: int,
-) -> tuple[LiveCurrentAlmostResolvedTradeState, Optional[dict]]:
-    if trade.mode != "pending_entry" or trade.entry_reprice_count > 0 or not snap:
-        return trade, None
-    if not signal.get("allow") or str(signal.get("side") or "") != str(trade.side or ""):
-        return trade, None
-    if str(signal.get("event_slug") or "") != str(trade.event_slug or ""):
-        return trade, None
-
-    tick_size = _tick_size_from_snap(snap, trade.side or "UP")
-    current_entry_price = _safe_float(trade.entry_price, 0.0)
-    target_exit_price = _safe_float(trade.target_price, cfg.target_exit_price)
-    repriced_entry = _reprice_entry_price(
-        current_entry_price=current_entry_price,
-        signal_entry_price=_safe_float(signal.get("entry_price"), current_entry_price),
-        target_exit_price=target_exit_price,
-        tick_size=tick_size,
-        reprice_ticks=reprice_ticks,
-        min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-    )
-    if repriced_entry <= current_entry_price:
-        return trade, None
-    if not _has_sufficient_collateral_for_entry(broker, entry_price=repriced_entry, qty=qty):
-        return trade, {
-            "status": "blocked_insufficient_collateral",
-            "current_entry_price": current_entry_price,
-            "repriced_entry_price": repriced_entry,
-            "available": _collateral_balance_usd(broker),
-        }
-
-    req = BrokerOrderRequest(
-        token_id=trade.token_id or "",
-        side="BUY",
-        price=repriced_entry,
-        size=float(qty),
-        market_slug=trade.event_slug,
-        outcome=trade.side,
-        client_order_key=f"current_almost_resolved:entry_reprice:{int(now)}:{trade.side}",
-    )
-    order = broker.place_limit_order(req)
-    trade.entry_order_id = order.order_id
-    trade.entry_price = repriced_entry
-    trade.entry_reprice_count += 1
-    trade.updated_at = now
-    trade.stop_price = round(max(0.01, repriced_entry - cfg.stop_ticks * tick_size), 6)
-    trade.last_reason = "entry_repriced"
-    return trade, {
-        "status": "repriced",
-        "current_entry_price": current_entry_price,
-        "repriced_entry_price": repriced_entry,
-        "reprice_ticks": reprice_ticks,
-    }
-
-
-def _is_aggressive_exit_reason(reason: str) -> bool:
-    return str(reason or "").lower() in {
-        "stop",
-        "structural_stop",
-        "deadline_flatten",
-        "timeout",
-        "repost",
-        "retry_residual",
-        "shutdown_flatten",
-        "panic",
-    }
-
-
 def _sync_entry_order(broker, trade: LiveCurrentAlmostResolvedTradeState) -> LiveCurrentAlmostResolvedTradeState:
     order = _get_order_status(broker, trade.entry_order_id)
     if order is not None:
@@ -584,14 +255,14 @@ def _sync_entry_order(broker, trade: LiveCurrentAlmostResolvedTradeState) -> Liv
 
 
 def _restore_trade_from_broker(broker, trade: LiveCurrentAlmostResolvedTradeState) -> LiveCurrentAlmostResolvedTradeState:
-    if trade.mode == "idle":
+    if trade.mode in ("idle", "awaiting_redeem"):
         return trade
     trade = _sync_entry_order(broker, trade)
     exit_order = _get_order_status(broker, trade.exit_order_id)
     if exit_order is not None:
         trade.exit_qty_filled = max(trade.exit_qty_filled, _safe_float(getattr(exit_order, "size_matched", None), 0.0))
         status = str(getattr(exit_order, "status", "") or "").lower()
-        if _is_flat_qty(_token_balance_qty(broker, trade.token_id)) or trade.remaining_position_qty <= 0 or _is_match_status(status):
+        if _is_flat_qty(_token_balance_qty(broker, trade.token_id)) or trade.remaining_position_qty <= 0:
             return LiveCurrentAlmostResolvedTradeState()
         trade.mode = "pending_exit"
     if trade.entry_qty_filled > 0 and trade.mode == "pending_entry":
@@ -623,6 +294,7 @@ def _exit_reason(
     signal: dict,
     cfg: CurrentAlmostResolvedConfigV1,
     flatten_deadline_secs: int,
+    hold_winner_to_resolution: bool,
 ) -> Optional[str]:
     if bid_now <= 0 or trade.entry_price is None:
         return None
@@ -635,23 +307,29 @@ def _exit_reason(
     edge_vs_counter = _safe_float(signal.get("up_edge_vs_counter" if side == "UP" else "down_edge_vs_counter"), 0.0)
     adverse_spot_bps = _safe_float(signal.get("up_adverse_spot_bps" if side == "UP" else "down_adverse_spot_bps"), 0.0)
 
-    if secs_to_end is not None and secs_to_end <= flatten_deadline_secs:
+    if not hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= flatten_deadline_secs:
         return "deadline_flatten"
-    if bid_now >= _safe_float(trade.target_price):
+    if not hold_winner_to_resolution and bid_now >= _safe_float(trade.target_price):
         return "target"
     if bid_now <= _safe_float(trade.stop_price):
         return "stop"
     if (
         pnl_ticks_now >= cfg.paper_profit_take_min_ticks
         and (
-            (secs_to_end is not None and secs_to_end <= cfg.paper_profit_take_late_secs)
+            (not hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= cfg.paper_profit_take_late_secs)
             or buffer_bps <= cfg.paper_profit_take_on_reversal_buffer_bps
             or market_range_30s >= cfg.paper_profit_take_on_market_range_30s
             or adverse_spot_bps >= open_distance_bps * cfg.max_reversal_share_of_open_distance
         )
     ):
         return "profit_protect"
-    if pnl_ticks_now > 0 and not trade.hold_to_resolution and secs_to_end is not None and secs_to_end <= cfg.paper_hold_to_resolution_secs:
+    if (
+        not hold_winner_to_resolution
+        and pnl_ticks_now > 0
+        and not trade.hold_to_resolution
+        and secs_to_end is not None
+        and secs_to_end <= cfg.paper_hold_to_resolution_secs
+    ):
         return "late_profit_take"
     if (
         buffer_bps <= cfg.paper_structural_stop_buffer_bps
@@ -660,7 +338,7 @@ def _exit_reason(
         or (signal.get("side") not in (None, side) and signal.get("allow"))
     ):
         return "structural_stop"
-    if not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
+    if not hold_winner_to_resolution and not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
         return "timeout"
     return None
 
@@ -674,15 +352,17 @@ def _post_entry_order(
     tick_size: float,
     now: float,
     cfg: CurrentAlmostResolvedConfigV1,
-    execution_plan: dict,
+    entry_price_override: Optional[float] = None,
+    order_style: str = "direct_limit",
 ) -> LiveCurrentAlmostResolvedTradeState:
     side = str(signal.get("side") or "")
-    entry_price = _safe_float(execution_plan.get("entry_price"), 0.0)
+    entry_price = _safe_float(entry_price_override, _safe_float(signal.get("entry_price"), 0.0))
     trade = LiveCurrentAlmostResolvedTradeState(
         mode="pending_entry",
         event_slug=str(signal.get("event_slug") or ""),
         side=side,
         token_id=_token_id_for_side(snap, side),
+        entry_order_style=order_style,
         entry_price=entry_price,
         entry_qty_requested=float(qty),
         target_price=round(min(0.99, _safe_float(signal.get("exit_price"), cfg.target_exit_price)), 6),
@@ -693,8 +373,8 @@ def _post_entry_order(
     )
     if not trade.token_id:
         raise RuntimeError(f"Missing token_id for side={side}")
-    if qty < 6:
-        raise RuntimeError("Current almost resolved real requires qty >= 6.")
+    if qty < 5:
+        raise RuntimeError("Current almost resolved real requires qty >= 5.")
     if not _has_sufficient_collateral_for_entry(broker, entry_price=entry_price, qty=qty):
         raise RuntimeError(
             f"Insufficient collateral for entry: required={round(entry_price * qty, 6)} available={_collateral_balance_usd(broker)}"
@@ -706,7 +386,7 @@ def _post_entry_order(
         size=float(qty),
         market_slug=trade.event_slug,
         outcome=side,
-        client_order_key=f"current_almost_resolved:entry:{int(now)}:{side}",
+        client_order_key=f"current_almost_resolved:entry:{order_style}:{int(now)}:{side}",
     )
     order = broker.place_limit_order(req)
     trade.entry_order_id = order.order_id
@@ -724,7 +404,6 @@ def _post_exit_order(
 ) -> LiveCurrentAlmostResolvedTradeState:
     token_balance_qty = _token_balance_qty(broker, trade.token_id)
     qty = token_balance_qty if token_balance_qty > 0 else trade.remaining_position_qty
-    aggressive_exit = _is_aggressive_exit_reason(reason)
     if _is_flat_qty(qty):
         trade.mode = "idle"
         trade.last_reason = "flat"
@@ -734,7 +413,7 @@ def _post_exit_order(
         broker.update_balance_allowance(asset_type="CONDITIONAL", token_id=trade.token_id)
     except Exception:
         pass
-    if (aggressive_exit or qty < float(min_limit_exit_qty)) and hasattr(broker, "place_market_order"):
+    if qty < float(min_limit_exit_qty) and hasattr(broker, "place_market_order"):
         try:
             order = broker.place_market_order(
                 token_id=trade.token_id or "",
@@ -755,14 +434,13 @@ def _post_exit_order(
             trade.updated_at = now
             trade.last_reason = f"close_failed_residual_position:{round(qty, 6)}:{type(exc).__name__}"
             return trade
-    post_price = min(0.99, max(0.01, float(exit_price) if exit_price > 0 else 0.01))
-    order_type = "FAK" if aggressive_exit or qty < float(min_limit_exit_qty) else "GTC"
+    post_price = float(exit_price) if exit_price > 0 else 0.01
     req = BrokerOrderRequest(
         token_id=trade.token_id or "",
         side="SELL",
         price=post_price,
         size=float(qty),
-        order_type=order_type,
+        order_type="GTC" if qty >= float(min_limit_exit_qty) else "FAK",
         market_slug=trade.event_slug,
         outcome=trade.side,
         client_order_key=f"current_almost_resolved:exit:{reason}:{int(now)}:{trade.side}",
@@ -781,121 +459,52 @@ def _post_exit_order(
     return trade
 
 
-def _resolve_pending_entry_fast(
-    broker,
+def _mark_awaiting_redeem(
     trade: LiveCurrentAlmostResolvedTradeState,
     *,
-    entry_timeout_secs: float,
-    signal: Optional[dict],
-    snap: Optional[dict],
-    qty: int,
-    cfg: CurrentAlmostResolvedConfigV1,
-    min_profit_ticks_after_entry: int,
-    reprice_ticks: int,
-    reprice_timeout_secs: float,
-    state_path: Path,
-    log_path: Path,
-    session_id: str,
+    now: float,
+    reason: str,
 ) -> LiveCurrentAlmostResolvedTradeState:
-    if trade.mode != "pending_entry":
-        return trade
-    remaining = max(0.0, float(entry_timeout_secs) - max(0.0, time.time() - trade.created_at))
-    if remaining > 0:
-        time.sleep(remaining)
-    now = time.time()
-    cancel_resp = None
-    if trade.entry_order_id:
-        try:
-            cancel_resp = broker.cancel_order(trade.entry_order_id)
-        except Exception as exc:
-            cancel_resp = {"error": f"{type(exc).__name__}: {exc}"}
-    trade = _sync_entry_order(broker, trade)
+    trade.mode = "awaiting_redeem"
+    trade.entry_order_id = None
+    trade.exit_order_id = None
     trade.updated_at = now
-    if trade.entry_qty_filled > 0:
-        trade.mode = "open_position"
-        trade.updated_at = now
-        trade.last_reason = "entry_fill_detected"
-        _save_state(state_path, trade)
-        _append_jsonl(
-            log_path,
-            {
-                "type": "fill",
-                "ts": now,
-                "session_id": session_id,
-                "cancel_remainder": cancel_resp,
-                "trade": _trade_summary(trade),
-            },
-        )
-        return trade
-    if trade.entry_order_id and trade.entry_reprice_count <= 0:
-        trade, reprice_result = _maybe_reprice_pending_entry(
-            broker,
-            trade,
-            signal=signal or {},
-            snap=snap,
-            qty=qty,
-            now=now,
-            cfg=cfg,
-            min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-            reprice_ticks=reprice_ticks,
-        )
-        if reprice_result is not None:
-            _save_state(state_path, trade)
-            _append_jsonl(
-                log_path,
-                {
-                    "type": "entry_reprice",
-                    "ts": now,
-                    "session_id": session_id,
-                    "result": reprice_result,
-                    "signal": signal,
-                    "trade": _trade_summary(trade),
-                },
-            )
-            if reprice_result.get("status") == "repriced":
-                if reprice_timeout_secs > 0:
-                    time.sleep(reprice_timeout_secs)
-                now = time.time()
-                try:
-                    cancel_resp = broker.cancel_order(trade.entry_order_id)
-                except Exception as exc:
-                    cancel_resp = {"error": f"{type(exc).__name__}: {exc}"}
-                trade = _sync_entry_order(broker, trade)
-                trade.updated_at = now
-                if trade.entry_qty_filled > 0:
-                    trade.mode = "open_position"
-                    trade.last_reason = "entry_fill_detected_after_reprice"
-                    _save_state(state_path, trade)
-                    _append_jsonl(
-                        log_path,
-                        {
-                            "type": "fill",
-                            "ts": now,
-                            "session_id": session_id,
-                            "cancel_remainder": cancel_resp,
-                            "trade": _trade_summary(trade),
-                        },
-                    )
-                    return trade
-    _append_jsonl(
-        log_path,
-        {
-            "type": "entry_cancel",
-            "ts": now,
-            "session_id": session_id,
-            "reason": "entry_timeout_fast_path",
-            "response": cancel_resp,
-            "trade": _trade_summary(trade),
-        },
-    )
-    trade = LiveCurrentAlmostResolvedTradeState()
-    _clear_state(state_path)
+    trade.resolution_detected_at = now
+    trade.redeem_required = True
+    trade.last_reason = reason
     return trade
+
+
+def _attempt_redeem_if_available(broker, trade: LiveCurrentAlmostResolvedTradeState) -> Optional[dict]:
+    for method_name in ("redeem_positions", "redeem_position", "claim", "claim_rewards"):
+        method = getattr(broker, method_name, None)
+        if callable(method):
+            try:
+                return {"method": method_name, "response": method(trade)}
+            except TypeError:
+                try:
+                    return {"method": method_name, "response": method()}
+                except Exception as exc:
+                    return {"method": method_name, "error": f"{type(exc).__name__}: {exc}"}
+            except Exception as exc:
+                return {"method": method_name, "error": f"{type(exc).__name__}: {exc}"}
+    client = getattr(broker, "client", None)
+    for method_name in ("redeem_positions", "redeem_position", "claim", "claim_rewards"):
+        method = getattr(client, method_name, None)
+        if callable(method):
+            try:
+                return {"method": f"client.{method_name}", "response": method()}
+            except Exception as exc:
+                return {"method": f"client.{method_name}", "error": f"{type(exc).__name__}: {exc}"}
+    return None
 
 
 def _force_risk_cleanup(broker, trade: LiveCurrentAlmostResolvedTradeState, log_path: Path, now: float, reason: str, min_limit_exit_qty: float) -> None:
     try:
         _append_jsonl(log_path, {"type": "panic", "ts": now, "reason": reason, "trade": _trade_summary(trade)})
+        if trade.mode == "awaiting_redeem":
+            _append_jsonl(log_path, {"type": "panic_skip_awaiting_redeem", "ts": now, "reason": reason, "trade": _trade_summary(trade)})
+            return
         _cancel_if_live(broker, trade.entry_order_id)
         _cancel_if_live(broker, trade.exit_order_id)
         token_balance_qty = _token_balance_qty(broker, trade.token_id)
@@ -916,38 +525,29 @@ def _force_risk_cleanup(broker, trade: LiveCurrentAlmostResolvedTradeState, log_
         _append_jsonl(log_path, {"type": "panic_error", "ts": now, "reason": reason, "error": f"{type(exc).__name__}: {exc}"})
 
 
-def _archive_residual_dust(
-    trade: LiveCurrentAlmostResolvedTradeState,
-    *,
-    token_balance_qty: float,
-    now: float,
-    session_id: str,
-    reason: str,
-) -> None:
-    _append_jsonl(
-        _residuals_path(),
-        {
-            "type": "archived_residual_dust",
-            "ts": now,
-            "session_id": session_id,
-            "reason": reason,
-            "token_balance_qty": token_balance_qty,
-            "trade": _trade_summary(trade),
-        },
-    )
-
-
 def _shutdown_reconcile(
     broker,
     trade: LiveCurrentAlmostResolvedTradeState,
     *,
     min_limit_exit_qty: float,
-    dust_archive_qty: float,
     state_path: Path,
     log_path: Path,
     session_id: str,
     now: float,
 ) -> LiveCurrentAlmostResolvedTradeState:
+    if trade.mode == "awaiting_redeem":
+        _save_state(state_path, trade)
+        _append_jsonl(
+            log_path,
+            {
+                "type": "shutdown_awaiting_redeem",
+                "ts": now,
+                "session_id": session_id,
+                "trade": _trade_summary(trade),
+            },
+        )
+        return trade
+
     try:
         reconciled = _restore_trade_from_broker(broker, trade)
     except Exception:
@@ -973,32 +573,6 @@ def _shutdown_reconcile(
         )
 
     token_balance = _token_balance_qty(broker, reconciled.token_id)
-    if (
-        reconciled.mode != "idle"
-        and not _is_flat_qty(token_balance)
-        and token_balance <= float(dust_archive_qty)
-        and not open_orders
-    ):
-        _archive_residual_dust(
-            reconciled,
-            token_balance_qty=token_balance,
-            now=now,
-            session_id=session_id,
-            reason="shutdown_dust_archive",
-        )
-        _append_jsonl(
-            log_path,
-            {
-                "type": "shutdown_dust_archived",
-                "ts": now,
-                "session_id": session_id,
-                "token_balance_qty": token_balance,
-                "trade": _trade_summary(reconciled),
-            },
-        )
-        _clear_state(state_path)
-        return LiveCurrentAlmostResolvedTradeState()
-
     if reconciled.mode != "idle" and not _is_flat_qty(token_balance) and reconciled.token_id and reconciled.side:
         active_book = _fetch_active_book(reconciled)
         shutdown_bid = _best_bid(active_book or {})
@@ -1087,15 +661,15 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
 
     qty = _env_int("POLY_CURRENT_ALMOST_RESOLVED_QTY", 6)
     entry_timeout_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_ENTRY_TIMEOUT_SECS", 2.0)
-    entry_reprice_ticks = _env_int("POLY_CURRENT_ALMOST_RESOLVED_ENTRY_REPRICE_TICKS", 1)
-    entry_reprice_timeout_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_ENTRY_REPRICE_TIMEOUT_SECS", 1.0)
+    hybrid_entry_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_ENTRY", True)
+    hybrid_aggressive_after_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_AFTER_SECS", 1.5)
+    hybrid_aggressive_max_price = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_MAX_PRICE", 0.99)
+    hold_winner_to_resolution = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION", True)
+    resolution_settle_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_RESOLUTION_SETTLE_SECS", 1)
+    auto_redeem_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED", False)
     exit_repost_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_EXIT_REPOST_SECS", 1.0)
     flatten_deadline_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_FLATTEN_DEADLINE_SECS", 2)
     min_limit_exit_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_MIN_LIMIT_EXIT_QTY", 5.0)
-    dust_archive_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY", 0.01)
-    entry_premium_ticks = _env_int("POLY_CURRENT_ALMOST_RESOLVED_ENTRY_PREMIUM_TICKS", 1)
-    min_profit_ticks_after_entry = _env_int("POLY_CURRENT_ALMOST_RESOLVED_MIN_PROFIT_TICKS_AFTER_ENTRY", 1)
-    reference_cache_ttl_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_REFERENCE_CACHE_TTL_SECS", 1.0)
     poll_secs = max(0.25, _env_float("POLY_CURRENT_ALMOST_RESOLVED_POLL_SECS", 0.5))
     run_for = int(duration_seconds or _env_int("POLY_CURRENT_ALMOST_RESOLVED_RUN_SECONDS", 1800))
     session_dir = Path(log_dir) if log_dir else _build_log_dir()
@@ -1110,15 +684,15 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
         {
             "qty": qty,
             "entry_timeout_secs": entry_timeout_secs,
-            "entry_reprice_ticks": entry_reprice_ticks,
-            "entry_reprice_timeout_secs": entry_reprice_timeout_secs,
+            "hybrid_entry_enabled": hybrid_entry_enabled,
+            "hybrid_aggressive_after_secs": hybrid_aggressive_after_secs,
+            "hybrid_aggressive_max_price": hybrid_aggressive_max_price,
+            "hold_winner_to_resolution": hold_winner_to_resolution,
+            "resolution_settle_secs": resolution_settle_secs,
+            "auto_redeem_enabled": auto_redeem_enabled,
             "exit_repost_secs": exit_repost_secs,
             "flatten_deadline_secs": flatten_deadline_secs,
             "min_limit_exit_qty": min_limit_exit_qty,
-            "dust_archive_qty": dust_archive_qty,
-            "entry_premium_ticks": entry_premium_ticks,
-            "min_profit_ticks_after_entry": min_profit_ticks_after_entry,
-            "reference_cache_ttl_secs": reference_cache_ttl_secs,
             "poll_secs": poll_secs,
             "run_for": run_for,
             "log_path": str(log_path),
@@ -1150,29 +724,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     if restored_trade.mode != "idle":
         restored_trade = _restore_trade_from_broker(broker, restored_trade)
         print("[RESTORED_CURRENT_ALMOST_RESOLVED_TRADE]", asdict(restored_trade))
-        restored_balance = _token_balance_qty(broker, restored_trade.token_id)
         if restored_trade.mode == "idle":
             _clear_state(state_path)
-        elif restored_balance <= float(dust_archive_qty):
-            _archive_residual_dust(
-                restored_trade,
-                token_balance_qty=restored_balance,
-                now=time.time(),
-                session_id=session_id,
-                reason="restore_dust_archive",
-            )
-            _append_jsonl(
-                log_path,
-                {
-                    "type": "restore_dust_archived",
-                    "ts": time.time(),
-                    "session_id": session_id,
-                    "token_balance_qty": restored_balance,
-                    "trade": _trade_summary(restored_trade),
-                },
-            )
-            _clear_state(state_path)
-            restored_trade = LiveCurrentAlmostResolvedTradeState()
         else:
             allowed_ids = {x for x in (restored_trade.entry_order_id, restored_trade.exit_order_id) if x}
             startup_ids = {o.order_id for o in startup_orders}
@@ -1186,74 +739,42 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
 
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg)
     trade = restored_trade
-    current_slot_cache = CurrentSlotCache()
+    current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
     started_at = time.time()
 
     while time.time() - started_at < run_for:
         now = time.time()
         try:
-            if trade.mode == "pending_entry":
-                current_item, current_snap, current_exec_reason = _fetch_current_item_and_snap(current_slot_cache)
-                current_secs = int(current_item.get("seconds_to_end")) if current_item and current_item.get("seconds_to_end") is not None else None
-                reference = _cached_external_reference(current_slot_cache, ttl_secs=reference_cache_ttl_secs) if current_item else {}
-                current_scalp_signal = (
-                    current_scalp.evaluate(
-                        snap=current_snap,
-                        secs_to_end=current_secs,
-                        event_start_time=current_slot_cache.event_start_time,
-                        now_ts=now,
-                        reference_price=reference.get("reference_price"),
-                        source_divergence_bps=reference.get("source_divergence_bps"),
-                        opening_reference_price=current_slot_cache.opening_reference_price,
-                    )
-                    if current_item and current_snap
-                    else {"setup": "no_edge", "allow": False, "reason": "missing_current"}
-                )
-                signal = (
-                    evaluate_current_almost_resolved_v1(
-                        snap=current_snap,
-                        secs_to_end=current_secs,
-                        reference_signal=current_scalp_signal,
-                        cfg=signal_cfg,
-                    )
-                    if current_item and current_snap
-                    else {"setup": "almost_resolved", "allow": False, "reason": "missing_current"}
-                )
-                if current_item:
-                    signal["event_slug"] = current_item.get("slug")
-                trade = _resolve_pending_entry_fast(
-                    broker,
-                    trade,
-                    entry_timeout_secs=entry_timeout_secs,
-                    signal=signal,
-                    snap=current_snap,
-                    qty=qty,
-                    cfg=signal_cfg,
-                    min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-                    reprice_ticks=entry_reprice_ticks,
-                    reprice_timeout_secs=entry_reprice_timeout_secs,
-                    state_path=state_path,
-                    log_path=log_path,
-                    session_id=session_id,
-                )
-                if trade.mode == "idle":
-                    time.sleep(poll_secs)
-                    continue
-
-            current_item, current_snap, current_exec_reason = _fetch_current_item_and_snap(current_slot_cache)
+            slot_bundle = _build_slot_bundle()
+            current_item = slot_bundle["queue"].get("current")
             current_secs = int(current_item.get("seconds_to_end")) if current_item and current_item.get("seconds_to_end") is not None else None
-            reference = _cached_external_reference(current_slot_cache, ttl_secs=reference_cache_ttl_secs) if current_item else {}
+            slot_state = _fetch_slot_state(slot_bundle)
+            current_snap = _slot_snapshot(slot_state, "current")
+            current_exec, current_exec_reason = _compute_executable_metrics(current_snap)
+
+            if current_item and current_item.get("slug") != current_open_reference.get("slug"):
+                raw_event = fetch_event_by_slug(str(current_item.get("slug") or ""))
+                market = (raw_event.get("markets") or [{}])[0] if raw_event else {}
+                event_start_time = market.get("eventStartTime") or raw_event.get("startTime") if raw_event else None
+                open_ref = fetch_binance_open_price_for_event_start_v1(event_start_time) if event_start_time else {"open_price": None}
+                current_open_reference = {
+                    "slug": current_item.get("slug"),
+                    "price": open_ref.get("open_price"),
+                    "event_start_time": event_start_time,
+                }
+
+            reference = fetch_external_btc_reference_v1() if current_item else {}
             current_scalp_signal = (
                 current_scalp.evaluate(
                     snap=current_snap,
                     secs_to_end=current_secs,
-                    event_start_time=current_slot_cache.event_start_time,
+                    event_start_time=current_open_reference.get("event_start_time"),
                     now_ts=now,
                     reference_price=reference.get("reference_price"),
                     source_divergence_bps=reference.get("source_divergence_bps"),
-                    opening_reference_price=current_slot_cache.opening_reference_price,
+                    opening_reference_price=current_open_reference.get("price"),
                 )
-                if current_item and current_snap
+                if current_item
                 else {"setup": "no_edge", "allow": False, "reason": "missing_current"}
             )
             signal = (
@@ -1263,18 +784,21 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     reference_signal=current_scalp_signal,
                     cfg=signal_cfg,
                 )
-                if current_item and current_snap
+                if current_item
                 else {"setup": "almost_resolved", "allow": False, "reason": "missing_current"}
             )
             if current_item:
                 signal["event_slug"] = current_item.get("slug")
+                signal["signed_distance_from_open_bps"] = current_scalp_signal.get("distance_from_open_bps")
+                signal["guardian_hold_winner_to_resolution"] = bool(hold_winner_to_resolution)
 
             active_book = _fetch_active_book(trade) if trade.mode in ("pending_entry", "open_position", "pending_exit", "exit_pending_confirm") else None
             active_bid = _best_bid(active_book or {})
-            if trade.side and current_snap:
-                exec_bid = _bid_for_side(current_snap, trade.side)
+            if trade.side and current_exec:
+                exec_bid = _bid_for_side(current_exec, trade.side)
                 if exec_bid > 0:
                     active_bid = max(active_bid, exec_bid)
+            counter_reversal_active = _state_file_active(_counter_reversal_state_path())
 
             snapshot = {
                 "type": "snapshot",
@@ -1288,6 +812,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "signal": signal,
                 "trade": _trade_summary(trade),
                 "active_bid": active_bid,
+                "counter_reversal_active": counter_reversal_active,
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -1295,33 +820,15 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 f"side={signal.get('side')} mode={trade.mode} qty={trade.entry_qty_filled}/{trade.remaining_position_qty}"
             )
 
-            if trade.mode == "idle" and current_item and signal.get("allow"):
+            if trade.mode == "idle" and current_item and signal.get("allow") and not counter_reversal_active:
                 side = str(signal.get("side") or "")
                 tick_size = _tick_size_from_snap(current_snap, side)
-                entry_price = _safe_float(signal.get("entry_price"), 0.0)
-                execution_plan = _entry_execution_plan(
-                    signal=signal,
-                    tick_size=tick_size,
-                    default_premium_ticks=entry_premium_ticks,
-                    default_timeout_secs=entry_timeout_secs,
-                    min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-                )
-                planned_entry_price = _safe_float(execution_plan.get("entry_price"), entry_price)
-                if not _has_sufficient_collateral_for_entry(broker, entry_price=planned_entry_price, qty=qty):
-                    _append_jsonl(
-                        log_path,
-                        {
-                            "type": "entry_blocked_insufficient_collateral",
-                            "ts": now,
-                            "session_id": session_id,
-                            "required": round(planned_entry_price * qty + 0.25, 6),
-                            "available": _collateral_balance_usd(broker),
-                            "signal": signal,
-                            "execution_plan": execution_plan,
-                        },
-                    )
-                    time.sleep(poll_secs)
-                    continue
+                signal_entry_price = _safe_float(signal.get("entry_price"), 0.0)
+                entry_price = signal_entry_price
+                order_style = "direct_limit"
+                if hybrid_entry_enabled:
+                    entry_price = round(max(0.01, signal_entry_price - tick_size), 6)
+                    order_style = "passive_limit"
                 trade = _post_entry_order(
                     broker,
                     signal=signal,
@@ -1330,7 +837,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     tick_size=tick_size,
                     now=now,
                     cfg=signal_cfg,
-                    execution_plan=execution_plan,
+                    entry_price_override=entry_price,
+                    order_style=order_style,
                 )
                 _save_state(state_path, trade)
                 _append_jsonl(
@@ -1340,32 +848,26 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "ts": now,
                         "session_id": session_id,
                         "signal": signal,
-                        "execution_plan": execution_plan,
-                        "requested_entry_price": planned_entry_price,
+                        "hybrid_entry_enabled": hybrid_entry_enabled,
+                        "entry_order_style": order_style,
+                        "signal_entry_price": signal_entry_price,
+                        "posted_entry_price": entry_price,
                         "trade": _trade_summary(trade),
                     },
                 )
-                trade = _resolve_pending_entry_fast(
-                    broker,
-                    trade,
-                    entry_timeout_secs=_safe_float(execution_plan.get("timeout_secs"), entry_timeout_secs),
-                    signal=signal,
-                    snap=current_snap,
-                    qty=qty,
-                    cfg=signal_cfg,
-                    min_profit_ticks_after_entry=min_profit_ticks_after_entry,
-                    reprice_ticks=entry_reprice_ticks,
-                    reprice_timeout_secs=entry_reprice_timeout_secs,
-                    state_path=state_path,
-                    log_path=log_path,
-                    session_id=session_id,
-                )
-                if trade.mode == "idle":
-                    time.sleep(poll_secs)
-                    continue
-                _save_state(state_path, trade)
                 time.sleep(poll_secs)
                 continue
+            if trade.mode == "idle" and current_item and signal.get("allow") and counter_reversal_active:
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "entry_blocked",
+                        "ts": now,
+                        "session_id": session_id,
+                        "reason": "counter_reversal_active",
+                        "signal": signal,
+                    },
+                )
 
             if trade.mode in ("pending_entry", "open_position", "pending_exit", "exit_pending_confirm"):
                 trade = _sync_entry_order(broker, trade)
@@ -1373,19 +875,107 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 _save_state(state_path, trade)
 
             if trade.mode == "pending_entry":
-                if current_secs is not None and current_secs <= signal_cfg.min_secs_to_end:
+                if trade.entry_qty_filled > 0:
                     resp = _cancel_if_live(broker, trade.entry_order_id)
-                    _append_jsonl(
-                        log_path,
-                        {
-                            "type": "entry_cancel",
-                            "ts": now,
-                            "session_id": session_id,
-                            "reason": "entry_too_late_for_fill_window",
-                            "response": resp,
-                            "trade": _trade_summary(trade),
-                        },
-                    )
+                    trade.mode = "open_position"
+                    trade.updated_at = now
+                    trade.last_reason = "entry_fill_detected"
+                    _save_state(state_path, trade)
+                    _append_jsonl(log_path, {"type": "fill", "ts": now, "session_id": session_id, "cancel_remainder": resp, "trade": _trade_summary(trade)})
+                elif (
+                    hybrid_entry_enabled
+                    and trade.entry_order_style == "passive_limit"
+                    and now - trade.created_at >= hybrid_aggressive_after_secs
+                    and current_item
+                    and signal.get("allow")
+                    and signal.get("side") == trade.side
+                    and signal.get("event_slug") == trade.event_slug
+                ):
+                    aggressive_price = _ask_for_side(current_exec, trade.side or "")
+                    if aggressive_price <= 0:
+                        aggressive_price = _safe_float(signal.get("entry_price"), 0.0)
+                    if 0 < aggressive_price <= hybrid_aggressive_max_price:
+                        previous_entry_order_id = trade.entry_order_id
+                        cancel_resp = _cancel_if_live(broker, trade.entry_order_id)
+                        previous_order = _get_order_status(broker, previous_entry_order_id)
+                        previous_status = str(getattr(previous_order, "status", "") or "").lower() if previous_order is not None else ""
+                        if previous_order is not None and previous_status in ("filled", "matched", "closed", "resolved"):
+                            trade = _sync_entry_order(broker, trade)
+                            _save_state(state_path, trade)
+                            _append_jsonl(
+                                log_path,
+                                {
+                                    "type": "entry_replace_blocked_previous_filled",
+                                    "ts": now,
+                                    "session_id": session_id,
+                                    "cancel": cancel_resp,
+                                    "previous_order": previous_order.as_dict(),
+                                    "trade": _trade_summary(trade),
+                                    "signal": signal,
+                                },
+                            )
+                            time.sleep(poll_secs)
+                            continue
+                        if previous_order is not None and previous_status not in ("canceled", "cancelled", "rejected"):
+                            _append_jsonl(
+                                log_path,
+                                {
+                                    "type": "entry_replace_blocked_cancel_unconfirmed",
+                                    "ts": now,
+                                    "session_id": session_id,
+                                    "cancel": cancel_resp,
+                                    "previous_order": previous_order.as_dict(),
+                                    "aggressive_price": aggressive_price,
+                                    "trade": _trade_summary(trade),
+                                    "signal": signal,
+                                },
+                            )
+                            time.sleep(poll_secs)
+                            continue
+                        replaced_from = _trade_summary(trade)
+                        tick_size = _tick_size_from_snap(current_snap, trade.side or "UP")
+                        trade = _post_entry_order(
+                            broker,
+                            signal=signal,
+                            snap=current_snap,
+                            qty=qty,
+                            tick_size=tick_size,
+                            now=now,
+                            cfg=signal_cfg,
+                            entry_price_override=round(aggressive_price, 6),
+                            order_style="aggressive_limit",
+                        )
+                        _save_state(state_path, trade)
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "entry_replace_aggressive_limit",
+                                "ts": now,
+                                "session_id": session_id,
+                                "cancel": cancel_resp,
+                                "from_trade": replaced_from,
+                                "aggressive_price": aggressive_price,
+                                "signal": signal,
+                                "trade": _trade_summary(trade),
+                            },
+                        )
+                    else:
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "entry_aggressive_skip",
+                                "ts": now,
+                                "session_id": session_id,
+                                "reason": "ask_missing_or_above_max",
+                                "aggressive_price": aggressive_price,
+                                "max_price": hybrid_aggressive_max_price,
+                                "trade": _trade_summary(trade),
+                                "signal": signal,
+                            },
+                        )
+                elif now - trade.created_at >= entry_timeout_secs or (current_secs is not None and current_secs <= signal_cfg.min_secs_to_end):
+                    resp = _cancel_if_live(broker, trade.entry_order_id)
+                    _append_jsonl(log_path, {"type": "entry_cancel", "ts": now, "session_id": session_id, "response": resp, "trade": _trade_summary(trade)})
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
 
@@ -1393,27 +983,83 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 tick_size = _tick_size_from_snap(current_snap, trade.side)
                 if _should_hold_to_resolution(signal, bid_now=active_bid, secs_to_end=current_secs, cfg=signal_cfg, side=trade.side):
                     trade.hold_to_resolution = True
-                reason = _exit_reason(
-                    trade,
-                    bid_now=active_bid,
-                    tick_size=tick_size,
-                    now=now,
-                    secs_to_end=current_secs,
-                    signal=signal,
-                    cfg=signal_cfg,
-                    flatten_deadline_secs=flatten_deadline_secs,
+                signed_distance = _safe_float(signal.get("signed_distance_from_open_bps"), 0.0)
+                reached_resolution = (
+                    hold_winner_to_resolution
+                    and (
+                        (current_secs is not None and current_secs <= resolution_settle_secs)
+                        or (current_item and trade.event_slug and current_item.get("slug") != trade.event_slug)
+                    )
                 )
-                if reason:
-                    trade = _post_exit_order(
-                        broker,
+                if reached_resolution:
+                    side_won = _side_winning(trade.side, signed_distance)
+                    trade = _mark_awaiting_redeem(
                         trade,
-                        exit_price=active_bid,
                         now=now,
-                        reason=reason,
-                        min_limit_exit_qty=min_limit_exit_qty,
+                        reason="resolution_win_awaiting_redeem" if side_won else "resolution_loss_or_unknown_awaiting_final_balance",
                     )
                     _save_state(state_path, trade)
-                    _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": reason, "trade": _trade_summary(trade)})
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "awaiting_redeem",
+                            "ts": now,
+                            "session_id": session_id,
+                            "side_won": side_won,
+                            "signed_distance_from_open_bps": signed_distance,
+                            "active_bid": active_bid,
+                            "trade": _trade_summary(trade),
+                        },
+                    )
+                else:
+                    reason = _exit_reason(
+                        trade,
+                        bid_now=active_bid,
+                        tick_size=tick_size,
+                        now=now,
+                        secs_to_end=current_secs,
+                        signal=signal,
+                        cfg=signal_cfg,
+                        flatten_deadline_secs=flatten_deadline_secs,
+                        hold_winner_to_resolution=hold_winner_to_resolution,
+                    )
+                    if reason:
+                        trade = _post_exit_order(
+                            broker,
+                            trade,
+                            exit_price=active_bid,
+                            now=now,
+                            reason=reason,
+                            min_limit_exit_qty=min_limit_exit_qty,
+                        )
+                        _save_state(state_path, trade)
+                        _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": reason, "trade": _trade_summary(trade)})
+
+            if trade.mode == "awaiting_redeem":
+                token_balance_qty = _token_balance_qty(broker, trade.token_id)
+                collateral_balance = _collateral_balance_usd(broker)
+                redeem_result = None
+                if auto_redeem_enabled and now - _safe_float(trade.redeem_attempted_at, 0.0) >= 10.0:
+                    redeem_result = _attempt_redeem_if_available(broker, trade)
+                    trade.redeem_attempted_at = now
+                    trade.updated_at = now
+                    _save_state(state_path, trade)
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "awaiting_redeem_status",
+                        "ts": now,
+                        "session_id": session_id,
+                        "token_balance_qty": token_balance_qty,
+                        "collateral_balance_usd": collateral_balance,
+                        "auto_redeem_enabled": auto_redeem_enabled,
+                        "redeem_result": redeem_result,
+                        "trade": _trade_summary(trade),
+                    },
+                )
+                if _is_flat_qty(token_balance_qty) and not trade.redeem_required:
+                    trade = LiveCurrentAlmostResolvedTradeState()
+                    _clear_state(state_path)
 
             if trade.mode == "pending_exit":
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
@@ -1421,26 +1067,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 if exit_order is None:
                     if _is_flat_qty(token_balance_qty):
                         _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "exit_order": None, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
-                        trade = LiveCurrentAlmostResolvedTradeState()
-                        _clear_state(state_path)
-                    elif token_balance_qty <= float(dust_archive_qty):
-                        _archive_residual_dust(
-                            trade,
-                            token_balance_qty=token_balance_qty,
-                            now=now,
-                            session_id=session_id,
-                            reason="pending_exit_dust_archive",
-                        )
-                        _append_jsonl(
-                            log_path,
-                            {
-                                "type": "dust_archived",
-                                "ts": now,
-                                "session_id": session_id,
-                                "token_balance_qty": token_balance_qty,
-                                "trade": _trade_summary(trade),
-                            },
-                        )
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
                     elif now - trade.updated_at >= exit_repost_secs:
@@ -1523,7 +1149,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
         broker,
         trade,
         min_limit_exit_qty=min_limit_exit_qty,
-        dust_archive_qty=dust_archive_qty,
         state_path=state_path,
         log_path=log_path,
         session_id=session_id,

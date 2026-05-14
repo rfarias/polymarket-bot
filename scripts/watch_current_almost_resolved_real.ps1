@@ -19,6 +19,11 @@ while ($true) {
     $env:POLY_CURRENT_ALMOST_RESOLVED_QTY = [string]$Qty
     $env:POLY_CURRENT_ALMOST_RESOLVED_POLL_SECS = [string]$PollSeconds
     $env:POLY_CURRENT_ALMOST_RESOLVED_RUN_SECONDS = [string]$RunSeconds
+    $env:POLY_CURRENT_ALMOST_RESOLVED_HYBRID_ENTRY = "true"
+    $env:POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_AFTER_SECS = "1.5"
+    $env:POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_MAX_PRICE = "0.99"
+    $env:POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION = "true"
+    $env:POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED = "false"
 
     Add-Content -Path $watchdogLog -Value ("[START] " + (Get-Date -Format s) + " run_seconds=" + $RunSeconds + " poll_seconds=" + $PollSeconds + " qty=" + $Qty)
     & $python "run_live_current_almost_resolved_real_v1.py" "--seconds" ([string]$RunSeconds)

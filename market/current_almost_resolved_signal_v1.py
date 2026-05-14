@@ -17,6 +17,33 @@ def _limit_or_default(value: Optional[float], default: float = 999.0) -> float:
     return float(value)
 
 
+def _first_level_price(book: Dict, side: str, default: float = -1.0) -> float:
+    levels = book.get(side) or []
+    if not levels:
+        return float(default)
+    return _safe_float((levels[0] or {}).get("price"), default)
+
+
+def _book_buy_price(book: Dict) -> float:
+    executable_buy = _safe_float(book.get("executable_buy"), -1.0)
+    if executable_buy > 0:
+        return executable_buy
+    best_ask = _safe_float(book.get("best_ask"), -1.0)
+    if best_ask > 0:
+        return best_ask
+    return _first_level_price(book, "top_asks", -1.0)
+
+
+def _book_sell_price(book: Dict) -> float:
+    executable_sell = _safe_float(book.get("executable_sell"), -1.0)
+    if executable_sell > 0:
+        return executable_sell
+    best_bid = _safe_float(book.get("best_bid"), -1.0)
+    if best_bid > 0:
+        return best_bid
+    return _first_level_price(book, "top_bids", -1.0)
+
+
 @dataclass
 class CurrentAlmostResolvedConfigV1:
     min_secs_to_end: int = 10
@@ -121,9 +148,66 @@ class CurrentAlmostResolvedConfigV1:
     resolved_pullback_max_adverse_spot_5s_bps: float = 0.5
     resolved_pullback_max_adverse_spot_15s_bps: float = 0.8
     resolved_pullback_max_adverse_spot_30s_bps: float = 1.0
+    passive_capture_enabled: bool = True
+    passive_capture_max_secs: int = 60
+    passive_capture_preferred_secs: int = 45
+    passive_capture_min_leader_price: float = 0.98
+    passive_capture_preferred_leader_price: float = 0.99
+    passive_capture_max_counter_price: float = 0.03
+    passive_capture_limit_ticks_below: int = 1
+    passive_capture_min_safe_distance_usd: float = 80.0
+    passive_capture_min_safe_distance_bps: float = 10.0
+    passive_capture_min_distance_vs_recent_vol_mult: float = 3.0
+    passive_capture_max_adverse_spot_5s_bps: float = 0.5
+    passive_capture_max_adverse_spot_15s_bps: float = 0.8
+    passive_capture_max_adverse_spot_30s_bps: float = 1.0
+    passive_capture_max_market_range_30s: float = 0.045
+    passive_capture_min_score: int = 85
 
     def as_dict(self) -> Dict:
         return asdict(self)
+
+
+def _passive_limit_price(leader_price: float, tick_size: float, ticks_below: int) -> float:
+    return round(max(0.01, leader_price - max(1, ticks_below) * max(0.001, tick_size)), 6)
+
+
+def _passive_capture_score(
+    *,
+    leader_price: float,
+    counter_price: float,
+    secs_to_end: int,
+    distance_usd: float,
+    distance_bps: float,
+    safe_distance_ok: bool,
+    adverse_spot_bps: float,
+    market_range_30s: float,
+    depth: float,
+    cfg: CurrentAlmostResolvedConfigV1,
+) -> int:
+    score = 0
+    if safe_distance_ok:
+        score += 28
+    elif distance_usd >= cfg.passive_capture_min_safe_distance_usd and distance_bps >= cfg.passive_capture_min_safe_distance_bps:
+        score += 18
+    score += min(18, int(max(0.0, distance_usd - cfg.passive_capture_min_safe_distance_usd) / 8.0))
+    if secs_to_end <= cfg.passive_capture_preferred_secs:
+        score += 12
+    elif secs_to_end <= cfg.passive_capture_max_secs:
+        score += 8
+    if leader_price >= cfg.passive_capture_preferred_leader_price:
+        score += 16
+    elif leader_price >= cfg.passive_capture_min_leader_price:
+        score += 10
+    if counter_price <= cfg.passive_capture_max_counter_price:
+        score += 10
+    if adverse_spot_bps <= cfg.passive_capture_max_adverse_spot_5s_bps:
+        score += 8
+    if market_range_30s <= cfg.passive_capture_max_market_range_30s:
+        score += 5
+    if depth >= cfg.min_depth_top3:
+        score += 3
+    return min(100, int(score))
 
 
 def evaluate_current_almost_resolved_v1(
@@ -137,10 +221,10 @@ def evaluate_current_almost_resolved_v1(
     up = snap.get("up") or {}
     down = snap.get("down") or {}
 
-    up_buy = _safe_float(up.get("executable_buy") or up.get("best_ask"), -1.0)
-    up_sell = _safe_float(up.get("executable_sell") or up.get("best_bid"), -1.0)
-    down_buy = _safe_float(down.get("executable_buy") or down.get("best_ask"), -1.0)
-    down_sell = _safe_float(down.get("executable_sell") or down.get("best_bid"), -1.0)
+    up_buy = _book_buy_price(up)
+    up_sell = _book_sell_price(up)
+    down_buy = _book_buy_price(down)
+    down_sell = _book_sell_price(down)
     up_spread = round(max(0.0, up_buy - up_sell), 6) if up_buy > 0 and up_sell > 0 else None
     down_spread = round(max(0.0, down_buy - down_sell), 6) if down_buy > 0 and down_sell > 0 else None
     up_depth = sum(_safe_float((lvl or {}).get("size")) for lvl in (up.get("top_bids") or [])[:3]) + sum(
@@ -255,6 +339,41 @@ def evaluate_current_almost_resolved_v1(
     result["down_counter_pressure_ok"] = down_counter_pressure_ok
     result["up_counter_alert"] = down_buy >= cfg.soft_counter_price_alert
     result["down_counter_alert"] = up_buy >= cfg.soft_counter_price_alert
+
+    up_tick_size = max(0.001, _safe_float(up.get("tick_size"), 0.01))
+    down_tick_size = max(0.001, _safe_float(down.get("tick_size"), 0.01))
+    passive_safe_distance_ok = (
+        distance_to_price_to_beat_usd >= cfg.passive_capture_min_safe_distance_usd
+        and distance_to_price_to_beat_bps >= cfg.passive_capture_min_safe_distance_bps
+        and distance_to_price_to_beat_usd >= recent_vol_floor_usd * cfg.passive_capture_min_distance_vs_recent_vol_mult
+    )
+    passive_up_score = _passive_capture_score(
+        leader_price=up_buy,
+        counter_price=down_buy,
+        secs_to_end=secs_to_end,
+        distance_usd=distance_to_price_to_beat_usd,
+        distance_bps=distance_to_price_to_beat_bps,
+        safe_distance_ok=passive_safe_distance_ok,
+        adverse_spot_bps=up_adverse_spot_bps,
+        market_range_30s=market_range_30s,
+        depth=up_depth,
+        cfg=cfg,
+    )
+    passive_down_score = _passive_capture_score(
+        leader_price=down_buy,
+        counter_price=up_buy,
+        secs_to_end=secs_to_end,
+        distance_usd=distance_to_price_to_beat_usd,
+        distance_bps=distance_to_price_to_beat_bps,
+        safe_distance_ok=passive_safe_distance_ok,
+        adverse_spot_bps=down_adverse_spot_bps,
+        market_range_30s=market_range_30s,
+        depth=down_depth,
+        cfg=cfg,
+    )
+    result["passive_capture_safe_distance_ok"] = passive_safe_distance_ok
+    result["passive_capture_up_score"] = passive_up_score
+    result["passive_capture_down_score"] = passive_down_score
 
     rich_book_late_window = secs_to_end <= cfg.rich_book_relaxation_secs
     dual_rich_late_window = secs_to_end <= cfg.dual_rich_late_window_secs
@@ -449,6 +568,80 @@ def evaluate_current_almost_resolved_v1(
                 "entry_price": down_buy,
                 "exit_price": min(cfg.target_exit_price, 0.99),
                 "target_limit_price": min(cfg.target_exit_price, 0.99),
+            }
+        )
+        return result
+
+    if (
+        cfg.passive_capture_enabled
+        and secs_to_end <= cfg.passive_capture_max_secs
+        and up_buy >= cfg.passive_capture_min_leader_price
+        and down_buy <= cfg.passive_capture_max_counter_price
+        and distance_from_open > 0
+        and passive_safe_distance_ok
+        and passive_up_score >= cfg.passive_capture_min_score
+        and up_price_to_beat_buffer_bps >= cfg.near_end_min_price_to_beat_buffer_bps
+        and up_price_to_beat_buffer_usd >= cfg.near_end_min_price_to_beat_buffer_usd
+        and spot_delta_5s >= -cfg.passive_capture_max_adverse_spot_5s_bps
+        and spot_delta_15s >= -cfg.passive_capture_max_adverse_spot_15s_bps
+        and spot_delta_30s >= -cfg.passive_capture_max_adverse_spot_30s_bps
+        and market_range_30s <= cfg.passive_capture_max_market_range_30s
+    ):
+        limit_price = _passive_limit_price(up_buy, up_tick_size, cfg.passive_capture_limit_ticks_below)
+        result.update(
+            {
+                "allow": True,
+                "side": "UP",
+                "setup_variant": "passive_extreme_liquidity_capture",
+                "execution_style": "post_only",
+                "reason": "leader_up_passive_extreme_liquidity_capture",
+                "leader_price": up_buy,
+                "counter_price": down_buy,
+                "entry_price": limit_price,
+                "limit_price": limit_price,
+                "exit_price": min(cfg.target_exit_price, round(limit_price + up_tick_size, 6), 0.99),
+                "target_limit_price": min(cfg.target_exit_price, round(limit_price + up_tick_size, 6), 0.99),
+                "stop_price": max(0.01, round(limit_price - cfg.stop_ticks * up_tick_size, 6)),
+                "score": passive_up_score,
+                "screen_odd_leader": round(max(0.0, 1.0 - up_buy), 6),
+                "screen_odd_counter": round(max(0.0, 1.0 - down_buy), 6),
+            }
+        )
+        return result
+
+    if (
+        cfg.passive_capture_enabled
+        and secs_to_end <= cfg.passive_capture_max_secs
+        and down_buy >= cfg.passive_capture_min_leader_price
+        and up_buy <= cfg.passive_capture_max_counter_price
+        and distance_from_open < 0
+        and passive_safe_distance_ok
+        and passive_down_score >= cfg.passive_capture_min_score
+        and down_price_to_beat_buffer_bps >= cfg.near_end_min_price_to_beat_buffer_bps
+        and down_price_to_beat_buffer_usd >= cfg.near_end_min_price_to_beat_buffer_usd
+        and spot_delta_5s <= cfg.passive_capture_max_adverse_spot_5s_bps
+        and spot_delta_15s <= cfg.passive_capture_max_adverse_spot_15s_bps
+        and spot_delta_30s <= cfg.passive_capture_max_adverse_spot_30s_bps
+        and market_range_30s <= cfg.passive_capture_max_market_range_30s
+    ):
+        limit_price = _passive_limit_price(down_buy, down_tick_size, cfg.passive_capture_limit_ticks_below)
+        result.update(
+            {
+                "allow": True,
+                "side": "DOWN",
+                "setup_variant": "passive_extreme_liquidity_capture",
+                "execution_style": "post_only",
+                "reason": "leader_down_passive_extreme_liquidity_capture",
+                "leader_price": down_buy,
+                "counter_price": up_buy,
+                "entry_price": limit_price,
+                "limit_price": limit_price,
+                "exit_price": min(cfg.target_exit_price, round(limit_price + down_tick_size, 6), 0.99),
+                "target_limit_price": min(cfg.target_exit_price, round(limit_price + down_tick_size, 6), 0.99),
+                "stop_price": max(0.01, round(limit_price - cfg.stop_ticks * down_tick_size, 6)),
+                "score": passive_down_score,
+                "screen_odd_leader": round(max(0.0, 1.0 - down_buy), 6),
+                "screen_odd_counter": round(max(0.0, 1.0 - up_buy), 6),
             }
         )
         return result

@@ -25,6 +25,16 @@ def _state_order_ids() -> set[str]:
     return {str(payload.get(key)) for key in ("entry_order_id", "exit_order_id") if payload.get(key)}
 
 
+def _state_payload() -> dict:
+    state_path = Path("logs") / "current_almost_resolved_real_state.json"
+    if not state_path.exists():
+        return {}
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def _validate_preflight() -> tuple[bool, str]:
     broker_status = load_broker_env()
     guarded = load_live_guarded_config()
@@ -51,9 +61,15 @@ def _validate_preflight() -> tuple[bool, str]:
     if not broker_status.ready_for_real_smoke:
         return False, "Broker env is not ready. Fill required POLY_* credentials in .env."
 
+    state_payload = _state_payload()
+    if str(state_payload.get("mode") or "idle") == "awaiting_redeem":
+        print("[CURRENT_ALMOST_RESOLVED_STATE]")
+        pprint(state_payload)
+        return False, "Startup guard blocked execution: previous position is awaiting claim/redeem."
+
     qty = int(os.getenv("POLY_CURRENT_ALMOST_RESOLVED_QTY", "6"))
-    if qty < 6:
-        return False, "Current almost resolved real requires POLY_CURRENT_ALMOST_RESOLVED_QTY >= 6."
+    if qty < 5:
+        return False, "Current almost resolved real requires POLY_CURRENT_ALMOST_RESOLVED_QTY >= 5."
 
     broker = PolymarketBrokerV3.from_env()
     health = broker.healthcheck()
