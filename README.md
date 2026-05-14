@@ -75,6 +75,24 @@ python run_live_current_almost_resolved_real_v1.py --seconds 300
 Esse runner fica armado apenas com `POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED=true`. A primeira versao real e dedicada ao setup de quase resolvidos, bloqueia startup se houver ordens abertas e nao deve ser executada junto com o `next1 scalp real` enquanto a validacao simultanea ainda nao estiver pronta.
 Residual microscopico abaixo de `POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY` e arquivado como poeira para nao travar o runner em `pending_exit`.
 
+### CLOB V2 e allowance
+
+Em maio de 2026, o CLOB V1 nao aceita mais ordens novas e retorna `order_version_mismatch`. O broker real (`market/polymarket_broker_v3.py`) tenta usar `py-clob-client-v2` primeiro e so cai para o cliente antigo como compatibilidade local.
+
+Antes de rodar qualquer runner real, confirme que a conta tem allowance no Exchange V2/pUSD:
+
+```bash
+python -c "from market.polymarket_broker_v3 import PolymarketBrokerV3; b=PolymarketBrokerV3.from_env(); print(b.get_balance_allowance(asset_type='COLLATERAL'))"
+```
+
+O spender `0xE111180000d2663C0091e4f400237545B87B996B` precisa ter allowance positivo. Se estiver `0`, a API rejeita a entrada com `not enough balance / allowance` mesmo havendo saldo. Depois de aprovar pela UI/onramp, o preflight deve continuar mostrando `BROKER_OPEN_ORDERS_STARTUP []`.
+
+Sessao real de validacao em 2026-05-14:
+
+- V1 falhou com `order_version_mismatch`.
+- V2 passou pelo preflight e pela validacao de versionamento.
+- Apos aprovacao do allowance V2, a sessao `logs/current_almost_resolved_real_20260514_124635/` rodou ate o encerramento da janela sem `allow=True`, sem `enter`, sem `fill`, sem `exception` e sem open orders finais.
+
 Para smoke curto com reinicio automatico:
 
 ```powershell

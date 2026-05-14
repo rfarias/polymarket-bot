@@ -147,13 +147,15 @@ Para cada setup do `current`:
 
 Os setups do `current` ainda nao estao no mesmo nivel de maturidade operacional do `next1 scalp` ou do `fill-cycle`.
 
-Para virar setups reais simultaneos com seguranca, ainda faltam:
+Hoje o `current almost resolved` ja tem um manager dedicado de `manual adopt`, com estado proprio e adocao por `order_id`/`size_matched`.
 
-- runner real dedicado para `current almost resolved` ou uma maquina de estado mais explicita no `multi-setup`
-- persistencia dedicada de estado para as posicoes do `current`
-- restore/recovery equivalente ao padrao do `next1 scalp`
+O que ainda falta para virar um setup real simultaneo com mais seguranca e:
 
-Hoje o `current scalp` ja deu o primeiro passo com runner real dedicado. O que falta e endurecer o restante da camada operacional, sobretudo para o `almost resolved`.
+- persistencia e recovery mais fortes para a posicao manual
+- integracao com um fluxo unico de operacao quando houver mais de um setup ativo
+- maior cobertura de casos de erro de broker ou de reconexao
+
+O `current scalp` continua sendo o setup do `current` mais amadurecido em runner real dedicado.
 
 ## 8. Overlay manual
 

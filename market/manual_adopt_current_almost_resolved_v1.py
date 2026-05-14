@@ -5,7 +5,7 @@ import os
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -27,9 +27,7 @@ from market.live_current_almost_resolved_real_v1 import (
     _is_flat_qty,
     _load_state,
     _post_exit_order,
-    _restore_trade_from_broker,
     _save_state,
-    _state_path,
     _token_balance_qty,
     _trade_summary,
 )
@@ -72,6 +70,10 @@ def _build_log_dir() -> Path:
     return Path("logs") / f"manual_adopt_current_almost_resolved_{ts}"
 
 
+def _state_path() -> Path:
+    return Path("logs") / "current_almost_resolved_manual_adopt_state.json"
+
+
 def _tick_size_from_snap(snap: dict, side: str) -> float:
     side_book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
     return max(0.001, _safe_float(side_book.get("tick_size"), 0.01))
@@ -82,45 +84,140 @@ def _token_id_for_side(snap: dict, side: str) -> str:
     return str(side_book.get("token_id") or "")
 
 
-def _bid_for_side(executable: Optional[dict], side: str) -> float:
-    if not executable:
-        return 0.0
-    return _safe_float(executable.get("up_bid" if side == "UP" else "down_bid"), 0.0)
+def _order_snapshot(order: Any) -> dict:
+    if order is None:
+        return {}
+    if hasattr(order, "as_dict"):
+        try:
+            return order.as_dict()
+        except Exception:
+            pass
+    return {
+        "order_id": getattr(order, "order_id", None),
+        "token_id": getattr(order, "token_id", None),
+        "side": getattr(order, "side", None),
+        "price": getattr(order, "price", None),
+        "original_size": getattr(order, "original_size", None),
+        "size_matched": getattr(order, "size_matched", None),
+        "status": getattr(order, "status", None),
+        "outcome": getattr(order, "outcome", None),
+        "market_slug": getattr(order, "market_slug", None),
+        "order_type": getattr(order, "order_type", None),
+    }
 
 
-def _adopt_trade(
+def _mention_order_id(record: Any, order_id: str) -> bool:
+    if not order_id:
+        return False
+    try:
+        return order_id in json.dumps(record, ensure_ascii=False, default=str)
+    except Exception:
+        return False
+
+
+def _fill_qty_from_trade_history(broker, order_id: str) -> Optional[float]:
+    if not order_id or not hasattr(broker, "get_trades"):
+        return None
+    try:
+        trades = broker.get_trades()
+    except Exception:
+        return None
+    best = None
+    for trade in trades or []:
+        if not isinstance(trade, dict):
+            continue
+        if not _mention_order_id(trade, order_id):
+            continue
+        for key in ("size_matched", "filled_size", "matched_size", "size", "qty", "quantity", "amount"):
+            qty = _safe_float(trade.get(key), -1.0)
+            if qty >= 0:
+                best = max(best or 0.0, qty)
+                break
+    return best
+
+
+def _manual_entry_candidates(broker, *, token_id: str, market_slug: str) -> list:
+    if not token_id:
+        return []
+    try:
+        open_orders = broker.get_open_orders(token_id=token_id)
+    except Exception:
+        open_orders = []
+    candidates = []
+    for order in open_orders or []:
+        raw_side = str(getattr(order, "side", "") or "").upper()
+        status = str(getattr(order, "status", "") or "").lower()
+        if raw_side != "BUY":
+            continue
+        if status in ("canceled", "cancelled", "rejected", "closed", "resolved"):
+            continue
+        order_market_slug = str(getattr(order, "market_slug", "") or "")
+        if order_market_slug and market_slug and order_market_slug != market_slug:
+            continue
+        candidates.append(order)
+    return candidates
+
+
+def _build_manual_trade_from_order(
     *,
     signal: dict,
     snap: dict,
-    side: str,
-    qty: float,
-    entry_price_hint: Optional[float],
+    order: Any,
     now: float,
 ) -> LiveCurrentAlmostResolvedTradeState:
+    side = str(signal.get("side") or "").upper()
     tick_size = _tick_size_from_snap(snap, side)
-    signal_entry = _safe_float(signal.get("entry_price"), 0.0)
-    entry_price = float(entry_price_hint) if entry_price_hint and entry_price_hint > 0 else signal_entry
+    entry_price = _safe_float(getattr(order, "price", None), 0.0)
+    requested_qty = _safe_float(getattr(order, "original_size", None), 0.0)
+    matched_qty = _safe_float(getattr(order, "size_matched", None), 0.0)
     stop_price = _safe_float(signal.get("stop_price"), 0.0)
     if stop_price <= 0 and entry_price > 0:
         stop_price = round(max(0.01, entry_price - CurrentAlmostResolvedConfigV1().stop_ticks * tick_size), 6)
-    return LiveCurrentAlmostResolvedTradeState(
-        mode="open_position",
+    trade = LiveCurrentAlmostResolvedTradeState(
+        mode="manual_pending_entry" if matched_qty <= 0 else "open_position",
         event_slug=str(signal.get("event_slug") or ""),
         side=side,
-        token_id=_token_id_for_side(snap, side),
-        entry_order_id=None,
+        token_id=str(getattr(order, "token_id", "") or _token_id_for_side(snap, side)),
+        entry_order_id=str(getattr(order, "order_id", "") or ""),
         exit_order_id=None,
         entry_price=entry_price if entry_price > 0 else None,
-        entry_qty_requested=float(qty),
-        entry_qty_filled=float(qty),
+        entry_qty_requested=requested_qty,
+        entry_qty_filled=matched_qty,
         exit_qty_filled=0.0,
         target_price=round(min(0.99, _safe_float(signal.get("exit_price"), 0.99)), 6),
         stop_price=round(max(0.01, stop_price), 6),
         created_at=now,
         updated_at=now,
         hold_to_resolution=False,
-        last_reason="manual_adopted",
+        last_reason="manual_order_linked",
     )
+    if matched_qty > 0:
+        trade.last_reason = "manual_fill_detected"
+    return trade
+
+
+def _sync_manual_trade_from_broker(broker, trade: LiveCurrentAlmostResolvedTradeState) -> tuple[LiveCurrentAlmostResolvedTradeState, Optional[Any], float, str]:
+    entry_order = _get_order_status(broker, trade.entry_order_id)
+    status = str(getattr(entry_order, "status", "") or "").lower() if entry_order is not None else ""
+    matched = _safe_float(getattr(entry_order, "size_matched", None), 0.0) if entry_order is not None else 0.0
+
+    if matched <= 0 and trade.entry_order_id:
+        history_fill = _fill_qty_from_trade_history(broker, trade.entry_order_id)
+        if history_fill is not None:
+            matched = max(matched, history_fill)
+
+    if matched > trade.entry_qty_filled:
+        trade.entry_qty_filled = matched
+
+    if entry_order is not None:
+        trade.entry_price = _safe_float(getattr(entry_order, "price", None), _safe_float(trade.entry_price, 0.0))
+        trade.entry_qty_requested = max(trade.entry_qty_requested, _safe_float(getattr(entry_order, "original_size", None), trade.entry_qty_requested))
+
+    if trade.entry_qty_filled > 0:
+        trade.mode = "open_position"
+        trade.last_reason = "manual_fill_confirmed"
+
+    return trade, entry_order, matched, status
 
 
 def _manual_exit_reason(
@@ -185,7 +282,6 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
     min_limit_exit_qty = _env_float("POLY_MANUAL_ADOPT_MIN_LIMIT_EXIT_QTY", 5.0)
     poll_secs = max(0.25, _env_float("POLY_MANUAL_ADOPT_POLL_SECS", 0.5))
     run_for = int(duration_seconds or _env_int("POLY_MANUAL_ADOPT_RUN_SECONDS", 1800))
-    entry_price_hint = _env_float("POLY_MANUAL_ADOPT_ENTRY_PRICE", 0.0)
     session_dir = Path(log_dir) if log_dir else _build_log_dir()
     session_dir.mkdir(parents=True, exist_ok=True)
     log_path = session_dir / "manual_adopt_current_almost_resolved.jsonl"
@@ -196,15 +292,12 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
         print("[GUARD] Broker healthcheck failed")
         return
 
-    startup_orders = broker.get_open_orders()[:50]
-    if startup_orders:
-        print("[GUARD] Refusing to start with open orders already live")
-        return
-
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg)
     trade = _load_state(state_path) or LiveCurrentAlmostResolvedTradeState()
     if trade.mode != "idle":
-        trade = _restore_trade_from_broker(broker, trade)
+        trade = _sync_manual_trade_from_broker(broker, trade)[0]
+        if trade.mode == "idle":
+            _clear_state(state_path)
 
     current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
     started_at = time.time()
@@ -236,7 +329,7 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
                 source_divergence_bps=reference.get("source_divergence_bps"),
                 opening_reference_price=current_open_reference.get("price"),
             )
-            if current_item
+            if current_item and current_snap
             else {"setup": "no_edge", "allow": False, "reason": "missing_current"}
         )
         signal = (
@@ -246,14 +339,12 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
                 reference_signal=current_scalp_signal,
                 cfg=signal_cfg,
             )
-            if current_item
+            if current_item and current_snap
             else {"setup": "almost_resolved", "allow": False, "reason": "missing_current"}
         )
         if current_item:
             signal["event_slug"] = str(current_item.get("slug") or "")
 
-        up_qty = _token_balance_qty(broker, _token_id_for_side(current_snap, "UP"))
-        down_qty = _token_balance_qty(broker, _token_id_for_side(current_snap, "DOWN"))
         _append_jsonl(
             log_path,
             {
@@ -262,57 +353,266 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
                 "current_secs": current_secs,
                 "signal": signal,
                 "trade": _trade_summary(trade),
-                "balances": {"up_qty": up_qty, "down_qty": down_qty},
             },
         )
 
-        if trade.mode == "idle" and signal.get("allow") and signal.get("side") in ("UP", "DOWN"):
-            desired_side = str(signal.get("side"))
-            qty = up_qty if desired_side == "UP" else down_qty
-            other_qty = down_qty if desired_side == "UP" else up_qty
-            if qty >= min_adopt_qty and other_qty < min_adopt_qty * 0.5:
-                trade = _adopt_trade(
-                    signal=signal,
-                    snap=current_snap,
-                    side=desired_side,
-                    qty=qty,
-                    entry_price_hint=entry_price_hint if entry_price_hint > 0 else None,
-                    now=now,
-                )
-                _save_state(state_path, trade)
-                _append_jsonl(log_path, {"type": "manual_adopted", "ts": now, "trade": _trade_summary(trade), "signal": signal})
+        if not current_item or not current_snap:
+            time.sleep(poll_secs)
+            continue
 
-        if trade.mode in ("open_position", "pending_exit"):
-            if trade.mode == "pending_exit":
-                exit_order = _get_order_status(broker, trade.exit_order_id)
-                balance_qty = _token_balance_qty(broker, trade.token_id)
-                status = str(getattr(exit_order, "status", "") or "").lower() if exit_order else ""
-                if _is_flat_qty(balance_qty) or status in ("filled", "closed", "resolved"):
-                    _append_jsonl(log_path, {"type": "flat", "ts": now, "trade": _trade_summary(trade)})
+        current_token_id = _token_id_for_side(current_snap, str(signal.get("side") or "UP"))
+        current_market_slug = str(current_item.get("slug") or "")
+        candidate_orders = _manual_entry_candidates(broker, token_id=current_token_id, market_slug=current_market_slug)
+        buy_count = len(candidate_orders)
+
+        if trade.mode == "idle":
+            if not current_token_id:
+                time.sleep(poll_secs)
+                continue
+            try:
+                current_orders = broker.get_open_orders(token_id=current_token_id)
+            except Exception:
+                current_orders = []
+            sell_conflicts = []
+            for order in current_orders or []:
+                if str(getattr(order, "side", "") or "").upper() == "SELL":
+                    sell_conflicts.append(order)
+            if sell_conflicts:
+                print(f"[MANUAL_ADOPT] refusing: exit orders already open for {current_market_slug}")
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "manual_refused",
+                        "ts": now,
+                        "reason": "exit_orders_open",
+                        "market_slug": current_market_slug,
+                        "sell_orders": [_order_snapshot(o) for o in sell_conflicts],
+                    },
+                )
+                time.sleep(poll_secs)
+                continue
+            if buy_count == 0:
+                time.sleep(poll_secs)
+                continue
+            if buy_count != 1:
+                print(f"[MANUAL_ADOPT] refusing: expected exactly one manual BUY order, found {buy_count}")
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "manual_refused",
+                        "ts": now,
+                        "reason": "ambiguous_buy_orders",
+                        "market_slug": current_market_slug,
+                        "buy_orders": [_order_snapshot(o) for o in candidate_orders],
+                    },
+                )
+                time.sleep(poll_secs)
+                continue
+            if not signal.get("allow") or str(signal.get("side") or "") not in ("UP", "DOWN"):
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "manual_refused",
+                        "ts": now,
+                        "reason": "signal_not_allowed",
+                        "signal": signal,
+                        "order": _order_snapshot(candidate_orders[0]),
+                    },
+                )
+                time.sleep(poll_secs)
+                continue
+
+            order = candidate_orders[0]
+            signal_side = str(signal.get("side") or "").upper()
+            order_outcome = str(getattr(order, "outcome", "") or "").upper()
+            if order_outcome and order_outcome != signal_side:
+                print(
+                    f"[MANUAL_ADOPT] refusing: order outcome {order_outcome} does not match signal side {signal_side}"
+                )
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "manual_refused",
+                        "ts": now,
+                        "reason": "side_mismatch",
+                        "signal_side": signal_side,
+                        "order": _order_snapshot(order),
+                        "signal": signal,
+                    },
+                )
+                time.sleep(poll_secs)
+                continue
+
+            order_qty = _safe_float(getattr(order, "original_size", None), 0.0)
+            order_fill = _safe_float(getattr(order, "size_matched", None), 0.0)
+            if max(order_qty, order_fill) < min_adopt_qty:
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "manual_refused",
+                        "ts": now,
+                        "reason": "order_too_small",
+                        "min_adopt_qty": min_adopt_qty,
+                        "order": _order_snapshot(order),
+                    },
+                )
+                time.sleep(poll_secs)
+                continue
+
+            trade = _build_manual_trade_from_order(signal=signal, snap=current_snap, order=order, now=now)
+            if trade.entry_qty_filled <= 0:
+                trade.mode = "manual_pending_entry"
+            else:
+                trade.mode = "open_position"
+            _save_state(state_path, trade)
+            print(
+                f"[MANUAL_ADOPT] linked order_id={trade.entry_order_id} side={trade.side} price={trade.entry_price} "
+                f"qty={trade.entry_qty_requested} matched={trade.entry_qty_filled} mode={trade.mode}"
+            )
+            _append_jsonl(
+                log_path,
+                {
+                    "type": "manual_linked",
+                    "ts": now,
+                    "trade": _trade_summary(trade),
+                    "signal": signal,
+                    "order": _order_snapshot(order),
+                },
+            )
+
+        if trade.mode in ("manual_pending_entry", "open_position", "pending_exit", "exit_pending_confirm"):
+            trade, entry_order, matched_qty, status = _sync_manual_trade_from_broker(broker, trade)
+            if entry_order is not None:
+                _save_state(state_path, trade)
+                if matched_qty > 0:
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "manual_fill_sync",
+                            "ts": now,
+                            "status": status,
+                            "matched_qty": matched_qty,
+                            "trade": _trade_summary(trade),
+                            "order": _order_snapshot(entry_order),
+                        },
+                    )
+            else:
+                if trade.entry_qty_filled <= 0:
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
-                else:
-                    active_book = _fetch_active_book(trade)
-                    active_bid = _best_bid(active_book or {})
-                    if now - trade.updated_at >= 1.0 and active_bid > 0:
-                        trade = _post_exit_order(broker, trade, exit_price=active_bid, now=now, reason="exit_repost", min_limit_exit_qty=min_limit_exit_qty)
-                        _save_state(state_path, trade)
-                        _append_jsonl(log_path, {"type": "exit_repost", "ts": now, "trade": _trade_summary(trade)})
-            elif trade.mode == "open_position":
-                bid_now = _bid_for_side(current_exec, trade.side or "UP")
-                reason = _manual_exit_reason(
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "manual_lost",
+                            "ts": now,
+                            "reason": "entry_order_missing_without_verified_fill",
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
+
+        active_book = _fetch_active_book(trade) if trade.mode in ("manual_pending_entry", "open_position", "pending_exit", "exit_pending_confirm") else None
+        active_bid = _best_bid(active_book or {})
+        if trade.side and current_snap:
+            exec_bid = _safe_float(current_exec.get("up_bid" if trade.side == "UP" else "down_bid"), 0.0) if current_exec else 0.0
+            if exec_bid > 0:
+                active_bid = max(active_bid, exec_bid)
+
+        if trade.mode == "manual_pending_entry":
+            if trade.entry_qty_filled > 0:
+                trade.mode = "open_position"
+                trade.last_reason = "manual_fill_detected"
+                _save_state(state_path, trade)
+                _append_jsonl(log_path, {"type": "manual_opened", "ts": now, "trade": _trade_summary(trade)})
+            else:
+                time.sleep(poll_secs)
+                continue
+
+        if trade.mode == "open_position":
+            reason = _manual_exit_reason(
+                trade,
+                bid_now=active_bid,
+                now=now,
+                secs_to_end=current_secs,
+                signal=signal,
+                cfg=signal_cfg,
+                flatten_deadline_secs=flatten_deadline_secs,
+            )
+            if reason:
+                trade = _post_exit_order(
+                    broker,
                     trade,
-                    bid_now=bid_now,
+                    exit_price=active_bid,
                     now=now,
-                    secs_to_end=current_secs,
-                    signal=signal,
-                    cfg=signal_cfg,
-                    flatten_deadline_secs=flatten_deadline_secs,
+                    reason=reason,
+                    min_limit_exit_qty=min_limit_exit_qty,
                 )
-                if reason:
-                    trade = _post_exit_order(broker, trade, exit_price=bid_now, now=now, reason=reason, min_limit_exit_qty=min_limit_exit_qty)
+                _save_state(state_path, trade)
+                _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "reason": reason, "trade": _trade_summary(trade), "signal": signal})
+
+        if trade.mode == "pending_exit":
+            token_balance_qty = _token_balance_qty(broker, trade.token_id)
+            exit_order = _get_order_status(broker, trade.exit_order_id)
+            if exit_order is None:
+                if _is_flat_qty(token_balance_qty):
+                    _append_jsonl(log_path, {"type": "flat", "ts": now, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                    trade = LiveCurrentAlmostResolvedTradeState()
+                    _clear_state(state_path)
+                elif now - trade.updated_at >= 1.0:
+                    trade = _post_exit_order(
+                        broker,
+                        trade,
+                        exit_price=active_bid if active_bid > 0 else 0.01,
+                        now=now,
+                        reason="exit_repost",
+                        min_limit_exit_qty=min_limit_exit_qty,
+                    )
                     _save_state(state_path, trade)
-                    _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "reason": reason, "trade": _trade_summary(trade), "signal": signal})
+                    _append_jsonl(log_path, {"type": "exit_repost", "ts": now, "trade": _trade_summary(trade)})
+            else:
+                trade.exit_qty_filled = max(trade.exit_qty_filled, _safe_float(getattr(exit_order, "size_matched", None), 0.0))
+                status = str(getattr(exit_order, "status", "") or "").lower()
+                if _is_flat_qty(token_balance_qty) or trade.remaining_position_qty <= 0:
+                    _append_jsonl(log_path, {"type": "flat", "ts": now, "exit_order": _order_snapshot(exit_order), "trade": _trade_summary(trade)})
+                    trade = LiveCurrentAlmostResolvedTradeState()
+                    _clear_state(state_path)
+                elif status in ("matched", "filled", "closed", "resolved") and token_balance_qty > 0:
+                    trade.mode = "exit_pending_confirm"
+                    trade.last_reason = f"exit_match_pending_confirm:{round(token_balance_qty, 6)}"
+                    trade.confirm_started_at = now
+                    trade.confirm_polls = 1
+                    _save_state(state_path, trade)
+                    _append_jsonl(log_path, {"type": "exit_match_pending_confirm", "ts": now, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                elif now - trade.updated_at >= 1.0:
+                    cancel_resp = broker.cancel_order(trade.exit_order_id)
+                    trade.exit_order_id = None
+                    trade = _post_exit_order(
+                        broker,
+                        trade,
+                        exit_price=active_bid if active_bid > 0 else 0.01,
+                        now=now,
+                        reason="repost",
+                        min_limit_exit_qty=min_limit_exit_qty,
+                    )
+                    _save_state(state_path, trade)
+                    _append_jsonl(log_path, {"type": "exit_repost", "ts": now, "cancel": cancel_resp, "trade": _trade_summary(trade)})
+
+        if trade.mode == "exit_pending_confirm":
+            token_balance_qty = _token_balance_qty(broker, trade.token_id)
+            if _is_flat_qty(token_balance_qty):
+                _append_jsonl(log_path, {"type": "flat", "ts": now, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                trade = LiveCurrentAlmostResolvedTradeState()
+                _clear_state(state_path)
+            elif now - trade.confirm_started_at >= 2.0 or trade.confirm_polls >= 2:
+                trade.mode = "pending_exit"
+                trade.exit_order_id = None
+                trade.updated_at = now - 1.0
+                trade.last_reason = f"residual_position_after_exit:{round(token_balance_qty, 6)}"
+                _save_state(state_path, trade)
+                _append_jsonl(log_path, {"type": "residual_position_after_exit", "ts": now, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+            else:
+                trade.confirm_polls += 1
+                _save_state(state_path, trade)
 
         time.sleep(poll_secs)
 

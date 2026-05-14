@@ -4,5 +4,6 @@ python-dotenv
 eth-abi
 eth-utils
 eth-account
+py-clob-client-v2
 py-builder-relayer-client
 py-builder-signing-sdk

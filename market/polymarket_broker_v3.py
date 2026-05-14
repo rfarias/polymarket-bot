@@ -9,8 +9,8 @@ from market.broker_interface import BrokerInterface
 from market.broker_types import BrokerHealth, BrokerOrder, BrokerOrderRequest
 
 try:
-    from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import (
+    from py_clob_client_v2.client import ClobClient
+    from py_clob_client_v2.clob_types import (
         ApiCreds,
         OrderArgs,
         OrderType,
@@ -18,19 +18,39 @@ try:
         BalanceAllowanceParams,
         AssetType,
         MarketOrderArgs,
+        OrderPayload,
+        OrderMarketCancelParams,
     )
-    from py_clob_client.order_builder.constants import BUY, SELL
+    from py_clob_client_v2.order_builder.constants import BUY, SELL
 except Exception:  # pragma: no cover
-    ClobClient = None
-    ApiCreds = None
-    OrderArgs = None
-    OrderType = None
-    OpenOrderParams = None
-    BalanceAllowanceParams = None
-    AssetType = None
-    MarketOrderArgs = None
-    BUY = "BUY"
-    SELL = "SELL"
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import (
+            ApiCreds,
+            OrderArgs,
+            OrderType,
+            OpenOrderParams,
+            BalanceAllowanceParams,
+            AssetType,
+            MarketOrderArgs,
+        )
+        from py_clob_client.order_builder.constants import BUY, SELL
+
+        OrderPayload = None
+        OrderMarketCancelParams = None
+    except Exception:  # pragma: no cover
+        ClobClient = None
+        ApiCreds = None
+        OrderArgs = None
+        OrderType = None
+        OpenOrderParams = None
+        BalanceAllowanceParams = None
+        AssetType = None
+        MarketOrderArgs = None
+        OrderPayload = None
+        OrderMarketCancelParams = None
+        BUY = "BUY"
+        SELL = "SELL"
 
 
 class PolymarketBrokerV3(BrokerInterface):
@@ -139,7 +159,10 @@ class PolymarketBrokerV3(BrokerInterface):
 
     def get_open_orders(self, token_id: Optional[str] = None) -> List[BrokerOrder]:
         params = OpenOrderParams(asset_id=token_id) if (OpenOrderParams is not None and token_id) else (OpenOrderParams() if OpenOrderParams is not None else None)
-        raw_orders = self.client.get_orders(params) if params is not None else self.client.get_orders()
+        if hasattr(self.client, "get_open_orders"):
+            raw_orders = self.client.get_open_orders(params) if params is not None else self.client.get_open_orders()
+        else:
+            raw_orders = self.client.get_orders(params) if params is not None else self.client.get_orders()
         return [self._map_order(o) for o in raw_orders]
 
     def get_order(self, order_id: str) -> Optional[BrokerOrder]:
@@ -244,10 +267,14 @@ class PolymarketBrokerV3(BrokerInterface):
         )
 
     def cancel_order(self, order_id: str) -> dict:
+        if hasattr(self.client, "cancel_order") and OrderPayload is not None:
+            return self.client.cancel_order(OrderPayload(orderID=order_id))
         return self.client.cancel(order_id)
 
     def cancel_market_orders(self, market: Optional[str] = None, asset_id: Optional[str] = None) -> dict:
         if hasattr(self.client, "cancel_market_orders"):
+            if OrderMarketCancelParams is not None:
+                return self.client.cancel_market_orders(OrderMarketCancelParams(market=market, asset_id=asset_id))
             return self.client.cancel_market_orders({"market": market, "asset_id": asset_id})
         if hasattr(self.client, "cancel_all") and market is None and asset_id is None:
             return self.client.cancel_all()

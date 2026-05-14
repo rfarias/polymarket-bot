@@ -14,8 +14,8 @@ Fluxo desejado:
 
 1. o setup `current_almost_resolved` fica armado
 2. o operador posta uma ordem limite manual
-3. o bot detecta essa ordem na conta
-4. o bot vincula a ordem ao setup ativo
+3. o bot detecta essa ordem aberta na conta
+4. o bot vincula a ordem ao setup ativo por `order_id`
 5. quando houver fill parcial ou total, o bot passa a gerenciar a saida
 
 O bot nao deve entrar automaticamente.
@@ -85,24 +85,23 @@ No caso do `resolved_pullback_limit`:
 
 Arquivos relacionados:
 
-- [market/manual_adopt_current_almost_resolved_v1.py](C:/Users/Romario/Desktop/BACKUP%20ROMÁRIO/documentos/polymarket-bot/market/manual_adopt_current_almost_resolved_v1.py)
-- [run_manual_adopt_current_almost_resolved_v1.py](C:/Users/Romario/Desktop/BACKUP%20ROMÁRIO/documentos/polymarket-bot/run_manual_adopt_current_almost_resolved_v1.py)
-- [market/live_current_almost_resolved_real_v1.py](C:/Users/Romario/Desktop/BACKUP%20ROMÁRIO/documentos/polymarket-bot/market/live_current_almost_resolved_real_v1.py)
+- [market/manual_adopt_current_almost_resolved_v1.py](C:/Users/Letícia/Documents/polymarket-bot/market/manual_adopt_current_almost_resolved_v1.py)
+- [run_manual_adopt_current_almost_resolved_v1.py](C:/Users/Letícia/Documents/polymarket-bot/run_manual_adopt_current_almost_resolved_v1.py)
+- [market/live_current_almost_resolved_real_v1.py](C:/Users/Letícia/Documents/polymarket-bot/market/live_current_almost_resolved_real_v1.py)
 
 Observacao importante:
 
-- a versao atual ja estrutura o modo `manual adopt`
-- mas o criterio ideal de adocao e por ordem limite manual/fill exato
-- isso deve ter prioridade sobre qualquer estimativa derivada do saldo
+- a versao atual faz a adocao por ordem aberta identificada
+- o estado persistido usa `order_id` e `size_matched`
+- o saldo do token fica apenas como confirmacao operacional depois do link
 
 ## 7. Proximo passo recomendado
 
-Evoluir a adocao para:
+Manter o fluxo manual simples:
 
-- detectar ordem limite manual aberta
-- vincular por `order_id`
-- usar `size_matched` como quantidade real adotada
-- buscar o fill exato no historico autenticado de trades da conta
-- so assumir a posicao quando esses dados forem consistentes
+- uma ordem aberta por vez
+- um setup por vez
+- sem entrada automatica
+- saida gerenciada pelo bot depois do fill
 
-Esse e o padrao correto para uso real em setups de poucos ticks.
+Esse continua sendo o padrao correto para uso real em setups de poucos ticks.
