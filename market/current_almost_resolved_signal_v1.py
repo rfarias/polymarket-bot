@@ -17,6 +17,11 @@ def _limit_or_default(value: Optional[float], default: float = 999.0) -> float:
     return float(value)
 
 
+def _min_nonnegative(*values: float, default: float = 999.0) -> float:
+    cleaned = [_safe_float(v, -1.0) for v in values if _safe_float(v, -1.0) >= 0]
+    return min(cleaned) if cleaned else float(default)
+
+
 def _first_level_price(book: Dict, side: str, default: float = -1.0) -> float:
     levels = book.get(side) or []
     if not levels:
@@ -81,6 +86,16 @@ class CurrentAlmostResolvedConfigV1:
     extreme_min_price_to_beat_distance_usd: float = 70.0
     extreme_min_price_to_beat_buffer_usd: float = 35.0
     extreme_max_market_range_30s: float = 0.03
+    extreme_99_limit_enabled: bool = True
+    extreme_99_min_secs_to_end: int = 1
+    extreme_99_min_leader_price: float = 0.99
+    extreme_99_limit_price: float = 0.99
+    extreme_99_max_counter_price: float = 0.03
+    extreme_99_min_price_to_beat_distance_usd: float = 70.0
+    extreme_99_min_price_to_beat_buffer_usd: float = 35.0
+    extreme_99_min_distance_bps: float = 8.0
+    extreme_99_max_market_range_30s: float = 0.06
+    extreme_99_max_adverse_spot_15s_bps: float = 1.6
     fallback_requires_missing_open_reference: bool = True
     fallback_min_leader_edge_vs_counter: float = 0.85
     fallback_max_counter_price: float = 0.10
@@ -253,7 +268,11 @@ def evaluate_current_almost_resolved_v1(
         "secs_to_end": secs_to_end,
     }
 
-    if secs_to_end is None or secs_to_end < cfg.min_secs_to_end or secs_to_end > cfg.max_secs_to_end:
+    if (
+        secs_to_end is None
+        or secs_to_end > cfg.max_secs_to_end
+        or secs_to_end < min(cfg.min_secs_to_end, cfg.extreme_99_min_secs_to_end)
+    ):
         result["reason"] = "outside_time_window"
         return result
     late_window = secs_to_end <= cfg.near_end_relaxation_secs
@@ -274,6 +293,8 @@ def evaluate_current_almost_resolved_v1(
 
     up_edge_vs_counter = round(up_buy - down_buy, 6) if up_buy > 0 and down_buy > 0 else None
     down_edge_vs_counter = round(down_buy - up_buy, 6) if up_buy > 0 and down_buy > 0 else None
+    up_extreme_99_counter_price = _min_nonnegative(down_buy, down_sell)
+    down_extreme_99_counter_price = _min_nonnegative(up_buy, up_sell)
     up_exit_distance = round(cfg.target_exit_price - up_buy, 6) if up_buy > 0 else None
     down_exit_distance = round(cfg.target_exit_price - down_buy, 6) if down_buy > 0 else None
     distance_to_price_to_beat_bps = round(abs(distance_from_open), 4)
@@ -374,6 +395,80 @@ def evaluate_current_almost_resolved_v1(
     result["passive_capture_safe_distance_ok"] = passive_safe_distance_ok
     result["passive_capture_up_score"] = passive_up_score
     result["passive_capture_down_score"] = passive_down_score
+
+    if (
+        cfg.extreme_99_limit_enabled
+        and secs_to_end >= cfg.extreme_99_min_secs_to_end
+        and secs_to_end <= cfg.passive_capture_max_secs
+        and up_buy >= cfg.extreme_99_min_leader_price
+        and up_extreme_99_counter_price <= cfg.extreme_99_max_counter_price
+        and distance_from_open >= cfg.extreme_99_min_distance_bps
+        and distance_to_price_to_beat_usd >= cfg.extreme_99_min_price_to_beat_distance_usd
+        and up_price_to_beat_buffer_usd >= cfg.extreme_99_min_price_to_beat_buffer_usd
+        and up_counter_pressure_ok
+        and up_adverse_spot_usd <= pullback_usd_cap
+        and spot_delta_5s >= -cfg.passive_capture_max_adverse_spot_5s_bps
+        and spot_delta_15s >= -cfg.extreme_99_max_adverse_spot_15s_bps
+        and market_range_30s <= cfg.extreme_99_max_market_range_30s
+    ):
+        result.update(
+            {
+                "allow": True,
+                "side": "UP",
+                "setup_variant": "extreme_99_limit",
+                "execution_style": "limit_99",
+                "reason": "leader_up_extreme_99_limit",
+                "leader_price": up_buy,
+                "counter_price": up_extreme_99_counter_price,
+                "entry_price": cfg.extreme_99_limit_price,
+                "limit_price": cfg.extreme_99_limit_price,
+                "exit_price": min(cfg.target_exit_price, 0.99),
+                "target_limit_price": cfg.extreme_99_limit_price,
+                "stop_price": max(0.01, round(cfg.extreme_99_limit_price - cfg.stop_ticks * up_tick_size, 6)),
+                "screen_odd_leader": round(max(0.0, 1.0 - up_buy), 6),
+                "screen_odd_counter": round(max(0.0, 1.0 - down_buy), 6),
+            }
+        )
+        return result
+
+    if (
+        cfg.extreme_99_limit_enabled
+        and secs_to_end >= cfg.extreme_99_min_secs_to_end
+        and secs_to_end <= cfg.passive_capture_max_secs
+        and down_buy >= cfg.extreme_99_min_leader_price
+        and down_extreme_99_counter_price <= cfg.extreme_99_max_counter_price
+        and distance_from_open <= -cfg.extreme_99_min_distance_bps
+        and distance_to_price_to_beat_usd >= cfg.extreme_99_min_price_to_beat_distance_usd
+        and down_price_to_beat_buffer_usd >= cfg.extreme_99_min_price_to_beat_buffer_usd
+        and down_counter_pressure_ok
+        and down_adverse_spot_usd <= pullback_usd_cap
+        and spot_delta_5s <= cfg.passive_capture_max_adverse_spot_5s_bps
+        and spot_delta_15s <= cfg.extreme_99_max_adverse_spot_15s_bps
+        and market_range_30s <= cfg.extreme_99_max_market_range_30s
+    ):
+        result.update(
+            {
+                "allow": True,
+                "side": "DOWN",
+                "setup_variant": "extreme_99_limit",
+                "execution_style": "limit_99",
+                "reason": "leader_down_extreme_99_limit",
+                "leader_price": down_buy,
+                "counter_price": down_extreme_99_counter_price,
+                "entry_price": cfg.extreme_99_limit_price,
+                "limit_price": cfg.extreme_99_limit_price,
+                "exit_price": min(cfg.target_exit_price, 0.99),
+                "target_limit_price": cfg.extreme_99_limit_price,
+                "stop_price": max(0.01, round(cfg.extreme_99_limit_price - cfg.stop_ticks * down_tick_size, 6)),
+                "screen_odd_leader": round(max(0.0, 1.0 - down_buy), 6),
+                "screen_odd_counter": round(max(0.0, 1.0 - up_buy), 6),
+            }
+        )
+        return result
+
+    if secs_to_end < cfg.min_secs_to_end:
+        result["reason"] = "outside_time_window_non_extreme"
+        return result
 
     rich_book_late_window = secs_to_end <= cfg.rich_book_relaxation_secs
     dual_rich_late_window = secs_to_end <= cfg.dual_rich_late_window_secs

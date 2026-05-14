@@ -2,7 +2,10 @@ param(
     [int]$RunSeconds = 300,
     [double]$PollSeconds = 0.5,
     [int]$Qty = 6,
-    [int]$RestartDelaySeconds = 5
+    [int]$RestartDelaySeconds = 5,
+    [switch]$ArmReal,
+    [switch]$Continuous,
+    [int]$MaxCycles = 1
 )
 
 $ErrorActionPreference = "Continue"
@@ -14,7 +17,14 @@ $watchdogLog = Join-Path $repo ("logs\current_almost_resolved_real_watchdog_" + 
 
 Set-Location $repo
 
+$cycle = 0
 while ($true) {
+    $cycle += 1
+    if ($ArmReal) {
+        $env:POLY_GUARDED_ENABLED = "true"
+        $env:POLY_GUARDED_SHADOW_ONLY = "false"
+        $env:POLY_GUARDED_REAL_POSTS_ENABLED = "true"
+    }
     $env:POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED = "true"
     $env:POLY_CURRENT_ALMOST_RESOLVED_QTY = [string]$Qty
     $env:POLY_CURRENT_ALMOST_RESOLVED_POLL_SECS = [string]$PollSeconds
@@ -25,9 +35,13 @@ while ($true) {
     $env:POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION = "true"
     $env:POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED = "false"
 
-    Add-Content -Path $watchdogLog -Value ("[START] " + (Get-Date -Format s) + " run_seconds=" + $RunSeconds + " poll_seconds=" + $PollSeconds + " qty=" + $Qty)
+    Add-Content -Path $watchdogLog -Value ("[START] " + (Get-Date -Format s) + " cycle=" + $cycle + " run_seconds=" + $RunSeconds + " poll_seconds=" + $PollSeconds + " qty=" + $Qty)
     & $python "run_live_current_almost_resolved_real_v1.py" "--seconds" ([string]$RunSeconds)
     $exitCode = $LASTEXITCODE
-    Add-Content -Path $watchdogLog -Value ("[EXIT] " + (Get-Date -Format s) + " code=" + $exitCode)
+    Add-Content -Path $watchdogLog -Value ("[EXIT] " + (Get-Date -Format s) + " cycle=" + $cycle + " code=" + $exitCode)
+    if (-not $Continuous -and $cycle -ge $MaxCycles) {
+        Add-Content -Path $watchdogLog -Value ("[STOP] " + (Get-Date -Format s) + " completed requested cycles")
+        break
+    }
     Start-Sleep -Seconds $RestartDelaySeconds
 }

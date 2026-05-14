@@ -263,7 +263,19 @@ Recommended real start command on the configured wallet machine:
 
 ```powershell
 python run_live_current_almost_resolved_real_v1.py --preflight-only
-.\scripts\watch_current_almost_resolved_real.ps1 -Qty 6 -RunSeconds 300 -PollSeconds 0.5
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 300 -PollSeconds 0.5
+```
+
+The watcher now runs one cycle by default. This is the safer mode when you only want the bot active while you are monitoring it. To run a longer supervised session, increase `-RunSeconds`, for example:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 1800 -PollSeconds 0.5
+```
+
+Use continuous restart mode only while you are actively watching the machine:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 300 -PollSeconds 0.5 -Continuous
 ```
 
 Operational checklist after `git pull` on another machine:
@@ -300,6 +312,8 @@ POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION=true
 POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED=false
 ```
 
+The watcher sets these guard flags for the current PowerShell process only when `-ArmReal` is passed. Credentials still need to come from `.env` or the machine environment.
+
 Important post-resolution behavior:
 
 ```text
@@ -308,6 +322,14 @@ logs/current_almost_resolved_real_state.json
 mode = awaiting_redeem
 
 In this state the bot does not open new entries. The winning position must be claimed/redeemed manually on Polymarket, then the state can be cleared after confirming the USDC returned to the portfolio.
+```
+
+Stop instructions:
+
+```text
+If running in the foreground, press Ctrl+C.
+If a position is already open, do not kill the terminal blindly; first check the current log/state and let the runner flatten or reach awaiting_redeem.
+If using -Continuous, Ctrl+C stops future cycles only after interrupting the current process.
 ```
 
 ### Counter-Reversal Runner
