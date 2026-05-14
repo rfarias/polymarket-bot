@@ -74,12 +74,41 @@ The watcher runs one cycle by default and then stops. Use continuous mode only w
 .\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 300 -PollSeconds 0.5 -Continuous
 ```
 
+## 4.1 Position Size Plan
+
+Use `6` shares only while the setup is still in supervised real testing.
+
+Size roadmap:
+
+```text
+6 shares   -> test size
+50 shares  -> first production target, because maker rebates start to matter from this size
+100 shares -> later target, where each tick is approximately 1 USD
+```
+
+Do not move to `50` or `100` until the real logs confirm:
+
+```text
+entries are posting at the intended prices
+unfilled passive entries are cancelled before aggressive replacement
+stops and structural exits are closing correctly
+resolution creates awaiting_redeem instead of opening a new trade
+manual claim/redeem returns USDC to portfolio as expected
+```
+
+When ready for the next size, only change `-Qty`:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 50 -RunSeconds 1800 -PollSeconds 0.5
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 100 -RunSeconds 1800 -PollSeconds 0.5
+```
+
 ## 5. What It Does
 
 ```text
 setup: current almost-resolved
 entry: hybrid limit
-qty: 6 shares
+qty: controlled by -Qty, test default is 6 shares
 first entry attempt: passive limit 1 tick below executable entry
 second attempt: cancel passive, then aggressive/marketable limit at current ask, max 0.99
 0.99 case: allowed when market is almost fully resolved and distance/buffer filters pass

@@ -251,13 +251,23 @@ winner handling: hold to resolution when the side remains favorable
 post-resolution: awaiting_redeem state, no new entries until claim/redeem is handled
 ```
 
-Default real quantity is now `6` shares:
+Default real quantity is `6` shares while the runner is still in supervised test mode:
 
 ```text
 POLY_CURRENT_ALMOST_RESOLVED_QTY=6
 ```
 
-The technical minimum remains `5`, but `6` is the operational default because fills/residuals can end up around `4.99`, which can block a later limit close due to minimum order size.
+The technical minimum remains `5`, but `6` is the operational test default because fills/residuals can end up around `4.99`, which can block a later limit close due to minimum order size.
+
+Size roadmap:
+
+```text
+6 shares   -> supervised test size only
+50 shares  -> first production size target, because this is where maker rebates start to matter
+100 shares -> later target size, where 1 tick is approximately 1 USD
+```
+
+Do not move from `6` to `50` or `100` until the supervised real logs show that entries, stops, profit protection, resolution handling, and manual claim/redeem are behaving correctly.
 
 Recommended real start command on the configured wallet machine:
 
@@ -270,6 +280,13 @@ The watcher now runs one cycle by default. This is the safer mode when you only 
 
 ```powershell
 .\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 1800 -PollSeconds 0.5
+```
+
+After the test phase, the same runner can be started with larger size:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 50 -RunSeconds 1800 -PollSeconds 0.5
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 100 -RunSeconds 1800 -PollSeconds 0.5
 ```
 
 Use continuous restart mode only while you are actively watching the machine:
