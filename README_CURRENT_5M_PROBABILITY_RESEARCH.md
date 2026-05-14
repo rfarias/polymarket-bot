@@ -266,6 +266,28 @@ python run_live_current_almost_resolved_real_v1.py --preflight-only
 .\scripts\watch_current_almost_resolved_real.ps1 -Qty 6 -RunSeconds 300 -PollSeconds 0.5
 ```
 
+Operational checklist after `git pull` on another machine:
+
+```powershell
+git status --short
+git log -1 --oneline
+python -m py_compile diagnostics_current_almost_resolved_paper_v1.py market\live_current_almost_resolved_real_v1.py run_live_current_almost_resolved_real_v1.py
+python run_live_current_almost_resolved_real_v1.py --preflight-only
+```
+
+Only start real monitoring if:
+
+```text
+git status --short is clean, or only contains known local config/log files
+latest commit is 06dbda8 or newer
+py_compile passes
+preflight passes broker/env/open-order checks
+logs/current_almost_resolved_real_state.json is absent or mode is idle
+there are no unexpected open orders on Polymarket
+```
+
+If preflight prints `awaiting_redeem`, do not start the runner. First claim/redeem the resolved position on Polymarket, confirm USDC returned to the portfolio, then clear/reconcile the state deliberately.
+
 Required real flags:
 
 ```text
