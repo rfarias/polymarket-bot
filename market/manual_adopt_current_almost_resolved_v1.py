@@ -136,6 +136,51 @@ def _fill_qty_from_trade_history(broker, order_id: str) -> Optional[float]:
     return best
 
 
+def _trade_mentions_token(record: Any, token_id: str) -> bool:
+    if not token_id:
+        return False
+    try:
+        payload = json.dumps(record, ensure_ascii=False, default=str)
+    except Exception:
+        payload = str(record)
+    return token_id in payload
+
+
+def _avg_entry_from_trade_history(broker, *, token_id: str, market_slug: str) -> Optional[float]:
+    if not token_id or not hasattr(broker, "get_trades"):
+        return None
+    try:
+        trades = broker.get_trades()
+    except Exception:
+        return None
+    notional = 0.0
+    qty = 0.0
+    for trade in trades or []:
+        if not isinstance(trade, dict):
+            continue
+        side = str(trade.get("side") or trade.get("taker_side") or trade.get("maker_side") or "").upper()
+        if side and side != "BUY":
+            continue
+        trade_market = str(trade.get("market_slug") or trade.get("market") or trade.get("slug") or "")
+        if market_slug and trade_market and market_slug != trade_market:
+            continue
+        asset_id = str(trade.get("asset_id") or trade.get("token_id") or trade.get("asset") or "")
+        if asset_id != token_id and not _trade_mentions_token(trade, token_id):
+            continue
+        trade_qty = 0.0
+        for key in ("size", "size_matched", "matched_size", "filled_size", "qty", "quantity"):
+            trade_qty = _safe_float(trade.get(key), 0.0)
+            if trade_qty > 0:
+                break
+        price = _safe_float(trade.get("price"), 0.0)
+        if trade_qty > 0 and price > 0:
+            notional += trade_qty * price
+            qty += trade_qty
+    if qty <= 0:
+        return None
+    return round(notional / qty, 6)
+
+
 def _manual_entry_candidates(broker, *, token_id: str, market_slug: str) -> list:
     if not token_id:
         return []
@@ -156,6 +201,53 @@ def _manual_entry_candidates(broker, *, token_id: str, market_slug: str) -> list
             continue
         candidates.append(order)
     return candidates
+
+
+def _side_signal(signal: dict, *, side: str, event_slug: str) -> dict:
+    out = dict(signal)
+    out["side"] = side
+    out["event_slug"] = event_slug
+    return out
+
+
+def _build_manual_trade_from_balance(
+    *,
+    signal: dict,
+    snap: dict,
+    side: str,
+    token_id: str,
+    qty: float,
+    entry_price: float,
+    now: float,
+) -> LiveCurrentAlmostResolvedTradeState:
+    tick_size = _tick_size_from_snap(snap, side)
+    if entry_price <= 0:
+        entry_price = _safe_float(signal.get("entry_price"), 0.0)
+    if entry_price <= 0:
+        side_book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
+        entry_price = _safe_float(side_book.get("executable_sell") or side_book.get("best_bid"), 0.0)
+    stop_price = _safe_float(signal.get("stop_price"), 0.0)
+    if stop_price <= 0 and entry_price > 0:
+        stop_price = round(max(0.01, entry_price - CurrentAlmostResolvedConfigV1().stop_ticks * tick_size), 6)
+    return LiveCurrentAlmostResolvedTradeState(
+        mode="open_position",
+        event_slug=str(signal.get("event_slug") or ""),
+        side=side,
+        token_id=token_id,
+        entry_order_id=None,
+        exit_order_id=None,
+        entry_price=entry_price if entry_price > 0 else None,
+        entry_qty_requested=qty,
+        entry_qty_filled=qty,
+        exit_qty_filled=0.0,
+        target_price=round(min(0.99, _safe_float(signal.get("exit_price"), 0.99)), 6),
+        stop_price=round(max(0.01, stop_price), 6),
+        best_bid=None,
+        created_at=now,
+        updated_at=now,
+        hold_to_resolution=False,
+        last_reason="manual_balance_adopted",
+    )
 
 
 def _build_manual_trade_from_order(
@@ -229,6 +321,7 @@ def _manual_exit_reason(
     signal: dict,
     cfg: CurrentAlmostResolvedConfigV1,
     flatten_deadline_secs: int,
+    hold_winner_to_resolution: bool,
 ) -> Optional[str]:
     if bid_now <= 0:
         return None
@@ -239,7 +332,7 @@ def _manual_exit_reason(
     adverse_spot_bps = _safe_float(signal.get("up_adverse_spot_bps" if side == "UP" else "down_adverse_spot_bps"), 0.0)
     edge_vs_counter = _safe_float(signal.get("up_edge_vs_counter" if side == "UP" else "down_edge_vs_counter"), 0.0)
 
-    if secs_to_end is not None and secs_to_end <= flatten_deadline_secs:
+    if not hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= flatten_deadline_secs:
         return "deadline_flatten"
     if trade.stop_price is not None and bid_now <= float(trade.stop_price):
         return "stop"
@@ -253,9 +346,9 @@ def _manual_exit_reason(
         or buffer_bps <= cfg.paper_structural_stop_buffer_bps
     ):
         return "profit_protect" if bid_now > _safe_float(trade.entry_price, 0.0) else "structural_stop"
-    if not trade.hold_to_resolution and trade.target_price is not None and bid_now >= float(trade.target_price):
+    if not hold_winner_to_resolution and not trade.hold_to_resolution and trade.target_price is not None and bid_now >= float(trade.target_price):
         return "target"
-    if not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
+    if not hold_winner_to_resolution and not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
         return "timeout"
     return None
 
@@ -278,6 +371,8 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
         return
 
     min_adopt_qty = _env_float("POLY_MANUAL_ADOPT_MIN_QTY", 1.0)
+    adopt_existing_balance = _env_bool("POLY_MANUAL_ADOPT_EXISTING_BALANCE", True)
+    hold_winner_to_resolution = _env_bool("POLY_MANUAL_ADOPT_HOLD_WINNER_TO_RESOLUTION", True)
     flatten_deadline_secs = _env_int("POLY_MANUAL_ADOPT_FLATTEN_DEADLINE_SECS", 2)
     min_limit_exit_qty = _env_float("POLY_MANUAL_ADOPT_MIN_LIMIT_EXIT_QTY", 5.0)
     poll_secs = max(0.25, _env_float("POLY_MANUAL_ADOPT_POLL_SECS", 0.5))
@@ -294,7 +389,7 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
 
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg)
     trade = _load_state(state_path) or LiveCurrentAlmostResolvedTradeState()
-    if trade.mode != "idle":
+    if trade.mode not in ("idle", "awaiting_redeem"):
         trade = _sync_manual_trade_from_broker(broker, trade)[0]
         if trade.mode == "idle":
             _clear_state(state_path)
@@ -360,15 +455,79 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
             time.sleep(poll_secs)
             continue
 
-        current_token_id = _token_id_for_side(current_snap, str(signal.get("side") or "UP"))
         current_market_slug = str(current_item.get("slug") or "")
+        side_tokens = {
+            "UP": _token_id_for_side(current_snap, "UP"),
+            "DOWN": _token_id_for_side(current_snap, "DOWN"),
+        }
+        current_token_id = _token_id_for_side(current_snap, str(signal.get("side") or "UP"))
         candidate_orders = _manual_entry_candidates(broker, token_id=current_token_id, market_slug=current_market_slug)
         buy_count = len(candidate_orders)
 
         if trade.mode == "idle":
-            if not current_token_id:
+            if adopt_existing_balance:
+                balance_candidates = []
+                for side_name, token_id in side_tokens.items():
+                    if not token_id:
+                        continue
+                    token_balance_qty = _token_balance_qty(broker, token_id)
+                    if token_balance_qty >= min_adopt_qty:
+                        balance_candidates.append((side_name, token_id, token_balance_qty))
+                if len(balance_candidates) == 1:
+                    balance_side, balance_token_id, balance_qty = balance_candidates[0]
+                    balance_signal = _side_signal(signal, side=balance_side, event_slug=current_market_slug)
+                    avg_entry = _avg_entry_from_trade_history(
+                        broker,
+                        token_id=balance_token_id,
+                        market_slug=current_market_slug,
+                    )
+                    trade = _build_manual_trade_from_balance(
+                        signal=balance_signal,
+                        snap=current_snap,
+                        side=balance_side,
+                        token_id=balance_token_id,
+                        qty=balance_qty,
+                        entry_price=_safe_float(avg_entry, 0.0),
+                        now=now,
+                    )
+                    _save_state(state_path, trade)
+                    print(
+                        f"[MANUAL_ADOPT] adopted balance side={trade.side} entry={trade.entry_price} "
+                        f"qty={trade.entry_qty_filled} stop={trade.stop_price}"
+                    )
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "manual_balance_adopted",
+                            "ts": now,
+                            "balance_side": balance_side,
+                            "token_balance_qty": balance_qty,
+                            "avg_entry_from_history": avg_entry,
+                            "trade": _trade_summary(trade),
+                            "signal": balance_signal,
+                        },
+                    )
+                elif len(balance_candidates) > 1:
+                    print("[MANUAL_ADOPT] refusing: balances on both sides of current market")
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "manual_refused",
+                            "ts": now,
+                            "reason": "ambiguous_side_balances",
+                            "balances": [
+                                {"side": side_name, "token_id": token_id, "qty": qty}
+                                for side_name, token_id, qty in balance_candidates
+                            ],
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
+            if trade.mode == "idle" and not current_token_id:
                 time.sleep(poll_secs)
                 continue
+
+        if trade.mode == "idle":
             try:
                 current_orders = broker.get_open_orders(token_id=current_token_id)
             except Exception:
@@ -529,6 +688,24 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
                 continue
 
         if trade.mode == "open_position":
+            if hold_winner_to_resolution and current_secs is not None and current_secs <= 1:
+                trade.mode = "awaiting_redeem"
+                trade.updated_at = now
+                trade.last_reason = "manual_resolution_awaiting_redeem"
+                _save_state(state_path, trade)
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "awaiting_redeem",
+                        "ts": now,
+                        "reason": "manual_resolution_awaiting_redeem",
+                        "active_bid": active_bid,
+                        "trade": _trade_summary(trade),
+                        "signal": signal,
+                    },
+                )
+                time.sleep(poll_secs)
+                continue
             reason = _manual_exit_reason(
                 trade,
                 bid_now=active_bid,
@@ -537,6 +714,7 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
                 signal=signal,
                 cfg=signal_cfg,
                 flatten_deadline_secs=flatten_deadline_secs,
+                hold_winner_to_resolution=hold_winner_to_resolution,
             )
             if reason:
                 trade = _post_exit_order(
@@ -613,6 +791,22 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
             else:
                 trade.confirm_polls += 1
                 _save_state(state_path, trade)
+
+        if trade.mode == "awaiting_redeem":
+            token_balance_qty = _token_balance_qty(broker, trade.token_id)
+            _append_jsonl(
+                log_path,
+                {
+                    "type": "awaiting_redeem_status",
+                    "ts": now,
+                    "token_balance_qty": token_balance_qty,
+                    "trade": _trade_summary(trade),
+                },
+            )
+            if _is_flat_qty(token_balance_qty):
+                trade = LiveCurrentAlmostResolvedTradeState()
+                _clear_state(state_path)
+                _append_jsonl(log_path, {"type": "flat_after_redeem", "ts": now, "token_balance_qty": token_balance_qty})
 
         time.sleep(poll_secs)
 

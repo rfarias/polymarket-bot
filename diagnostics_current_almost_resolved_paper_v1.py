@@ -55,6 +55,7 @@ class PaperOrder:
     order_style: str = "passive_limit"  # passive_limit | aggressive_limit
     total_qty: float = 50.0
     filled_qty: float = 0.0
+    touch_polls: int = 0
     created_at: float = 0.0
     updated_at: float = 0.0
 
@@ -290,6 +291,8 @@ def _paper_manage(
         trade.mode = "idle"
         trade.exit_price = bid_now
         trade.exit_reason = "stop"
+    elif setup_variant == "extreme_99_limit":
+        trade.hold_to_resolution = True
     elif (
         pnl_ticks_now >= cfg.paper_profit_take_min_ticks
         and not resolved_pullback_late_hold
@@ -378,6 +381,12 @@ def main() -> int:
         type=float,
         default=0.99,
         help="Maximum buy limit price allowed for the aggressive replacement order.",
+    )
+    parser.add_argument(
+        "--passive-fill-touch-polls",
+        type=int,
+        default=1,
+        help="Require N consecutive visible touches before paper fills a passive order. Use >1 for conservative fill simulation.",
     )
     parser.add_argument(
         "--hold-winner-to-resolution",
@@ -534,7 +543,8 @@ def main() -> int:
                 and order.side == signal_side
                 and signal_order_reference_price >= _safe_float(order.limit_price, 0.0)
             )
-            too_late = current_secs is not None and current_secs <= signal_cfg.min_secs_to_end
+            late_cutoff = max(0, int(args.resolution_settle_secs)) if signal.get("setup_variant") == "extreme_99_limit" else signal_cfg.min_secs_to_end
+            too_late = current_secs is not None and current_secs <= late_cutoff
             if not order_still_valid or too_late:
                 order_events["cancel"] += 1
                 _append_jsonl(
@@ -555,7 +565,9 @@ def main() -> int:
                 tick_size = _tick_size_from_snap(current_snap, order.side)
                 remaining_qty = max(0.0, _safe_float(order.total_qty, args.order_qty) - _safe_float(order.filled_qty, 0.0))
                 available_qty = _available_ask_qty_at_or_below(current_snap, order.side, _safe_float(order.limit_price, 0.0))
-                fill_qty = round(min(remaining_qty, available_qty), 6)
+                order.touch_polls = order.touch_polls + 1 if available_qty > 0 else 0
+                min_touch_polls = 1 if order.order_style == "aggressive_limit" else max(1, int(args.passive_fill_touch_polls))
+                fill_qty = round(min(remaining_qty, available_qty), 6) if order.touch_polls >= min_touch_polls else 0.0
                 if (
                     fill_qty <= 0
                     and args.hybrid_passive_to_aggressive
@@ -584,8 +596,10 @@ def main() -> int:
                         pprint({"from": asdict(order), "raw_ask": raw_ask, "limit_price": aggressive_price})
                         order.limit_price = aggressive_price
                         order.order_style = "aggressive_limit"
+                        order.touch_polls = 0
                         order.updated_at = now
                         available_qty = _available_ask_qty_at_or_below(current_snap, order.side, aggressive_price)
+                        order.touch_polls = order.touch_polls + 1 if available_qty > 0 else 0
                         fill_qty = round(min(remaining_qty, available_qty), 6)
                     else:
                         order_events["aggressive_limit_skip"] += 1
@@ -630,6 +644,8 @@ def main() -> int:
                             "ts": now,
                             "fill_qty": fill_qty,
                             "available_qty": available_qty,
+                            "touch_polls": order.touch_polls,
+                            "passive_fill_touch_polls": int(args.passive_fill_touch_polls),
                             "signal": filled_signal,
                             "order": asdict(order),
                             "trade": asdict(trade),
@@ -646,8 +662,11 @@ def main() -> int:
             default_limit_price = round(max(0.01, _safe_float(signal.get("entry_price"), 0.0) - tick_size), 6)
             limit_price = _safe_float(signal.get("limit_price"), default_limit_price)
             raw_ask = _ask_for_side(current_snap, signal_side)
-            if tick_up_confirmed and limit_price > 0 and (raw_ask <= 0 or limit_price < raw_ask):
+            allow_marketable_limit_entry = signal.get("setup_variant") == "extreme_99_limit"
+            if tick_up_confirmed and limit_price > 0 and (raw_ask <= 0 or limit_price < raw_ask or allow_marketable_limit_entry):
                 order_style = "passive_limit"
+                if raw_ask > 0 and limit_price >= raw_ask:
+                    order_style = "aggressive_limit"
                 order = PaperOrder(
                     active=True,
                     slug=signal_slug,

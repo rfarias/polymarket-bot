@@ -245,25 +245,61 @@ entry: hybrid limit
   1. post passive limit 1 tick below current executable entry
   2. if still valid and unfilled after 1.5s, cancel passive order
   3. only after cancel confirmation, post aggressive/marketable limit at current ask
+  4. aggressive entry is limit FAK by default, so it should fill immediately or not rest
 target: disabled in guardian hold mode
 exits: stop, structural_stop, profit_protect
 winner handling: hold to resolution when the side remains favorable
 post-resolution: awaiting_redeem state, no new entries until claim/redeem is handled
 ```
 
-Default real quantity is now `6` shares:
+Default real quantity is `6` shares while the runner is still in supervised test mode:
 
 ```text
 POLY_CURRENT_ALMOST_RESOLVED_QTY=6
 ```
 
-The technical minimum remains `5`, but `6` is the operational default because fills/residuals can end up around `4.99`, which can block a later limit close due to minimum order size.
+The technical minimum remains `5`, but `6` is the operational test default because fills/residuals can end up around `4.99`, which can block a later limit close due to minimum order size.
+
+Size roadmap:
+
+```text
+6 shares   -> supervised test size only
+50 shares  -> first production size target, because this is where maker rebates start to matter
+100 shares -> later target size, where 1 tick is approximately 1 USD
+```
+
+Do not move from `6` to `50` or `100` until the supervised real logs show that entries, stops, profit protection, resolution handling, and manual claim/redeem are behaving correctly.
 
 Recommended real start command on the configured wallet machine:
 
 ```powershell
 python run_live_current_almost_resolved_real_v1.py --preflight-only
-.\scripts\watch_current_almost_resolved_real.ps1 -Qty 6 -RunSeconds 300 -PollSeconds 0.5
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 300 -PollSeconds 0.5
+```
+
+The watcher now runs one cycle by default. This is the safer mode when you only want the bot active while you are monitoring it. To run a longer supervised session, increase `-RunSeconds`, for example:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 1800 -PollSeconds 0.5
+```
+
+After the test phase, the same runner can be started with larger size:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 50 -RunSeconds 1800 -PollSeconds 0.5
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 100 -RunSeconds 1800 -PollSeconds 0.5
+```
+
+Fill realism note: earlier papers can overstate passive fills because they cannot fully model queue position. The real runner logs `entry_order_style`, `entry_order_type`, and immediate broker `size_matched`. For conservative paper comparisons, require repeated visible touches before counting a passive fill:
+
+```powershell
+python diagnostics_current_almost_resolved_paper_v1.py --seconds 21600 --poll-secs 2.0 --hold-winner-to-resolution --hybrid-passive-to-aggressive --passive-fill-touch-polls 2 --log-file logs\current_almost_resolved_conservative_fill.jsonl
+```
+
+Use continuous restart mode only while you are actively watching the machine:
+
+```powershell
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 6 -RunSeconds 300 -PollSeconds 0.5 -Continuous
 ```
 
 Operational checklist after `git pull` on another machine:
@@ -300,6 +336,8 @@ POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION=true
 POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED=false
 ```
 
+The watcher sets these guard flags for the current PowerShell process only when `-ArmReal` is passed. Credentials still need to come from `.env` or the machine environment.
+
 Important post-resolution behavior:
 
 ```text
@@ -309,6 +347,36 @@ mode = awaiting_redeem
 
 In this state the bot does not open new entries. The winning position must be claimed/redeemed manually on Polymarket, then the state can be cleared after confirming the USDC returned to the portfolio.
 ```
+
+Stop instructions:
+
+```text
+If running in the foreground, press Ctrl+C.
+If a position is already open, do not kill the terminal blindly; first check the current log/state and let the runner flatten or reach awaiting_redeem.
+If using -Continuous, Ctrl+C stops future cycles only after interrupting the current process.
+```
+
+### Manual Guardian
+
+For manual entries, run the guardian that adopts manual current BTC 5m positions and manages exits:
+
+```powershell
+.\scripts\watch_manual_adopt_current_almost_resolved.ps1 -ArmReal -RunSeconds 1800 -PollSeconds 0.5 -MinAdoptQty 1
+```
+
+Behavior:
+
+```text
+entry remains manual
+adopts one manual BUY order, or an already-filled UP/DOWN token balance
+manages stop, structural_stop, and profit_protect
+does not take target by default
+holds winner to resolution by default
+after resolution writes awaiting_redeem and waits for manual claim/redeem
+state file: logs/current_almost_resolved_manual_adopt_state.json
+```
+
+Do not run this manual guardian together with the autonomous almost-resolved real runner on the same account.
 
 ### Counter-Reversal Runner
 
