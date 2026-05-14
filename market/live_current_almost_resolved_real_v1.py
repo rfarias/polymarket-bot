@@ -257,6 +257,26 @@ def _clamp_limit_price(price: float, *, tick_size: float) -> float:
     return round(bounded, 6)
 
 
+def _should_await_platform_redeem(
+    trade: LiveCurrentAlmostResolvedTradeState,
+    *,
+    active_bid: float,
+    tick_size: float,
+    current_secs: Optional[int],
+    current_slug: Optional[str],
+    hold_winner_to_resolution: bool,
+) -> bool:
+    if not hold_winner_to_resolution:
+        return False
+    if not trade.token_id or not trade.side:
+        return False
+    tick = max(0.001, _safe_float(tick_size, 0.001))
+    event_rolled = bool(current_slug and trade.event_slug and current_slug != trade.event_slug)
+    at_resolution_price = _safe_float(active_bid, 0.0) >= 1.0 - tick
+    settle_window = current_secs is not None and current_secs <= 1
+    return event_rolled or settle_window or at_resolution_price
+
+
 def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: float, buffer_usd: float = 0.25) -> bool:
     required = round(float(entry_price) * float(qty) + float(buffer_usd), 6)
     return _collateral_balance_usd(broker) >= required
@@ -1038,12 +1058,25 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         or (current_item and trade.event_slug and current_item.get("slug") != trade.event_slug)
                     )
                 )
-                if reached_resolution:
+                platform_redeem_path = _should_await_platform_redeem(
+                    trade,
+                    active_bid=active_bid,
+                    tick_size=tick_size,
+                    current_secs=current_secs,
+                    current_slug=str(current_item.get("slug") or "") if current_item else None,
+                    hold_winner_to_resolution=hold_winner_to_resolution,
+                )
+                if reached_resolution or platform_redeem_path:
                     side_won = _side_winning(trade.side, signed_distance)
+                    awaiting_reason = (
+                        "platform_redeem_path_awaiting_final_balance"
+                        if platform_redeem_path and not reached_resolution
+                        else "resolution_win_awaiting_redeem" if side_won else "resolution_loss_or_unknown_awaiting_final_balance"
+                    )
                     trade = _mark_awaiting_redeem(
                         trade,
                         now=now,
-                        reason="resolution_win_awaiting_redeem" if side_won else "resolution_loss_or_unknown_awaiting_final_balance",
+                        reason=awaiting_reason,
                     )
                     _save_state(state_path, trade)
                     _append_jsonl(
@@ -1055,6 +1088,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             "side_won": side_won,
                             "signed_distance_from_open_bps": signed_distance,
                             "active_bid": active_bid,
+                            "platform_redeem_path": platform_redeem_path,
                             "trade": _trade_summary(trade),
                         },
                     )
@@ -1104,7 +1138,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "trade": _trade_summary(trade),
                     },
                 )
-                if _is_flat_qty(token_balance_qty) and not trade.redeem_required:
+                if _is_flat_qty(token_balance_qty):
+                    _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
 
@@ -1116,6 +1151,21 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "exit_order": None, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
+                    elif _should_await_platform_redeem(
+                        trade,
+                        active_bid=active_bid,
+                        tick_size=_tick_size_from_snap(current_snap, trade.side or "UP"),
+                        current_secs=current_secs,
+                        current_slug=str(current_item.get("slug") or "") if current_item else None,
+                        hold_winner_to_resolution=hold_winner_to_resolution,
+                    ):
+                        trade = _mark_awaiting_redeem(
+                            trade,
+                            now=now,
+                            reason=f"pending_exit_platform_redeem_path:{round(token_balance_qty, 6)}",
+                        )
+                        _save_state(state_path, trade)
+                        _append_jsonl(log_path, {"type": "awaiting_redeem", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "active_bid": active_bid, "trade": _trade_summary(trade)})
                     elif now - trade.updated_at >= exit_repost_secs:
                         trade = _post_exit_order(
                             broker,
