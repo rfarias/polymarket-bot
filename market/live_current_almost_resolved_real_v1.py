@@ -115,6 +115,8 @@ class LiveCurrentAlmostResolvedTradeState:
     entry_order_id: Optional[str] = None
     exit_order_id: Optional[str] = None
     entry_order_style: str = "unknown"  # passive_limit | aggressive_limit | direct_limit | unknown
+    entry_order_type: str = "GTC"
+    entry_initial_size_matched: float = 0.0
     setup_variant: Optional[str] = None
     entry_price: Optional[float] = None
     entry_qty_requested: float = 0.0
@@ -359,15 +361,18 @@ def _post_entry_order(
     cfg: CurrentAlmostResolvedConfigV1,
     entry_price_override: Optional[float] = None,
     order_style: str = "direct_limit",
+    aggressive_entry_fak: bool = True,
 ) -> LiveCurrentAlmostResolvedTradeState:
     side = str(signal.get("side") or "")
     entry_price = _safe_float(entry_price_override, _safe_float(signal.get("entry_price"), 0.0))
+    order_type = "FAK" if order_style == "aggressive_limit" and aggressive_entry_fak else "GTC"
     trade = LiveCurrentAlmostResolvedTradeState(
         mode="pending_entry",
         event_slug=str(signal.get("event_slug") or ""),
         side=side,
         token_id=_token_id_for_side(snap, side),
         entry_order_style=order_style,
+        entry_order_type=order_type,
         setup_variant=str(signal.get("setup_variant") or "standard"),
         entry_price=entry_price,
         entry_qty_requested=float(qty),
@@ -390,12 +395,16 @@ def _post_entry_order(
         side="BUY",
         price=entry_price,
         size=float(qty),
+        order_type=order_type,
         market_slug=trade.event_slug,
         outcome=side,
         client_order_key=f"current_almost_resolved:entry:{order_style}:{int(now)}:{side}",
     )
     order = broker.place_limit_order(req)
     trade.entry_order_id = order.order_id
+    trade.entry_initial_size_matched = _safe_float(getattr(order, "size_matched", None), 0.0)
+    trade.entry_qty_filled = max(trade.entry_qty_filled, trade.entry_initial_size_matched)
+    trade.last_reason = f"entry_posted:{order_style}:{order_type.lower()}:matched={round(trade.entry_initial_size_matched, 6)}"
     return trade
 
 
@@ -670,6 +679,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     hybrid_entry_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_ENTRY", True)
     hybrid_aggressive_after_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_AFTER_SECS", 1.5)
     hybrid_aggressive_max_price = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_MAX_PRICE", 0.99)
+    aggressive_entry_fak = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AGGRESSIVE_ENTRY_FAK", True)
     hold_winner_to_resolution = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION", True)
     resolution_settle_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_RESOLUTION_SETTLE_SECS", 1)
     auto_redeem_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED", False)
@@ -693,6 +703,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
             "hybrid_entry_enabled": hybrid_entry_enabled,
             "hybrid_aggressive_after_secs": hybrid_aggressive_after_secs,
             "hybrid_aggressive_max_price": hybrid_aggressive_max_price,
+            "aggressive_entry_fak": aggressive_entry_fak,
             "hold_winner_to_resolution": hold_winner_to_resolution,
             "resolution_settle_secs": resolution_settle_secs,
             "auto_redeem_enabled": auto_redeem_enabled,
@@ -848,6 +859,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     cfg=signal_cfg,
                     entry_price_override=entry_price,
                     order_style=order_style,
+                    aggressive_entry_fak=aggressive_entry_fak,
                 )
                 _save_state(state_path, trade)
                 _append_jsonl(
@@ -953,6 +965,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             cfg=signal_cfg,
                             entry_price_override=round(aggressive_price, 6),
                             order_style="aggressive_limit",
+                            aggressive_entry_fak=aggressive_entry_fak,
                         )
                         _save_state(state_path, trade)
                         _append_jsonl(

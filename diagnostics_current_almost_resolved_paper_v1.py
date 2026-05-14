@@ -55,6 +55,7 @@ class PaperOrder:
     order_style: str = "passive_limit"  # passive_limit | aggressive_limit
     total_qty: float = 50.0
     filled_qty: float = 0.0
+    touch_polls: int = 0
     created_at: float = 0.0
     updated_at: float = 0.0
 
@@ -382,6 +383,12 @@ def main() -> int:
         help="Maximum buy limit price allowed for the aggressive replacement order.",
     )
     parser.add_argument(
+        "--passive-fill-touch-polls",
+        type=int,
+        default=1,
+        help="Require N consecutive visible touches before paper fills a passive order. Use >1 for conservative fill simulation.",
+    )
+    parser.add_argument(
         "--hold-winner-to-resolution",
         action="store_true",
         help="Do not exit by target/deadline/timeout; keep stop/profit-protection and settle near resolution.",
@@ -558,7 +565,9 @@ def main() -> int:
                 tick_size = _tick_size_from_snap(current_snap, order.side)
                 remaining_qty = max(0.0, _safe_float(order.total_qty, args.order_qty) - _safe_float(order.filled_qty, 0.0))
                 available_qty = _available_ask_qty_at_or_below(current_snap, order.side, _safe_float(order.limit_price, 0.0))
-                fill_qty = round(min(remaining_qty, available_qty), 6)
+                order.touch_polls = order.touch_polls + 1 if available_qty > 0 else 0
+                min_touch_polls = 1 if order.order_style == "aggressive_limit" else max(1, int(args.passive_fill_touch_polls))
+                fill_qty = round(min(remaining_qty, available_qty), 6) if order.touch_polls >= min_touch_polls else 0.0
                 if (
                     fill_qty <= 0
                     and args.hybrid_passive_to_aggressive
@@ -587,8 +596,10 @@ def main() -> int:
                         pprint({"from": asdict(order), "raw_ask": raw_ask, "limit_price": aggressive_price})
                         order.limit_price = aggressive_price
                         order.order_style = "aggressive_limit"
+                        order.touch_polls = 0
                         order.updated_at = now
                         available_qty = _available_ask_qty_at_or_below(current_snap, order.side, aggressive_price)
+                        order.touch_polls = order.touch_polls + 1 if available_qty > 0 else 0
                         fill_qty = round(min(remaining_qty, available_qty), 6)
                     else:
                         order_events["aggressive_limit_skip"] += 1
@@ -633,6 +644,8 @@ def main() -> int:
                             "ts": now,
                             "fill_qty": fill_qty,
                             "available_qty": available_qty,
+                            "touch_polls": order.touch_polls,
+                            "passive_fill_touch_polls": int(args.passive_fill_touch_polls),
                             "signal": filled_signal,
                             "order": asdict(order),
                             "trade": asdict(trade),

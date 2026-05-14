@@ -194,7 +194,7 @@ class PolymarketBrokerV3(BrokerInterface):
                     side=str(req.side).upper(),
                     price=float(req.price),
                     original_size=float(req.size),
-                    size_matched=0.0,
+                    size_matched=float(resp.get("size_matched") or resp.get("matched_size") or resp.get("matchedSize") or 0.0),
                     status=str(resp.get("status") or "posted").lower(),
                     outcome=req.outcome,
                     market_slug=req.market_slug,

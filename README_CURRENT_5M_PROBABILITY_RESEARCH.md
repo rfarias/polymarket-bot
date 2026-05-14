@@ -245,6 +245,7 @@ entry: hybrid limit
   1. post passive limit 1 tick below current executable entry
   2. if still valid and unfilled after 1.5s, cancel passive order
   3. only after cancel confirmation, post aggressive/marketable limit at current ask
+  4. aggressive entry is limit FAK by default, so it should fill immediately or not rest
 target: disabled in guardian hold mode
 exits: stop, structural_stop, profit_protect
 winner handling: hold to resolution when the side remains favorable
@@ -287,6 +288,12 @@ After the test phase, the same runner can be started with larger size:
 ```powershell
 .\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 50 -RunSeconds 1800 -PollSeconds 0.5
 .\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -Qty 100 -RunSeconds 1800 -PollSeconds 0.5
+```
+
+Fill realism note: earlier papers can overstate passive fills because they cannot fully model queue position. The real runner logs `entry_order_style`, `entry_order_type`, and immediate broker `size_matched`. For conservative paper comparisons, require repeated visible touches before counting a passive fill:
+
+```powershell
+python diagnostics_current_almost_resolved_paper_v1.py --seconds 21600 --poll-secs 2.0 --hold-winner-to-resolution --hybrid-passive-to-aggressive --passive-fill-touch-polls 2 --log-file logs\current_almost_resolved_conservative_fill.jsonl
 ```
 
 Use continuous restart mode only while you are actively watching the machine:

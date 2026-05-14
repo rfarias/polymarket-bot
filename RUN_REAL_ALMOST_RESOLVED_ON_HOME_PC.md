@@ -111,10 +111,17 @@ entry: hybrid limit
 qty: controlled by -Qty, test default is 6 shares
 first entry attempt: passive limit 1 tick below executable entry
 second attempt: cancel passive, then aggressive/marketable limit at current ask, max 0.99
+aggressive entry order type: limit FAK by default, so it either fills immediately or does not rest
 0.99 case: allowed when market is almost fully resolved and distance/buffer filters pass
 target: disabled while holding winner to resolution
 exit before resolution: stop, structural_stop, profit_protect
 post resolution: awaiting_redeem state blocks new entries
+```
+
+The real runner logs `entry_order_style`, `entry_order_type`, and the immediate matched size returned by the broker. This is important because earlier paper results could overstate fills from passive orders. For conservative paper comparisons, rerun the paper with:
+
+```powershell
+python diagnostics_current_almost_resolved_paper_v1.py --seconds 21600 --poll-secs 2.0 --hold-winner-to-resolution --hybrid-passive-to-aggressive --passive-fill-touch-polls 2 --log-file logs\current_almost_resolved_conservative_fill.jsonl
 ```
 
 ## 6. While Running
