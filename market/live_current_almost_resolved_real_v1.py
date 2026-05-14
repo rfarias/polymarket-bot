@@ -63,6 +63,11 @@ def _exception_message(exc: Exception) -> str:
     return text if text else repr(exc)
 
 
+def _is_fak_no_match_exception(exc: Exception) -> bool:
+    text = _exception_message(exc).lower()
+    return "no orders found to match with fak order" in text
+
+
 def _append_jsonl(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -886,18 +891,37 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     current_ask = _ask_for_side(current_exec, side)
                     if current_ask > 0 and entry_price >= current_ask:
                         order_style = "aggressive_limit"
-                trade = _post_entry_order(
-                    broker,
-                    signal=signal,
-                    snap=current_snap,
-                    qty=qty,
-                    tick_size=tick_size,
-                    now=now,
-                    cfg=signal_cfg,
-                    entry_price_override=entry_price,
-                    order_style=order_style,
-                    aggressive_entry_fak=aggressive_entry_fak,
-                )
+                try:
+                    trade = _post_entry_order(
+                        broker,
+                        signal=signal,
+                        snap=current_snap,
+                        qty=qty,
+                        tick_size=tick_size,
+                        now=now,
+                        cfg=signal_cfg,
+                        entry_price_override=entry_price,
+                        order_style=order_style,
+                        aggressive_entry_fak=aggressive_entry_fak,
+                    )
+                except Exception as exc:
+                    if order_style == "aggressive_limit" and aggressive_entry_fak and _is_fak_no_match_exception(exc):
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "entry_fak_no_match",
+                                "ts": now,
+                                "session_id": session_id,
+                                "stage": "initial_entry",
+                                "error": f"{type(exc).__name__}: {_exception_message(exc)}",
+                                "signal": signal,
+                                "entry_order_style": order_style,
+                                "posted_entry_price": entry_price,
+                            },
+                        )
+                        time.sleep(poll_secs)
+                        continue
+                    raise
                 _save_state(state_path, trade)
                 _append_jsonl(
                     log_path,
@@ -992,18 +1016,40 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             continue
                         replaced_from = _trade_summary(trade)
                         tick_size = _tick_size_from_snap(current_snap, trade.side or "UP")
-                        trade = _post_entry_order(
-                            broker,
-                            signal=signal,
-                            snap=current_snap,
-                            qty=qty,
-                            tick_size=tick_size,
-                            now=now,
-                            cfg=signal_cfg,
-                            entry_price_override=round(aggressive_price, 6),
-                            order_style="aggressive_limit",
-                            aggressive_entry_fak=aggressive_entry_fak,
-                        )
+                        try:
+                            trade = _post_entry_order(
+                                broker,
+                                signal=signal,
+                                snap=current_snap,
+                                qty=qty,
+                                tick_size=tick_size,
+                                now=now,
+                                cfg=signal_cfg,
+                                entry_price_override=round(aggressive_price, 6),
+                                order_style="aggressive_limit",
+                                aggressive_entry_fak=aggressive_entry_fak,
+                            )
+                        except Exception as exc:
+                            if aggressive_entry_fak and _is_fak_no_match_exception(exc):
+                                trade = LiveCurrentAlmostResolvedTradeState()
+                                _clear_state(state_path)
+                                _append_jsonl(
+                                    log_path,
+                                    {
+                                        "type": "entry_fak_no_match",
+                                        "ts": now,
+                                        "session_id": session_id,
+                                        "stage": "replace_aggressive",
+                                        "cancel": cancel_resp,
+                                        "from_trade": replaced_from,
+                                        "aggressive_price": aggressive_price,
+                                        "error": f"{type(exc).__name__}: {_exception_message(exc)}",
+                                        "signal": signal,
+                                    },
+                                )
+                                time.sleep(poll_secs)
+                                continue
+                            raise
                         _save_state(state_path, trade)
                         _append_jsonl(
                             log_path,
