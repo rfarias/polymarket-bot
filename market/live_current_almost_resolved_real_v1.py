@@ -54,6 +54,15 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(default)
 
 
+def _exception_message(exc: Exception) -> str:
+    for attr in ("error_msg", "msg"):
+        value = getattr(exc, attr, None)
+        if value:
+            return str(value)
+    text = str(exc)
+    return text if text else repr(exc)
+
+
 def _append_jsonl(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -237,6 +246,12 @@ def _is_flat_qty(qty: float, epsilon: float = 0.000001) -> bool:
 
 def _is_match_status(status: Optional[str]) -> bool:
     return str(status or "").lower() in ("matched", "filled", "closed", "resolved")
+
+
+def _clamp_limit_price(price: float, *, tick_size: float) -> float:
+    tick = max(0.001, _safe_float(tick_size, 0.001))
+    bounded = min(max(tick, _safe_float(price, tick)), 1.0 - tick)
+    return round(bounded, 6)
 
 
 def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: float, buffer_usd: float = 0.25) -> bool:
@@ -432,9 +447,11 @@ def _post_exit_order(
             trade.mode = "pending_exit"
             trade.exit_order_id = None
             trade.updated_at = now
-            trade.last_reason = f"close_failed_residual_position:{round(qty, 6)}:{type(exc).__name__}"
+            trade.last_reason = f"close_failed_residual_position:{round(qty, 6)}:{type(exc).__name__}:{_exception_message(exc)}"
             return trade
-    post_price = float(exit_price) if exit_price > 0 else 0.01
+    active_book = _fetch_active_book(trade)
+    tick_size = _safe_float((active_book or {}).get("tick_size"), 0.001)
+    post_price = _clamp_limit_price(float(exit_price) if exit_price > 0 else tick_size, tick_size=tick_size)
     req = BrokerOrderRequest(
         token_id=trade.token_id or "",
         side="SELL",
@@ -455,7 +472,7 @@ def _post_exit_order(
         trade.mode = "pending_exit"
         trade.exit_order_id = None
         trade.updated_at = now
-        trade.last_reason = f"close_failed_residual_position:{round(qty, 6)}:{type(exc).__name__}"
+        trade.last_reason = f"close_failed_residual_position:{round(qty, 6)}:{type(exc).__name__}:{_exception_message(exc)}"
     return trade
 
 
