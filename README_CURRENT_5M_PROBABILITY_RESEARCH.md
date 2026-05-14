@@ -227,6 +227,67 @@ Conclusion: previous candle and `next_1` odds are context only for now. They are
 
 ## Runners Added
 
+### Current Almost-Resolved Guardian Runner
+
+Files:
+
+```text
+market/live_current_almost_resolved_real_v1.py
+run_live_current_almost_resolved_real_v1.py
+scripts/watch_current_almost_resolved_real.ps1
+```
+
+Current operating line:
+
+```text
+setup: current almost-resolved
+entry: hybrid limit
+  1. post passive limit 1 tick below current executable entry
+  2. if still valid and unfilled after 1.5s, cancel passive order
+  3. only after cancel confirmation, post aggressive/marketable limit at current ask
+target: disabled in guardian hold mode
+exits: stop, structural_stop, profit_protect
+winner handling: hold to resolution when the side remains favorable
+post-resolution: awaiting_redeem state, no new entries until claim/redeem is handled
+```
+
+Default real quantity is now `6` shares:
+
+```text
+POLY_CURRENT_ALMOST_RESOLVED_QTY=6
+```
+
+The technical minimum remains `5`, but `6` is the operational default because fills/residuals can end up around `4.99`, which can block a later limit close due to minimum order size.
+
+Recommended real start command on the configured wallet machine:
+
+```powershell
+python run_live_current_almost_resolved_real_v1.py --preflight-only
+.\scripts\watch_current_almost_resolved_real.ps1 -Qty 6 -RunSeconds 300 -PollSeconds 0.5
+```
+
+Required real flags:
+
+```text
+POLY_GUARDED_ENABLED=true
+POLY_GUARDED_SHADOW_ONLY=false
+POLY_GUARDED_REAL_POSTS_ENABLED=true
+POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED=true
+POLY_CURRENT_ALMOST_RESOLVED_HYBRID_ENTRY=true
+POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION=true
+POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED=false
+```
+
+Important post-resolution behavior:
+
+```text
+If a position is held to resolution, the bot writes:
+logs/current_almost_resolved_real_state.json
+mode = awaiting_redeem
+
+In this state the bot does not open new entries. The winning position must be claimed/redeemed manually on Polymarket, then the state can be cleared after confirming the USDC returned to the portfolio.
+```
+
 ### Counter-Reversal Runner
 
 Files:
@@ -337,4 +398,3 @@ avoid high source divergence and wide spread
 exit/stop mechanically
 log every decision
 ```
-

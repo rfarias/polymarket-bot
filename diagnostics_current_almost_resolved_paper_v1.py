@@ -52,6 +52,7 @@ class PaperOrder:
     slug: str | None = None
     side: str | None = None
     limit_price: float | None = None
+    order_style: str = "passive_limit"  # passive_limit | aggressive_limit
     total_qty: float = 50.0
     filled_qty: float = 0.0
     created_at: float = 0.0
@@ -201,6 +202,8 @@ def _paper_manage(
     secs_to_end: int | None,
     signal: dict,
     cfg: CurrentAlmostResolvedConfigV1,
+    hold_winner_to_resolution: bool = False,
+    resolution_settle_secs: int = 1,
 ) -> PaperTrade:
     if trade.mode != "open":
         return trade
@@ -219,6 +222,10 @@ def _paper_manage(
     setup_variant = str(trade.setup_variant or signal.get("setup_variant") or "standard")
     entry_buffer_bps = _safe_float(trade.entry_buffer_bps, buffer_bps)
     entry_distance_bps = _safe_float(trade.entry_distance_bps, open_distance_bps)
+    signed_distance_from_open_bps = _safe_float(signal.get("signed_distance_from_open_bps"), 0.0)
+    side_winning = (side == "UP" and signed_distance_from_open_bps > 0) or (
+        side == "DOWN" and signed_distance_from_open_bps < 0
+    )
     resolved_pullback_late_hold = (
         setup_variant == "resolved_pullback_limit"
         and secs_to_end is not None
@@ -267,7 +274,15 @@ def _paper_manage(
     elif resolved_pullback_late_hold:
         trade.hold_to_resolution = True
 
-    if bid_now >= _safe_float(trade.target_price) and (setup_variant != "resolved_pullback_limit" or resolved_pullback_early_target_ok):
+    if hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= resolution_settle_secs:
+        trade.mode = "idle"
+        trade.exit_price = 1.0 if side_winning else 0.0
+        trade.exit_reason = "resolution_win" if side_winning else "resolution_loss"
+    elif (
+        not hold_winner_to_resolution
+        and bid_now >= _safe_float(trade.target_price)
+        and (setup_variant != "resolved_pullback_limit" or resolved_pullback_early_target_ok)
+    ):
         trade.mode = "idle"
         trade.exit_price = bid_now
         trade.exit_reason = "target"
@@ -279,7 +294,7 @@ def _paper_manage(
         pnl_ticks_now >= cfg.paper_profit_take_min_ticks
         and not resolved_pullback_late_hold
         and (
-            (secs_to_end is not None and secs_to_end <= cfg.paper_profit_take_late_secs)
+            (not hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= cfg.paper_profit_take_late_secs)
             or buffer_bps <= cfg.paper_profit_take_on_reversal_buffer_bps
             or market_range_30s >= cfg.paper_profit_take_on_market_range_30s
             or adverse_spot_bps >= open_distance_bps * cfg.max_reversal_share_of_open_distance
@@ -290,6 +305,7 @@ def _paper_manage(
         trade.exit_reason = "profit_protect"
     elif (
         pnl_ticks_now > 0
+        and not hold_winner_to_resolution
         and not trade.hold_to_resolution
         and secs_to_end is not None
         and secs_to_end <= cfg.paper_hold_to_resolution_secs
@@ -306,11 +322,11 @@ def _paper_manage(
         trade.mode = "idle"
         trade.exit_price = bid_now if bid_now > 0 else trade.entry_price
         trade.exit_reason = "structural_stop"
-    elif secs_to_end is not None and secs_to_end <= cfg.min_secs_to_end:
+    elif not hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= cfg.min_secs_to_end:
         trade.mode = "idle"
         trade.exit_price = bid_now if bid_now > 0 else trade.entry_price
         trade.exit_reason = "deadline"
-    elif not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
+    elif not hold_winner_to_resolution and not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
         trade.mode = "idle"
         trade.exit_price = bid_now if bid_now > 0 else trade.entry_price
         trade.exit_reason = "timeout"
@@ -346,6 +362,34 @@ def main() -> int:
     parser.add_argument("--passive-capture-only", action="store_true", help="Only simulate passive extreme-liquidity-capture entries")
     parser.add_argument("--order-qty", type=float, default=50.0, help="Passive paper order size in contracts")
     parser.add_argument("--maker-rebate-bps", type=float, default=0.0, help="Estimated maker rebate in bps of filled notional")
+    parser.add_argument(
+        "--hybrid-passive-to-aggressive",
+        action="store_true",
+        help="Post passive one-tick-below entries first, then replace with a marketable limit if still unfilled.",
+    )
+    parser.add_argument(
+        "--hybrid-aggressive-after-secs",
+        type=float,
+        default=1.5,
+        help="Seconds to wait before replacing an unfilled passive order with an aggressive limit.",
+    )
+    parser.add_argument(
+        "--hybrid-aggressive-max-price",
+        type=float,
+        default=0.99,
+        help="Maximum buy limit price allowed for the aggressive replacement order.",
+    )
+    parser.add_argument(
+        "--hold-winner-to-resolution",
+        action="store_true",
+        help="Do not exit by target/deadline/timeout; keep stop/profit-protection and settle near resolution.",
+    )
+    parser.add_argument(
+        "--resolution-settle-secs",
+        type=int,
+        default=1,
+        help="When holding to resolution, mark the trade as 1.00/0.00 this many seconds before the end.",
+    )
     args = parser.parse_args()
 
     signal_cfg = CurrentAlmostResolvedConfigV1()
@@ -413,8 +457,11 @@ def main() -> int:
             reference_signal=current_scalp_signal,
             cfg=signal_cfg,
         )
+        signal = dict(signal)
+        signal["current_slug"] = current_item.get("slug")
+        signal["signed_distance_from_open_bps"] = current_scalp_signal.get("distance_from_open_bps")
+        signal["guardian_hold_winner_to_resolution"] = bool(args.hold_winner_to_resolution)
         if args.passive_capture_only and signal.get("setup_variant") != "passive_extreme_liquidity_capture":
-            signal = dict(signal)
             signal["allow"] = False
             signal["reason"] = f"passive_capture_only_skipped_{signal.get('setup_variant') or 'none'}"
 
@@ -473,13 +520,19 @@ def main() -> int:
         leader_price = _safe_float(signal.get("leader_price"), 0.0)
         leader_key = f"{signal_slug}:{signal_side}"
         previous_leader_price = last_leader_price_by_key.get(leader_key)
+        hybrid_limit_signal = bool(args.hybrid_passive_to_aggressive and signal.get("allow") and signal_side in ("UP", "DOWN"))
+        staged_limit_signal = bool(passive_signal or hybrid_limit_signal)
 
         if order.active:
+            signal_order_reference_price = _safe_float(
+                signal.get("limit_price"),
+                _safe_float(signal.get("entry_price"), 0.0),
+            )
             order_still_valid = (
-                passive_signal
+                staged_limit_signal
                 and order.slug == signal_slug
                 and order.side == signal_side
-                and _safe_float(signal.get("limit_price"), 0.0) >= _safe_float(order.limit_price, 0.0)
+                and signal_order_reference_price >= _safe_float(order.limit_price, 0.0)
             )
             too_late = current_secs is not None and current_secs <= signal_cfg.min_secs_to_end
             if not order_still_valid or too_late:
@@ -503,13 +556,63 @@ def main() -> int:
                 remaining_qty = max(0.0, _safe_float(order.total_qty, args.order_qty) - _safe_float(order.filled_qty, 0.0))
                 available_qty = _available_ask_qty_at_or_below(current_snap, order.side, _safe_float(order.limit_price, 0.0))
                 fill_qty = round(min(remaining_qty, available_qty), 6)
+                if (
+                    fill_qty <= 0
+                    and args.hybrid_passive_to_aggressive
+                    and order.order_style == "passive_limit"
+                    and staged_limit_signal
+                    and trade.mode == "idle"
+                    and now - _safe_float(order.created_at, now) >= max(0.0, float(args.hybrid_aggressive_after_secs))
+                ):
+                    raw_ask = _ask_for_side(current_snap, order.side)
+                    aggressive_price = round(raw_ask, 6) if raw_ask > 0 else 0.0
+                    if 0 < aggressive_price <= float(args.hybrid_aggressive_max_price):
+                        order_events["replace_aggressive_limit"] += 1
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "replace_aggressive_limit",
+                                "ts": now,
+                                "reason": "passive_unfilled_cross_current_ask",
+                                "passive_order": asdict(order),
+                                "raw_ask": raw_ask,
+                                "aggressive_limit_price": aggressive_price,
+                                "signal": signal,
+                            },
+                        )
+                        print("[PAPER_REPLACE_AGGRESSIVE_LIMIT]")
+                        pprint({"from": asdict(order), "raw_ask": raw_ask, "limit_price": aggressive_price})
+                        order.limit_price = aggressive_price
+                        order.order_style = "aggressive_limit"
+                        order.updated_at = now
+                        available_qty = _available_ask_qty_at_or_below(current_snap, order.side, aggressive_price)
+                        fill_qty = round(min(remaining_qty, available_qty), 6)
+                    else:
+                        order_events["aggressive_limit_skip"] += 1
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "aggressive_limit_skip",
+                                "ts": now,
+                                "reason": "ask_missing_or_above_max",
+                                "passive_order": asdict(order),
+                                "raw_ask": raw_ask,
+                                "max_price": float(args.hybrid_aggressive_max_price),
+                                "signal": signal,
+                            },
+                        )
                 if fill_qty > 0 and order.limit_price is not None:
                     was_idle = trade.mode == "idle"
                     order.filled_qty = round(_safe_float(order.filled_qty, 0.0) + fill_qty, 6)
                     order.updated_at = now
+                    filled_signal = dict(signal)
+                    filled_signal["entry_price"] = _safe_float(order.limit_price, 0.0)
+                    filled_signal["limit_price"] = _safe_float(order.limit_price, 0.0)
+                    filled_signal["execution_style"] = order.order_style
+                    filled_signal["hybrid_entry_style"] = order.order_style
                     trade = _apply_passive_fill(
                         trade,
-                        signal=signal,
+                        signal=filled_signal,
                         fill_price=_safe_float(order.limit_price, 0.0),
                         fill_qty=fill_qty,
                         tick_size=tick_size,
@@ -527,7 +630,7 @@ def main() -> int:
                             "ts": now,
                             "fill_qty": fill_qty,
                             "available_qty": available_qty,
-                            "signal": signal,
+                            "signal": filled_signal,
                             "order": asdict(order),
                             "trade": asdict(trade),
                         },
@@ -537,16 +640,20 @@ def main() -> int:
                     if order.filled_qty >= order.total_qty:
                         order = PaperOrder(total_qty=float(args.order_qty))
 
-        if passive_signal and trade.mode == "idle" and not order.active and signal_side in ("UP", "DOWN"):
-            tick_up_confirmed = previous_leader_price is None or leader_price > previous_leader_price
-            limit_price = _safe_float(signal.get("limit_price"), 0.0)
+        if staged_limit_signal and trade.mode == "idle" and not order.active and signal_side in ("UP", "DOWN"):
+            tick_up_confirmed = not passive_signal or previous_leader_price is None or leader_price > previous_leader_price
+            tick_size = _tick_size_from_snap(current_snap, signal_side)
+            default_limit_price = round(max(0.01, _safe_float(signal.get("entry_price"), 0.0) - tick_size), 6)
+            limit_price = _safe_float(signal.get("limit_price"), default_limit_price)
             raw_ask = _ask_for_side(current_snap, signal_side)
             if tick_up_confirmed and limit_price > 0 and (raw_ask <= 0 or limit_price < raw_ask):
+                order_style = "passive_limit"
                 order = PaperOrder(
                     active=True,
                     slug=signal_slug,
                     side=signal_side,
                     limit_price=limit_price,
+                    order_style=order_style,
                     total_qty=float(args.order_qty),
                     filled_qty=0.0,
                     created_at=now,
@@ -564,6 +671,7 @@ def main() -> int:
                         "tick_up_confirmed": tick_up_confirmed,
                         "previous_leader_price": previous_leader_price,
                         "raw_ask": raw_ask,
+                        "hybrid_limit_signal": hybrid_limit_signal,
                         "order": asdict(order),
                     },
                 )
@@ -585,6 +693,7 @@ def main() -> int:
                 )
         elif (
             not args.passive_capture_only
+            and not args.hybrid_passive_to_aggressive
             and not passive_signal
             and trade.mode == "idle"
             and signal.get("allow")
@@ -621,6 +730,8 @@ def main() -> int:
                 secs_to_end=current_secs,
                 signal=signal,
                 cfg=signal_cfg,
+                hold_winner_to_resolution=bool(args.hold_winner_to_resolution),
+                resolution_settle_secs=max(0, int(args.resolution_settle_secs)),
             )
             print("[PAPER_MANAGE]")
             pprint(asdict(trade))
