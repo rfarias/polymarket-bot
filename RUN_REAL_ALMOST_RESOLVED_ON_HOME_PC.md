@@ -121,7 +121,153 @@ post resolution: awaiting_redeem state blocks new entries
 The real runner logs `entry_order_style`, `entry_order_type`, and the immediate matched size returned by the broker. This is important because earlier paper results could overstate fills from passive orders. For conservative paper comparisons, rerun the paper with:
 
 ```powershell
-python diagnostics_current_almost_resolved_paper_v1.py --seconds 21600 --poll-secs 2.0 --hold-winner-to-resolution --hybrid-passive-to-aggressive --passive-fill-touch-polls 2 --log-file logs\current_almost_resolved_conservative_fill.jsonl
+python diagnostics_current_almost_resolved_paper_v1.py --seconds 21600 --poll-secs 1 --order-qty 6 --hybrid-passive-to-aggressive --hybrid-aggressive-after-secs 2 --hybrid-aggressive-max-price 0.99 --passive-fill-touch-polls 2 --hold-winner-to-resolution --resolution-settle-secs 1 --enable-gray-zone --log-file logs\current_almost_resolved_full_setup_paper_v1\full_setup_live.jsonl
+```
+
+Use the paper summary's `execution_funnel` before switching to real. The important comparison is not only profit, but conversion from `signal_allowed` to `trade_opened_from_fill`, plus how many candidates died at `aggressive_limit_skip`, `order_cancel`, or `watch_waiting_tick_or_post_only`.
+
+Also compare `stats.by_entry_order_style`. Keep aggressive replacement only if `aggressive_limit` adds meaningful positive PnL after conservative fill assumptions; otherwise run the real path without chasing.
+
+Before enabling any real split execution, test the paper-only split command from `README_ALMOST_RESOLVED_DYNAMIC_DISTANCE.md`. The split is meant only for clear winning `passive_extreme_liquidity_capture` cases that are becoming extreme resolved, not for generic entries.
+
+## 5.1 Future Go Runner
+
+The long-term objective is to make the bot execute as close as possible to the proven manual workflow: capture the same almost-resolved opportunities, avoid unnecessary risk, and prevent one bad exit from erasing many small gains.
+
+Do not rewrite the research stack first. Keep Python for:
+
+```text
+historical replay
+paper trading
+setup research
+diagnostics
+parameter comparisons
+log analysis
+```
+
+If real supervised logs confirm that execution latency/fill conversion is the main bottleneck, build a small Go runner only for the real-time execution layer:
+
+```text
+market data reader
+current almost-resolved signal evaluator
+passive/aggressive order executor
+cancel/repost loop
+stop/structural/profit-protect exits
+hard risk guards
+JSONL logs compatible with the Python analyzers
+```
+
+The Go version must start in dry-run/paper mode and be compared side by side with the Python paper/runner before any real orders. Success criteria are not only PnL; the important metrics are:
+
+```text
+signal_allowed -> order_posted conversion
+order_posted -> matched fill conversion
+fill price versus intended paper entry
+exit slippage during thin books
+number of missed manual-like opportunities
+number of prevented bad exits
+```
+
+Only consider Go for real execution after the Python runner has exposed the exact execution gaps we need to solve.
+
+## 5.2 Consistency And Risk Proportionality
+
+The main production goal is not to avoid every loss. Losses and entries that move against us are normal. The real requirement is that one bad trade cannot give back a full day or week of accumulated gains.
+
+Operational rule:
+
+```text
+acceptable loss = normal cost of doing business
+unacceptable loss = one event that erases many good hands
+```
+
+Every real entry must be evaluated against proportional loss, not only against entry quality. A setup should be allowed only when the realistic bad exit is proportional to the average gain of one or a few hands.
+
+Required safeguards before scaling size:
+
+```text
+fixed small size during validation
+max loss per trade known before entry
+max daily loss
+max consecutive bad exits
+pause after abnormal slippage
+liquidity check for exit, not only entry
+block entries where likely gain is 1-2 ticks but realistic bad exit is many ticks
+log theoretical stop and pessimistic stop separately
+```
+
+The bot should optimize for:
+
+```text
+more good fills
+bounded loss per failed idea
+fast recognition of a bad book
+no trade when the exit cannot be controlled
+```
+
+More entries are useful only if the worst realistic exit stays controlled. A missed trade is acceptable; an uncontrolled exit is not.
+
+The paper logs `signal.planned_exit_risk` for allowed signals. Check it before real execution:
+
+```text
+best_bid
+observed_bid_depth
+qty_at_or_above_stop
+vwap_exit_for_qty
+theoretical_stop_loss_ticks
+pessimistic_exit_loss_ticks
+enough_depth_for_qty
+exit_depth_covers_stop
+```
+
+If the theoretical stop is small but the pessimistic exit loss is large, treat the setup as unsafe even if the entry signal is good.
+
+## 5.3 Future Partially Autonomous Agent
+
+A partially autonomous agent can be added later, but it should not be the first real-money executor. The safer architecture is:
+
+```text
+deterministic runner = posts/cancels/exits orders under hard rules
+agent layer = observes, summarizes, ranks opportunities, suggests parameter changes
+human or hard policy = approves changes before real-money execution
+```
+
+The agent may analyze:
+
+```text
+current book behavior
+price-to-beat distance
+recent spot movement
+micro trend and reversal risk
+chart-like features
+missed manual-style opportunities
+slippage and failed exits
+```
+
+The agent must not bypass hard guards:
+
+```text
+max size
+max loss per trade
+max daily loss
+minimum exit liquidity
+allowed market types
+allowed time windows
+no entry during degraded data
+no averaging down without explicit rule
+```
+
+Chart analysis can help as an additional signal, especially for trend continuation, reversal risk, and whether the current move is stable or exhausted. It should be treated as a filter or confidence score first, not as permission to override execution risk.
+
+Near-term roadmap:
+
+```text
+1. finish reliable deterministic paper and real supervised runner
+2. measure fill conversion, slippage, and bad-exit frequency
+3. add chart/microstructure features to the logs
+4. train/evaluate an agent only as an advisor on historical and live paper data
+5. allow the agent to recommend, not execute
+6. consider limited autonomous decisions only after hard risk guards prove stable
 ```
 
 ## 6. While Running

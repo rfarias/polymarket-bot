@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from pprint import pprint
 
+from analyze_almost_resolved_gray_zone_v1 import _gray_candidate, _green_candidate
 from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
 from market.manual_overlay_v1 import ManualOverlayEngineV1
 from market.current_scalp_signal_v1 import (
@@ -42,8 +43,11 @@ class PaperTrade:
     estimated_maker_rebate: float = 0.0
     hold_to_resolution: bool = False
     setup_variant: str | None = None
+    source: str | None = None
+    entry_order_style: str | None = None
     entry_buffer_bps: float | None = None
     entry_distance_bps: float | None = None
+    entry_exit_risk: dict | None = None
 
 
 @dataclass
@@ -58,6 +62,32 @@ class PaperOrder:
     touch_polls: int = 0
     created_at: float = 0.0
     updated_at: float = 0.0
+
+
+def _split_entry_enabled_for_signal(signal: dict, *, current_secs: int | None, max_price: float) -> bool:
+    if current_secs is None or current_secs > 45:
+        return False
+    if str(signal.get("setup_variant") or "") != "passive_extreme_liquidity_capture":
+        return False
+    side = str(signal.get("side") or "")
+    if side not in ("UP", "DOWN"):
+        return False
+    leader = _safe_float(signal.get("leader_price"), _safe_float(signal.get("entry_price"), 0.0))
+    counter = _safe_float(signal.get("counter_price"), 1.0)
+    if leader < 0.98 or leader > max_price or counter > 0.03:
+        return False
+    if bool(signal.get("missing_market_midpoint_context")):
+        return False
+    side_key = side.lower()
+    if bool(signal.get(f"{side_key}_counter_alert")):
+        return False
+    distance_ok = bool(signal.get("passive_capture_safe_distance_ok")) or bool(signal.get("resolved_pullback_safe_distance_ok"))
+    if not distance_ok:
+        return False
+    market_range_30s = _safe_float(signal.get("market_range_30s"), 999.0)
+    if market_range_30s > 0.045:
+        return False
+    return True
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -135,6 +165,129 @@ def _available_ask_qty_at_or_below(snap: dict, side: str, limit_price: float) ->
     return round(qty, 6)
 
 
+def _bid_levels_for_side(snap: dict, side: str) -> list[dict]:
+    levels = _side_book(snap, side).get("top_bids") or []
+    return [level for level in levels if isinstance(level, dict)]
+
+
+def _exit_liquidity_risk(
+    snap: dict,
+    executable: dict | None,
+    *,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    qty: float,
+    tick_size: float,
+) -> dict:
+    side = side if side in ("UP", "DOWN") else "UP"
+    entry_price = _safe_float(entry_price, 0.0)
+    stop_price = _safe_float(stop_price, 0.0)
+    qty = max(0.0, _safe_float(qty, 0.0))
+    tick_size = max(0.001, _safe_float(tick_size, 0.01))
+    best_bid = _bid_for_side(executable, side)
+    levels = _bid_levels_for_side(snap, side)
+
+    qty_at_or_above_stop = 0.0
+    qty_at_best_three = 0.0
+    remaining = qty
+    notional = 0.0
+    worst_price_for_qty = 0.0
+    observed_bid_depth = 0.0
+
+    for idx, level in enumerate(levels):
+        price = _safe_float(level.get("price"), 0.0)
+        size = _safe_float(level.get("size"), 0.0)
+        if price <= 0 or size <= 0:
+            continue
+        observed_bid_depth += size
+        if price >= stop_price:
+            qty_at_or_above_stop += size
+        if idx < 3:
+            qty_at_best_three += size
+        if remaining > 0:
+            take = min(remaining, size)
+            notional += take * price
+            remaining = round(remaining - take, 6)
+            worst_price_for_qty = price
+
+    if qty <= 0:
+        vwap_exit_for_qty = best_bid
+        enough_depth_for_qty = True
+    elif remaining <= 0:
+        vwap_exit_for_qty = round(notional / qty, 6)
+        enough_depth_for_qty = True
+    else:
+        vwap_exit_for_qty = round(notional / max(0.000001, qty - remaining), 6) if notional > 0 else 0.0
+        enough_depth_for_qty = False
+
+    theoretical_stop_loss_ticks = (
+        round(max(0.0, entry_price - stop_price) / tick_size, 4) if entry_price > 0 and stop_price > 0 else None
+    )
+    best_bid_loss_ticks = (
+        round(max(0.0, entry_price - best_bid) / tick_size, 4) if entry_price > 0 and best_bid > 0 else None
+    )
+    pessimistic_exit_loss_ticks = (
+        round(max(0.0, entry_price - vwap_exit_for_qty) / tick_size, 4)
+        if entry_price > 0 and vwap_exit_for_qty > 0
+        else None
+    )
+    worst_level_loss_ticks = (
+        round(max(0.0, entry_price - worst_price_for_qty) / tick_size, 4)
+        if entry_price > 0 and worst_price_for_qty > 0
+        else None
+    )
+
+    return {
+        "side": side,
+        "entry_price": round(entry_price, 6) if entry_price > 0 else None,
+        "stop_price": round(stop_price, 6) if stop_price > 0 else None,
+        "qty": round(qty, 6),
+        "best_bid": round(best_bid, 6) if best_bid > 0 else None,
+        "bid_levels_seen": len(levels),
+        "observed_bid_depth": round(observed_bid_depth, 6),
+        "qty_at_or_above_stop": round(qty_at_or_above_stop, 6),
+        "qty_at_best_three": round(qty_at_best_three, 6),
+        "vwap_exit_for_qty": vwap_exit_for_qty if vwap_exit_for_qty > 0 else None,
+        "worst_price_for_qty": round(worst_price_for_qty, 6) if worst_price_for_qty > 0 else None,
+        "enough_depth_for_qty": bool(enough_depth_for_qty),
+        "theoretical_stop_loss_ticks": theoretical_stop_loss_ticks,
+        "best_bid_loss_ticks": best_bid_loss_ticks,
+        "pessimistic_exit_loss_ticks": pessimistic_exit_loss_ticks,
+        "worst_level_loss_ticks": worst_level_loss_ticks,
+        "exit_depth_covers_stop": bool(qty <= 0 or qty_at_or_above_stop >= qty),
+    }
+
+
+def _planned_exit_risk_for_signal(
+    snap: dict,
+    executable: dict | None,
+    signal: dict,
+    cfg: CurrentAlmostResolvedConfigV1,
+    *,
+    qty: float,
+) -> dict:
+    side = str(signal.get("side") or "")
+    if side not in ("UP", "DOWN"):
+        return {}
+    tick_size = _tick_size_from_snap(snap, side)
+    entry_price = _safe_float(
+        signal.get("limit_price"),
+        _safe_float(signal.get("entry_price"), _ask_for_side(snap, side)),
+    )
+    explicit_stop = _safe_float(signal.get("stop_price"), 0.0)
+    stop_price = explicit_stop if explicit_stop > 0 else round(max(0.01, entry_price - cfg.stop_ticks * tick_size), 6)
+    return _exit_liquidity_risk(
+        snap,
+        executable,
+        side=side,
+        entry_price=entry_price,
+        stop_price=stop_price,
+        qty=qty,
+        tick_size=tick_size,
+    )
+
+
 def _paper_enter(
     signal: dict,
     tick_size: float,
@@ -156,11 +309,14 @@ def _paper_enter(
         trade.stop_price = round(max(0.01, trade.entry_price - cfg.stop_ticks * tick_size), 6)
     trade.created_at = now
     trade.setup_variant = str(signal.get("setup_variant") or "standard")
+    trade.source = str(signal.get("paper_source") or signal.get("setup_variant") or "standard")
+    trade.entry_order_style = str(signal.get("hybrid_entry_style") or signal.get("execution_style") or "direct")
     trade.entry_buffer_bps = _safe_float(
         signal.get("up_price_to_beat_buffer_bps" if trade.side == "UP" else "down_price_to_beat_buffer_bps"),
         0.0,
     )
     trade.entry_distance_bps = abs(_safe_float(signal.get("distance_to_price_to_beat_bps"), 0.0))
+    trade.entry_exit_risk = signal.get("planned_exit_risk") if isinstance(signal.get("planned_exit_risk"), dict) else None
     trade.estimated_maker_rebate = round(trade.qty * trade.entry_price * maker_rebate_bps / 10000.0, 8)
     return trade
 
@@ -181,6 +337,12 @@ def _apply_passive_fill(
     if trade.mode != "open":
         filled_signal = dict(signal)
         filled_signal["entry_price"] = fill_price
+        if str(filled_signal.get("setup_variant") or "") == "gray_zone_target_stop":
+            target_ticks = int(_safe_float(filled_signal.get("gray_target_ticks"), 1.0))
+            stop_ticks = int(_safe_float(filled_signal.get("gray_stop_ticks"), cfg.stop_ticks))
+            filled_signal["exit_price"] = round(min(0.99, fill_price + target_ticks * tick_size), 6)
+            filled_signal["target_limit_price"] = filled_signal["exit_price"]
+            filled_signal["stop_price"] = round(max(0.01, fill_price - stop_ticks * tick_size), 6)
         return _paper_enter(filled_signal, tick_size, now, cfg, qty=fill_qty, maker_rebate_bps=maker_rebate_bps)
     old_qty = _safe_float(trade.qty, 0.0)
     old_notional = old_qty * _safe_float(trade.entry_price, 0.0)
@@ -205,6 +367,7 @@ def _paper_manage(
     cfg: CurrentAlmostResolvedConfigV1,
     hold_winner_to_resolution: bool = False,
     resolution_settle_secs: int = 1,
+    promote_to_hold: bool = False,
 ) -> PaperTrade:
     if trade.mode != "open":
         return trade
@@ -237,6 +400,10 @@ def _paper_manage(
         and secs_to_end is not None
         and secs_to_end > cfg.resolved_pullback_preferred_secs
     )
+    gray_zone = setup_variant == "gray_zone_target_stop"
+
+    if gray_zone and promote_to_hold:
+        trade.hold_to_resolution = True
 
     if (
         secs_to_end is not None
@@ -249,6 +416,23 @@ def _paper_manage(
         trade.hold_to_resolution = True
 
     if (
+        gray_zone
+        and not trade.hold_to_resolution
+        and bid_now >= _safe_float(trade.target_price)
+    ):
+        trade.mode = "idle"
+        trade.exit_price = bid_now
+        trade.exit_reason = "gray_target"
+    elif (
+        gray_zone
+        and not trade.hold_to_resolution
+        and secs_to_end is not None
+        and secs_to_end <= cfg.min_secs_to_end
+    ):
+        trade.mode = "idle"
+        trade.exit_price = bid_now if bid_now > 0 else trade.entry_price
+        trade.exit_reason = "gray_deadline"
+    elif (
         setup_variant == "controlled_late_entry"
         and pnl_ticks_now > 0
         and (
@@ -282,6 +466,7 @@ def _paper_manage(
     elif (
         not hold_winner_to_resolution
         and bid_now >= _safe_float(trade.target_price)
+        and not (gray_zone and trade.hold_to_resolution)
         and (setup_variant != "resolved_pullback_limit" or resolved_pullback_early_target_ok)
     ):
         trade.mode = "idle"
@@ -345,6 +530,29 @@ def _trade_stats(completed: list[dict]) -> dict:
     total_pnl_quote = round(sum(_safe_float(t.get("pnl_quote")) for t in completed), 6)
     total_estimated_rebate = round(sum(_safe_float(t.get("estimated_maker_rebate")) for t in completed), 8)
     total_qty = round(sum(_safe_float(t.get("qty")) for t in completed), 6)
+    by_entry_order_style: dict[str, dict[str, float | int]] = {}
+    by_setup_variant: dict[str, dict[str, float | int]] = {}
+    by_source: dict[str, dict[str, float | int]] = {}
+    for group_name, key in (
+        ("entry_order_style", "entry_order_style"),
+        ("setup_variant", "setup_variant"),
+        ("source", "source"),
+    ):
+        target = (
+            by_entry_order_style
+            if group_name == "entry_order_style"
+            else by_setup_variant
+            if group_name == "setup_variant"
+            else by_source
+        )
+        for trade in completed:
+            value = str(trade.get(key) or "unknown")
+            bucket = target.setdefault(value, {"completed": 0, "wins": 0, "losses": 0, "total_pnl_ticks": 0.0})
+            pnl = _safe_float(trade.get("pnl_ticks"))
+            bucket["completed"] = int(bucket["completed"]) + 1
+            bucket["wins"] = int(bucket["wins"]) + (1 if pnl > 0 else 0)
+            bucket["losses"] = int(bucket["losses"]) + (1 if pnl < 0 else 0)
+            bucket["total_pnl_ticks"] = round(float(bucket["total_pnl_ticks"]) + pnl, 4)
     return {
         "completed_trades": len(completed),
         "wins": sum(1 for t in completed if _safe_float(t.get("pnl_ticks")) > 0),
@@ -354,7 +562,25 @@ def _trade_stats(completed: list[dict]) -> dict:
         "total_pnl_quote": total_pnl_quote,
         "total_estimated_rebate": total_estimated_rebate,
         "total_filled_qty": total_qty,
+        "by_entry_order_style": by_entry_order_style,
+        "by_setup_variant": by_setup_variant,
+        "by_source": by_source,
     }
+
+
+def _safe_to_chase_aggressive_entry(signal: dict, *, ask_now: float, current_secs: int | None, max_price: float) -> bool:
+    if ask_now <= 0 or ask_now > max_price:
+        return False
+    if current_secs is None or current_secs > 35:
+        return False
+    if str(signal.get("setup_variant") or "") != "passive_extreme_liquidity_capture":
+        return False
+    side = str(signal.get("side") or "").lower()
+    if bool(signal.get("missing_market_midpoint_context")):
+        return False
+    if side and bool(signal.get(f"{side}_counter_alert")):
+        return False
+    return bool(signal.get("resolved_pullback_safe_distance_ok")) or bool(signal.get("passive_capture_safe_distance_ok"))
 
 
 def main() -> int:
@@ -389,6 +615,12 @@ def main() -> int:
         help="Require N consecutive visible touches before paper fills a passive order. Use >1 for conservative fill simulation.",
     )
     parser.add_argument(
+        "--split-extreme-entry",
+        action="store_true",
+        help="For extreme passive-capture signals only, fill half aggressively and leave half passive one tick below.",
+    )
+    parser.add_argument("--split-aggressive-frac", type=float, default=0.5)
+    parser.add_argument(
         "--hold-winner-to-resolution",
         action="store_true",
         help="Do not exit by target/deadline/timeout; keep stop/profit-protection and settle near resolution.",
@@ -399,6 +631,17 @@ def main() -> int:
         default=1,
         help="When holding to resolution, mark the trade as 1.00/0.00 this many seconds before the end.",
     )
+    parser.add_argument("--enable-gray-zone", action="store_true", help="Enable intermediate gray-zone target/stop entries.")
+    parser.add_argument("--gray-min-score", type=int, default=35)
+    parser.add_argument("--gray-max-score", type=int, default=84)
+    parser.add_argument("--gray-min-distance-usd", type=float, default=40.0)
+    parser.add_argument("--gray-min-distance-bps", type=float, default=5.0)
+    parser.add_argument("--gray-min-leader-price", type=float, default=0.98)
+    parser.add_argument("--gray-max-counter-price", type=float, default=0.03)
+    parser.add_argument("--gray-max-secs-to-end", type=int, default=75)
+    parser.add_argument("--gray-target-ticks", type=int, default=1)
+    parser.add_argument("--gray-stop-ticks", type=int, default=2)
+    parser.add_argument("--gray-allow-high-reversal", action="store_true")
     args = parser.parse_args()
 
     signal_cfg = CurrentAlmostResolvedConfigV1()
@@ -414,6 +657,8 @@ def main() -> int:
     entered_variants = Counter()
     exit_reasons = Counter()
     order_events = Counter()
+    execution_funnel = Counter()
+    gray_block_reasons = Counter()
     last_leader_price_by_key: dict[str, float] = {}
 
     print("[CURRENT_ALMOST_RESOLVED_CONFIG]")
@@ -470,14 +715,94 @@ def main() -> int:
         signal["current_slug"] = current_item.get("slug")
         signal["signed_distance_from_open_bps"] = current_scalp_signal.get("distance_from_open_bps")
         signal["guardian_hold_winner_to_resolution"] = bool(args.hold_winner_to_resolution)
+        base_signal = dict(signal)
         if args.passive_capture_only and signal.get("setup_variant") != "passive_extreme_liquidity_capture":
             signal["allow"] = False
             signal["reason"] = f"passive_capture_only_skipped_{signal.get('setup_variant') or 'none'}"
 
+        gray_ready = False
+        gray_side = ""
+        gray_reason = ""
+        green_ready = False
+        green_side = ""
+        decision_source = "base_signal" if signal.get("allow") else "blocked"
+        row_for_gray = {
+            "type": "snapshot",
+            "ts": now,
+            "current_slug": current_item.get("slug"),
+            "current_secs": current_secs,
+            "reference": reference,
+            "current_scalp_context": current_scalp_signal,
+            "signal": signal,
+            "trade": asdict(trade),
+            "order": asdict(order),
+        }
+        green_ready, green_side = _green_candidate(row_for_gray, overlay_engine)
+        if args.enable_gray_zone and not signal.get("allow"):
+            gray_ready, gray_side, gray_reason = _gray_candidate(
+                row=row_for_gray,
+                cfg=signal_cfg,
+                engine=overlay_engine,
+                min_score=int(args.gray_min_score),
+                max_score=int(args.gray_max_score),
+                min_distance_usd=float(args.gray_min_distance_usd),
+                min_distance_bps=float(args.gray_min_distance_bps),
+                min_leader_price=float(args.gray_min_leader_price),
+                max_counter_price=float(args.gray_max_counter_price),
+                max_secs_to_end=int(args.gray_max_secs_to_end),
+                allow_high_reversal=bool(args.gray_allow_high_reversal),
+            )
+            gray_block_reasons[str(gray_reason or "unknown")] += 1
+            if gray_ready and gray_side in ("UP", "DOWN"):
+                tick_size = _tick_size_from_snap(current_snap, gray_side)
+                executable_entry_price = _ask_for_side(current_snap, gray_side)
+                limit_entry_price = (
+                    round(max(0.01, executable_entry_price - tick_size), 6)
+                    if args.hybrid_passive_to_aggressive
+                    else round(executable_entry_price, 6)
+                )
+                if executable_entry_price > 0 and limit_entry_price > 0:
+                    signal = dict(signal)
+                    signal.update(
+                        {
+                            "allow": True,
+                            "side": gray_side,
+                            "setup_variant": "gray_zone_target_stop",
+                            "paper_source": "gray_target_stop",
+                            "execution_style": "gray_limit",
+                            "reason": "gray_zone_target_stop",
+                            "entry_price": limit_entry_price,
+                            "limit_price": limit_entry_price,
+                            "executable_entry_price": round(executable_entry_price, 6),
+                            "exit_price": round(min(0.99, limit_entry_price + int(args.gray_target_ticks) * tick_size), 6),
+                            "target_limit_price": round(min(0.99, limit_entry_price + int(args.gray_target_ticks) * tick_size), 6),
+                            "stop_price": round(max(0.01, limit_entry_price - int(args.gray_stop_ticks) * tick_size), 6),
+                            "gray_target_ticks": int(args.gray_target_ticks),
+                            "gray_stop_ticks": int(args.gray_stop_ticks),
+                            "gray_block_reason": gray_reason,
+                        }
+                    )
+                    decision_source = "gray_zone"
+                else:
+                    gray_ready = False
+                    gray_reason = "gray_entry_price_missing"
+                    gray_block_reasons[gray_reason] += 1
+
         if not signal.get("allow"):
             blocked_reasons[str(signal.get("reason") or "unknown")] += 1
+            execution_funnel["blocked_by_signal"] += 1
         else:
+            planned_exit_risk = _planned_exit_risk_for_signal(
+                current_snap,
+                current_exec,
+                signal,
+                signal_cfg,
+                qty=float(args.order_qty),
+            )
+            if planned_exit_risk:
+                signal["planned_exit_risk"] = planned_exit_risk
             allowed_variants[str(signal.get("setup_variant") or "standard")] += 1
+            execution_funnel["signal_allowed"] += 1
 
         print("\n===== CURRENT ALMOST RESOLVED PAPER V1 =====")
         print(
@@ -498,6 +823,19 @@ def main() -> int:
                 "reference": reference,
                 "current_scalp_context": current_scalp_signal,
                 "signal": signal,
+                "base_signal": base_signal,
+                "decision_source": decision_source,
+                "green_ready": green_ready,
+                "green_side": green_side,
+                "gray_ready": gray_ready,
+                "gray_side": gray_side,
+                "gray_reason": gray_reason,
+                "stats_so_far": _trade_stats(completed),
+                "allowed_variants_so_far": dict(allowed_variants),
+                "entered_variants_so_far": dict(entered_variants),
+                "exit_reasons_so_far": dict(exit_reasons),
+                "order_events_so_far": dict(order_events),
+                "execution_funnel_so_far": dict(execution_funnel),
                 "trade": asdict(trade),
                 "order": asdict(order),
             },
@@ -531,6 +869,8 @@ def main() -> int:
         previous_leader_price = last_leader_price_by_key.get(leader_key)
         hybrid_limit_signal = bool(args.hybrid_passive_to_aggressive and signal.get("allow") and signal_side in ("UP", "DOWN"))
         staged_limit_signal = bool(passive_signal or hybrid_limit_signal)
+        if signal.get("allow") and signal_side in ("UP", "DOWN"):
+            execution_funnel["order_candidate"] += 1
 
         if order.active:
             signal_order_reference_price = _safe_float(
@@ -547,6 +887,7 @@ def main() -> int:
             too_late = current_secs is not None and current_secs <= late_cutoff
             if not order_still_valid or too_late:
                 order_events["cancel"] += 1
+                execution_funnel["order_cancel"] += 1
                 _append_jsonl(
                     log_path,
                     {
@@ -566,6 +907,8 @@ def main() -> int:
                 remaining_qty = max(0.0, _safe_float(order.total_qty, args.order_qty) - _safe_float(order.filled_qty, 0.0))
                 available_qty = _available_ask_qty_at_or_below(current_snap, order.side, _safe_float(order.limit_price, 0.0))
                 order.touch_polls = order.touch_polls + 1 if available_qty > 0 else 0
+                if available_qty > 0:
+                    execution_funnel[f"{order.order_style}_touch"] += 1
                 min_touch_polls = 1 if order.order_style == "aggressive_limit" else max(1, int(args.passive_fill_touch_polls))
                 fill_qty = round(min(remaining_qty, available_qty), 6) if order.touch_polls >= min_touch_polls else 0.0
                 if (
@@ -578,8 +921,14 @@ def main() -> int:
                 ):
                     raw_ask = _ask_for_side(current_snap, order.side)
                     aggressive_price = round(raw_ask, 6) if raw_ask > 0 else 0.0
-                    if 0 < aggressive_price <= float(args.hybrid_aggressive_max_price):
+                    if _safe_to_chase_aggressive_entry(
+                        signal,
+                        ask_now=aggressive_price,
+                        current_secs=current_secs,
+                        max_price=float(args.hybrid_aggressive_max_price),
+                    ):
                         order_events["replace_aggressive_limit"] += 1
+                        execution_funnel["replace_aggressive_limit"] += 1
                         _append_jsonl(
                             log_path,
                             {
@@ -603,6 +952,7 @@ def main() -> int:
                         fill_qty = round(min(remaining_qty, available_qty), 6)
                     else:
                         order_events["aggressive_limit_skip"] += 1
+                        execution_funnel["aggressive_limit_skip"] += 1
                         _append_jsonl(
                             log_path,
                             {
@@ -637,6 +987,8 @@ def main() -> int:
                     if was_idle:
                         entered_variants[str(trade.setup_variant or "standard")] += 1
                     order_events["fill"] += 1
+                    execution_funnel[f"{order.order_style}_fill"] += 1
+                    execution_funnel["trade_opened_from_fill"] += 1 if was_idle else 0
                     _append_jsonl(
                         log_path,
                         {
@@ -663,7 +1015,70 @@ def main() -> int:
             limit_price = _safe_float(signal.get("limit_price"), default_limit_price)
             raw_ask = _ask_for_side(current_snap, signal_side)
             allow_marketable_limit_entry = signal.get("setup_variant") == "extreme_99_limit"
-            if tick_up_confirmed and limit_price > 0 and (raw_ask <= 0 or limit_price < raw_ask or allow_marketable_limit_entry):
+            split_entry = (
+                bool(args.split_extreme_entry)
+                and raw_ask > 0
+                and _split_entry_enabled_for_signal(
+                    signal,
+                    current_secs=current_secs,
+                    max_price=float(args.hybrid_aggressive_max_price),
+                )
+            )
+            if split_entry:
+                aggressive_frac = min(1.0, max(0.0, float(args.split_aggressive_frac)))
+                aggressive_qty = round(float(args.order_qty) * aggressive_frac, 6)
+                passive_qty = round(max(0.0, float(args.order_qty) - aggressive_qty), 6)
+                split_signal = dict(signal)
+                split_signal["entry_price"] = raw_ask
+                split_signal["limit_price"] = raw_ask
+                split_signal["execution_style"] = "split_aggressive"
+                split_signal["hybrid_entry_style"] = "split_aggressive"
+                if aggressive_qty > 0:
+                    trade = _apply_passive_fill(
+                        trade,
+                        signal=split_signal,
+                        fill_price=raw_ask,
+                        fill_qty=aggressive_qty,
+                        tick_size=tick_size,
+                        now=now,
+                        cfg=signal_cfg,
+                        maker_rebate_bps=0.0,
+                    )
+                    entered_variants[str(trade.setup_variant or "standard")] += 1
+                    order_events["split_aggressive_fill"] += 1
+                    execution_funnel["split_aggressive_fill"] += 1
+                    execution_funnel["trade_opened_from_split"] += 1
+                if passive_qty > 0:
+                    passive_limit = round(max(0.01, raw_ask - tick_size), 6)
+                    order = PaperOrder(
+                        active=True,
+                        slug=signal_slug,
+                        side=signal_side,
+                        limit_price=passive_limit,
+                        order_style="split_passive_limit",
+                        total_qty=passive_qty,
+                        filled_qty=0.0,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    order_events["split_passive_place"] += 1
+                    execution_funnel["split_passive_placed"] += 1
+                _append_jsonl(
+                    log_path,
+                    {
+                        "type": "split_entry",
+                        "ts": now,
+                        "signal": signal,
+                        "raw_ask": raw_ask,
+                        "aggressive_qty": aggressive_qty,
+                        "passive_qty": passive_qty,
+                        "passive_order": asdict(order),
+                        "trade": asdict(trade),
+                    },
+                )
+                print("[PAPER_SPLIT_ENTRY]")
+                pprint({"raw_ask": raw_ask, "aggressive_qty": aggressive_qty, "passive_qty": passive_qty, "trade": asdict(trade), "order": asdict(order)})
+            elif tick_up_confirmed and limit_price > 0 and (raw_ask <= 0 or limit_price < raw_ask or allow_marketable_limit_entry):
                 order_style = "passive_limit"
                 if raw_ask > 0 and limit_price >= raw_ask:
                     order_style = "aggressive_limit"
@@ -679,6 +1094,7 @@ def main() -> int:
                     updated_at=now,
                 )
                 order_events["place"] += 1
+                execution_funnel[f"{order_style}_placed"] += 1
                 _append_jsonl(
                     log_path,
                     {
@@ -698,6 +1114,7 @@ def main() -> int:
                 pprint(asdict(order))
             else:
                 order_events["watch"] += 1
+                execution_funnel["watch_waiting_tick_or_post_only"] += 1
                 _append_jsonl(
                     log_path,
                     {
@@ -719,8 +1136,16 @@ def main() -> int:
             and (suggested_action.startswith("COMPRAR ") or suggested_action.startswith("LIMITE "))
         ):
             tick_size = _tick_size_from_snap(current_snap, signal.get("side") or "UP")
-            trade = _paper_enter(signal, tick_size, now, signal_cfg)
+            trade = _paper_enter(
+                signal,
+                tick_size,
+                now,
+                signal_cfg,
+                qty=float(args.order_qty),
+                maker_rebate_bps=float(args.maker_rebate_bps),
+            )
             entered_variants[str(trade.setup_variant or "standard")] += 1
+            execution_funnel["direct_enter"] += 1
             _append_jsonl(
                 log_path,
                 {
@@ -751,6 +1176,11 @@ def main() -> int:
                 cfg=signal_cfg,
                 hold_winner_to_resolution=bool(args.hold_winner_to_resolution),
                 resolution_settle_secs=max(0, int(args.resolution_settle_secs)),
+                promote_to_hold=bool(
+                    trade.setup_variant == "gray_zone_target_stop"
+                    and green_ready
+                    and green_side == trade.side
+                ),
             )
             print("[PAPER_MANAGE]")
             pprint(asdict(trade))
@@ -772,7 +1202,9 @@ def main() -> int:
             "entered_variants": dict(entered_variants),
             "exit_reasons": dict(exit_reasons),
             "order_events": dict(order_events),
+            "execution_funnel": dict(execution_funnel),
             "blocked_reasons_top10": blocked_reasons.most_common(10),
+            "gray_block_reasons_top10": gray_block_reasons.most_common(10),
             "log_file": str(log_path),
             "trades": completed,
         }
