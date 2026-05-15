@@ -128,7 +128,7 @@ class LiveCurrentAlmostResolvedTradeState:
     token_id: Optional[str] = None
     entry_order_id: Optional[str] = None
     exit_order_id: Optional[str] = None
-    entry_order_style: str = "unknown"  # passive_limit | aggressive_limit | direct_limit | unknown
+    entry_order_style: str = "unknown"  # patient_limit | passive_limit | aggressive_limit | direct_limit | unknown
     entry_order_type: str = "GTC"
     entry_initial_size_matched: float = 0.0
     setup_variant: Optional[str] = None
@@ -280,6 +280,21 @@ def _should_await_platform_redeem(
     at_resolution_price = _safe_float(active_bid, 0.0) >= 1.0 - tick
     settle_window = current_secs is not None and current_secs <= 1
     return event_rolled or settle_window or at_resolution_price
+
+
+def _patient_entry_price_for_signal(signal: dict, *, bid_now: float, ask_now: float, tick_size: float) -> Optional[float]:
+    setup_variant = str(signal.get("setup_variant") or "")
+    signal_entry = _safe_float(signal.get("entry_price"), 0.0)
+    tick = max(0.001, _safe_float(tick_size, 0.001))
+    if setup_variant == "dual_rich_late_limit" and bid_now >= 0.99:
+        if ask_now >= 1.0 - tick:
+            return 0.99
+        return round(max(tick, signal_entry), 6)
+    if setup_variant == "resolved_pullback_limit" and bid_now >= 0.99:
+        if ask_now >= 1.0 - tick:
+            return 0.99
+        return round(max(tick, signal_entry), 6)
+    return None
 
 
 def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: float, buffer_usd: float = 0.25) -> bool:
@@ -736,6 +751,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     exception_path = session_dir / "exception.log"
     state_path = _state_path()
     session_id = session_dir.name
+    blocked_entry_events: dict[str, str] = {}
 
     print(
         "[CURRENT_ALMOST_RESOLVED_REAL_PARAMS]",
@@ -880,6 +896,20 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
             )
 
             if trade.mode == "idle" and current_item and signal.get("allow") and not counter_reversal_active:
+                event_slug = str(signal.get("event_slug") or current_item.get("slug") or "")
+                if event_slug and event_slug in blocked_entry_events:
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "entry_blocked",
+                            "ts": now,
+                            "session_id": session_id,
+                            "reason": f"event_entry_cooldown:{blocked_entry_events[event_slug]}",
+                            "signal": signal,
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
                 side = str(signal.get("side") or "")
                 tick_size = _tick_size_from_snap(current_snap, side)
                 signal_entry_price = _safe_float(signal.get("entry_price"), 0.0)
@@ -889,7 +919,17 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     entry_price = _safe_float(signal.get("limit_price"), round(max(0.01, signal_entry_price - tick_size), 6))
                     order_style = "passive_limit"
                     current_ask = _ask_for_side(current_exec, side)
-                    if current_ask > 0 and entry_price >= current_ask:
+                    current_bid = _bid_for_side(current_exec, side)
+                    patient_entry_price = _patient_entry_price_for_signal(
+                        signal,
+                        bid_now=current_bid,
+                        ask_now=current_ask,
+                        tick_size=tick_size,
+                    )
+                    if patient_entry_price is not None:
+                        entry_price = patient_entry_price
+                        order_style = "patient_limit"
+                    if order_style != "patient_limit" and current_ask > 0 and entry_price >= current_ask:
                         order_style = "aggressive_limit"
                 try:
                     trade = _post_entry_order(
@@ -906,6 +946,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                 except Exception as exc:
                     if order_style == "aggressive_limit" and aggressive_entry_fak and _is_fak_no_match_exception(exc):
+                        if event_slug:
+                            blocked_entry_events[event_slug] = "initial_fak_no_match"
                         _append_jsonl(
                             log_path,
                             {
@@ -964,6 +1006,42 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     trade.last_reason = "entry_fill_detected"
                     _save_state(state_path, trade)
                     _append_jsonl(log_path, {"type": "fill", "ts": now, "session_id": session_id, "cancel_remainder": resp, "trade": _trade_summary(trade)})
+                elif trade.entry_order_style == "patient_limit":
+                    current_slug = str(current_item.get("slug") or "") if current_item else ""
+                    signal_still_valid = (
+                        bool(current_item)
+                        and not counter_reversal_active
+                        and bool(signal.get("allow"))
+                        and signal.get("side") == trade.side
+                        and signal.get("event_slug") == trade.event_slug
+                    )
+                    event_rolled = bool(current_slug and trade.event_slug and current_slug != trade.event_slug)
+                    last_second = current_secs is not None and current_secs <= resolution_settle_secs
+                    if event_rolled or last_second or not signal_still_valid:
+                        cancel_reason = (
+                            "patient_event_rolled"
+                            if event_rolled
+                            else "patient_last_second"
+                            if last_second
+                            else "patient_signal_invalidated"
+                        )
+                        resp = _cancel_if_live(broker, trade.entry_order_id)
+                        if trade.event_slug:
+                            blocked_entry_events[trade.event_slug] = cancel_reason
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "entry_cancel",
+                                "ts": now,
+                                "session_id": session_id,
+                                "reason": cancel_reason,
+                                "response": resp,
+                                "trade": _trade_summary(trade),
+                                "signal": signal,
+                            },
+                        )
+                        trade = LiveCurrentAlmostResolvedTradeState()
+                        _clear_state(state_path)
                 elif (
                     hybrid_entry_enabled
                     and trade.entry_order_style == "passive_limit"
@@ -1031,6 +1109,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             )
                         except Exception as exc:
                             if aggressive_entry_fak and _is_fak_no_match_exception(exc):
+                                if replaced_from.get("event_slug"):
+                                    blocked_entry_events[str(replaced_from.get("event_slug"))] = "replace_fak_no_match"
                                 trade = LiveCurrentAlmostResolvedTradeState()
                                 _clear_state(state_path)
                                 _append_jsonl(
@@ -1088,7 +1168,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                 ):
                     resp = _cancel_if_live(broker, trade.entry_order_id)
-                    _append_jsonl(log_path, {"type": "entry_cancel", "ts": now, "session_id": session_id, "response": resp, "trade": _trade_summary(trade)})
+                    if trade.event_slug:
+                        blocked_entry_events[trade.event_slug] = "entry_timeout_no_fill"
+                    _append_jsonl(log_path, {"type": "entry_cancel", "ts": now, "session_id": session_id, "reason": "entry_timeout_no_fill", "response": resp, "trade": _trade_summary(trade)})
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
 
