@@ -300,12 +300,19 @@ def _safe_to_chase_aggressive_entry(
         return False
     if current_secs is None or current_secs > 35:
         return False
+    if str(signal.get("setup_variant") or "") != "passive_extreme_liquidity_capture":
+        return False
     side = str(signal.get("side") or "").lower()
     if bool(signal.get("missing_market_midpoint_context")):
         return False
     if side and bool(signal.get(f"{side}_counter_alert")):
         return False
     return bool(signal.get("resolved_pullback_safe_distance_ok")) or bool(signal.get("passive_capture_safe_distance_ok"))
+
+
+def _is_transient_service_not_ready_exception(exc: Exception) -> bool:
+    message = _exception_message(exc).lower()
+    return "service not ready" in message or "status_code=425" in message or "status code=425" in message
 
 
 def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: float, buffer_usd: float = 0.25) -> bool:
@@ -443,7 +450,13 @@ def _post_entry_order(
         entry_price=entry_price,
         entry_qty_requested=float(qty),
         target_price=round(min(0.99, _safe_float(signal.get("exit_price"), cfg.target_exit_price)), 6),
-        stop_price=round(max(0.01, entry_price - cfg.stop_ticks * tick_size), 6),
+        stop_price=round(
+            max(
+                0.01,
+                _safe_float(signal.get("stop_price"), entry_price - cfg.stop_ticks * tick_size),
+            ),
+            6,
+        ),
         created_at=now,
         updated_at=now,
         last_reason="entry_posted",
@@ -744,8 +757,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
 
     qty = _env_int("POLY_CURRENT_ALMOST_RESOLVED_QTY", 6)
     entry_timeout_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_ENTRY_TIMEOUT_SECS", 2.0)
+    passive_capture_only = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_PASSIVE_CAPTURE_ONLY", True)
     hybrid_entry_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_ENTRY", True)
-    hybrid_aggressive_after_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_AFTER_SECS", 1.5)
+    hybrid_aggressive_after_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_AFTER_SECS", 2.0)
     hybrid_aggressive_max_price = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_MAX_PRICE", 0.99)
     aggressive_entry_fak = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AGGRESSIVE_ENTRY_FAK", True)
     hold_winner_to_resolution = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION", True)
@@ -770,6 +784,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
         {
             "qty": qty,
             "entry_timeout_secs": entry_timeout_secs,
+            "passive_capture_only": passive_capture_only,
             "hybrid_entry_enabled": hybrid_entry_enabled,
             "hybrid_aggressive_after_secs": hybrid_aggressive_after_secs,
             "hybrid_aggressive_max_price": hybrid_aggressive_max_price,
@@ -910,6 +925,19 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
 
             if trade.mode == "idle" and current_item and signal.get("allow") and not counter_reversal_active:
                 event_slug = str(signal.get("event_slug") or current_item.get("slug") or "")
+                if passive_capture_only and str(signal.get("setup_variant") or "") != "passive_extreme_liquidity_capture":
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "entry_blocked",
+                            "ts": now,
+                            "session_id": session_id,
+                            "reason": "passive_capture_only",
+                            "signal": signal,
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
                 if event_slug and event_slug in blocked_entry_events:
                     _append_jsonl(
                         log_path,
@@ -929,7 +957,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 entry_price = signal_entry_price
                 order_style = "direct_limit"
                 if hybrid_entry_enabled:
-                    current_ask = _ask_for_side(current_exec, side)
                     current_bid = _bid_for_side(current_exec, side)
                     entry_price = _passive_entry_price_for_signal(
                         signal,
@@ -937,14 +964,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         tick_size=tick_size,
                     )
                     order_style = "passive_limit"
-                    if _safe_to_chase_aggressive_entry(
-                        signal,
-                        ask_now=current_ask,
-                        current_secs=current_secs,
-                        max_price=hybrid_aggressive_max_price,
-                    ):
-                        entry_price = round(current_ask, 6)
-                        order_style = "aggressive_limit"
                 try:
                     trade = _post_entry_order(
                         broker,
@@ -959,6 +978,22 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         aggressive_entry_fak=aggressive_entry_fak,
                     )
                 except Exception as exc:
+                    if _is_transient_service_not_ready_exception(exc):
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "entry_transient_error",
+                                "ts": now,
+                                "session_id": session_id,
+                                "stage": "initial_entry",
+                                "error": f"{type(exc).__name__}: {_exception_message(exc)}",
+                                "signal": signal,
+                                "entry_order_style": order_style,
+                                "posted_entry_price": entry_price,
+                            },
+                        )
+                        time.sleep(poll_secs)
+                        continue
                     if order_style == "aggressive_limit" and aggressive_entry_fak and _is_fak_no_match_exception(exc):
                         if event_slug:
                             blocked_entry_events[event_slug] = "initial_fak_no_match"
@@ -1119,6 +1154,25 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                                     aggressive_entry_fak=aggressive_entry_fak,
                                 )
                             except Exception as exc:
+                                if _is_transient_service_not_ready_exception(exc):
+                                    trade = LiveCurrentAlmostResolvedTradeState()
+                                    _clear_state(state_path)
+                                    _append_jsonl(
+                                        log_path,
+                                        {
+                                            "type": "entry_transient_error",
+                                            "ts": now,
+                                            "session_id": session_id,
+                                            "stage": "replace_aggressive",
+                                            "cancel": cancel_resp,
+                                            "from_trade": replaced_from,
+                                            "aggressive_price": aggressive_price,
+                                            "error": f"{type(exc).__name__}: {_exception_message(exc)}",
+                                            "signal": signal,
+                                        },
+                                    )
+                                    time.sleep(poll_secs)
+                                    continue
                                 if aggressive_entry_fak and _is_fak_no_match_exception(exc):
                                     if replaced_from.get("event_slug"):
                                         blocked_entry_events[str(replaced_from.get("event_slug"))] = "replace_fak_no_match"

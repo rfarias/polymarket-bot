@@ -73,7 +73,9 @@ python run_live_current_almost_resolved_real_v1.py --seconds 300
 ```
 
 Esse runner fica armado apenas com `POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED=true`. A primeira versao real e dedicada ao setup de quase resolvidos, bloqueia startup se houver ordens abertas e nao deve ser executada junto com o `next1 scalp real` enquanto a validacao simultanea ainda nao estiver pronta.
-Na entrada hibrida, a ordem passiva fica sempre 1 tick abaixo do melhor bid atual; ela so e substituida por limite agressiva quando o sinal segue valido, a janela esta perto do fim e a distancia ate o price-to-beat continua segura.
+Por padrao, `POLY_CURRENT_ALMOST_RESOLVED_PASSIVE_CAPTURE_ONLY=true` limita o real ao setup `passive_extreme_liquidity_capture`, usando a distancia dinamica validada no paper.
+Na entrada hibrida, a ordem passiva fica sempre 1 tick abaixo do melhor bid atual; ela so e substituida por limite agressiva depois de aguardar a passiva e quando o sinal segue valido, a janela esta perto do fim e a distancia ate o price-to-beat continua segura.
+Erro transitorio da API `425 service not ready` e registrado como `entry_transient_error` e nao encerra o runner.
 Residual microscopico abaixo de `POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY` e arquivado como poeira para nao travar o runner em `pending_exit` ou `awaiting_redeem`.
 
 ### CLOB V2 e allowance
