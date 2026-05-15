@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Polymarket Manual Assist V1",
-  "version": "1.0.0",
-  "description": "In-page manual assist overlay for Polymarket current/almost-resolved decisions.",
+  "version": "1.1.0",
+  "description": "Left-side manual assist dock for Polymarket current/almost-resolved decisions.",
   "background": {
     "service_worker": "background.js"
   },

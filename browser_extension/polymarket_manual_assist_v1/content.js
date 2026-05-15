@@ -3,9 +3,10 @@
 
   const STATE_URLS = ["http://127.0.0.1:8765/state", "http://localhost:8765/state"];
   const PANEL_ID = "pm-manual-assist-ext";
+  const DOCK_CLASS = "pm-manual-assist-left-dock-active";
+  const DOCK_WIDTH_PX = 360;
   const AUTO_FILL_ON_READY = false;
   let lastFilledWindowId = "";
-  let dragState = null;
   let lastWorkingUrl = STATE_URLS[0];
 
   function fmt(value, digits = 2, suffix = "") {
@@ -43,35 +44,22 @@
 
   function ensurePanel() {
     let panel = document.getElementById(PANEL_ID);
+    document.documentElement.style.setProperty("--pm-manual-assist-dock-width", `${DOCK_WIDTH_PX}px`);
+    document.documentElement.classList.add(DOCK_CLASS);
+    document.body?.classList.add(DOCK_CLASS);
     if (panel) return panel;
     panel = document.createElement("div");
     panel.id = PANEL_ID;
+    panel.className = "pm-docked-left";
     document.body.appendChild(panel);
-    panel.addEventListener("mousedown", startDrag);
-    window.addEventListener("mousemove", onDrag);
-    window.addEventListener("mouseup", stopDrag);
     return panel;
   }
 
-  function startDrag(event) {
+  function hidePanel() {
     const panel = document.getElementById(PANEL_ID);
-    if (!panel) return;
-    if (event.target instanceof HTMLButtonElement) return;
-    const rect = panel.getBoundingClientRect();
-    if (event.clientX > rect.right - 18 && event.clientY > rect.bottom - 18) return;
-    dragState = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
-    panel.style.transform = "none";
-  }
-
-  function onDrag(event) {
-    const panel = document.getElementById(PANEL_ID);
-    if (!panel || !dragState) return;
-    panel.style.left = `${Math.max(0, event.clientX - dragState.offsetX)}px`;
-    panel.style.top = `${Math.max(0, event.clientY - dragState.offsetY)}px`;
-  }
-
-  function stopDrag() {
-    dragState = null;
+    panel?.remove();
+    document.documentElement.classList.remove(DOCK_CLASS);
+    document.body?.classList.remove(DOCK_CLASS);
   }
 
   function findVisibleElements(selector) {
@@ -207,12 +195,12 @@
       ${row("Mensagem", escapeHtml(message || "-"))}
       <div class="pm-actions">
         <button class="pm-fill" id="${PANEL_ID}-fill">Preencher</button>
-        <button class="pm-hide" id="${PANEL_ID}-hide">Ocultar</button>
+        <button class="pm-hide" id="${PANEL_ID}-hide">Fechar</button>
       </div>
     `;
 
     panel.querySelector(`#${PANEL_ID}-fill`)?.addEventListener("click", () => autofillTicket(state));
-    panel.querySelector(`#${PANEL_ID}-hide`)?.addEventListener("click", () => panel.remove());
+    panel.querySelector(`#${PANEL_ID}-hide`)?.addEventListener("click", hidePanel);
   }
 
   async function fetchState() {

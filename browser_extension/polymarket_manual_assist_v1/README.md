@@ -12,4 +12,4 @@ Antes de abrir a Polymarket, rode:
 python run_manual_signal_server_v1.py --qty 6
 ```
 
-Esta extensao substitui o Tampermonkey e injeta o painel diretamente na pagina.
+Esta extensao substitui o Tampermonkey e injeta o painel como uma dock fixa no lado esquerdo da pagina, empurrando a Polymarket para a direita para nao cobrir o ticket.
