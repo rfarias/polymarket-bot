@@ -11,7 +11,11 @@ import requests
 
 from market.book_5m import fetch_market_metadata_from_slug
 from market.current_market_ws_cache import CurrentMarketWsCache
-from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
+from market.current_almost_resolved_signal_v1 import (
+    CurrentAlmostResolvedConfigV1,
+    evaluate_current_almost_resolved_v1,
+    passive_capture_required_distance_v1,
+)
 from market.current_early_overresolved_signal_v1 import CurrentEarlyOverresolvedResearchV1
 from market.current_scalp_signal_v1 import (
     BINANCE_PRICE_URL,
@@ -149,6 +153,7 @@ class ManualOverlaySnapshotV1:
     risk_plan: str = ""
     exit_alert: str = ""
     status_note: str = ""
+    entry_criteria: Optional[list[dict[str, Any]]] = None
 
     def as_dict(self) -> Dict:
         return {
@@ -203,6 +208,7 @@ class ManualOverlaySnapshotV1:
             "risk_plan": self.risk_plan,
             "exit_alert": self.exit_alert,
             "status_note": self.status_note,
+            "entry_criteria": self.entry_criteria or [],
         }
 
 
@@ -807,6 +813,207 @@ class ManualOverlayEngineV1:
         distance = _safe_float(scalp_signal.get("distance_from_open_bps"), 0.0)
         return "UP" if distance >= 0 else "DOWN"
 
+    def _build_entry_criteria(
+        self,
+        *,
+        current_secs: Optional[int],
+        setup_side: str,
+        almost_signal: Dict,
+        scalp_signal: Dict,
+        reversal_risk: str,
+        score: int,
+    ) -> list[dict[str, Any]]:
+        cfg = self.signal_cfg
+        side = setup_side if setup_side in ("UP", "DOWN") else self._fallback_side_from_context(scalp_signal, {})
+        leader_key = "up_buy" if side == "UP" else "down_buy"
+        counter_key = "down_buy" if side == "UP" else "up_buy"
+        buffer_bps_key = "up_price_to_beat_buffer_bps" if side == "UP" else "down_price_to_beat_buffer_bps"
+        buffer_usd_key = "up_price_to_beat_buffer_usd" if side == "UP" else "down_price_to_beat_buffer_usd"
+        adverse_5s = max(
+            0.0,
+            -_safe_float(scalp_signal.get("spot_delta_5s_bps"), 0.0)
+            if side == "UP"
+            else _safe_float(scalp_signal.get("spot_delta_5s_bps"), 0.0),
+        )
+        adverse_15s = max(
+            0.0,
+            -_safe_float(scalp_signal.get("spot_delta_15s_bps"), 0.0)
+            if side == "UP"
+            else _safe_float(scalp_signal.get("spot_delta_15s_bps"), 0.0),
+        )
+        adverse_30s = max(
+            0.0,
+            -_safe_float(scalp_signal.get("spot_delta_30s_bps"), 0.0)
+            if side == "UP"
+            else _safe_float(scalp_signal.get("spot_delta_30s_bps"), 0.0),
+        )
+        distance_bps = _safe_float(almost_signal.get("distance_to_price_to_beat_bps"), 0.0)
+        if distance_bps <= 0:
+            distance_bps = abs(_safe_float(scalp_signal.get("distance_from_open_bps"), 0.0))
+        distance_usd = _safe_float(almost_signal.get("distance_to_price_to_beat_usd"), 0.0)
+        if distance_usd <= 0:
+            reference_price = _safe_float(scalp_signal.get("reference_price"), 0.0)
+            opening_reference_price = _safe_float(scalp_signal.get("opening_reference_price"), 0.0)
+            if reference_price > 0 and opening_reference_price > 0:
+                distance_usd = abs(reference_price - opening_reference_price)
+        recent_vol = _safe_float(almost_signal.get("resolved_pullback_recent_vol_floor_usd"), 0.0)
+        leader_price = _safe_float(almost_signal.get(leader_key), -1.0)
+        counter_price = _safe_float(almost_signal.get(counter_key), -1.0)
+        score_key = "passive_capture_up_score" if side == "UP" else "passive_capture_down_score"
+        passive_score = int(_safe_float(almost_signal.get(score_key), 0.0))
+        market_range_30s = _safe_float(almost_signal.get("market_range_30s"), 0.0)
+        buffer_bps = _safe_float(almost_signal.get(buffer_bps_key), 0.0)
+        if buffer_bps <= 0 and distance_bps > 0:
+            buffer_bps = max(0.0, distance_bps - max(adverse_5s, adverse_15s, adverse_30s))
+        buffer_usd = _safe_float(almost_signal.get(buffer_usd_key), 0.0)
+        if buffer_usd <= 0 and buffer_bps > 0:
+            reference_price = _safe_float(scalp_signal.get("reference_price"), 0.0)
+            if reference_price > 0:
+                buffer_usd = reference_price * buffer_bps / 10000.0
+        secs = None if current_secs is None else int(current_secs)
+        distance_from_open_bps = _safe_float(scalp_signal.get("distance_from_open_bps"), 0.0)
+        direction_ok = (
+            (side == "UP" and distance_from_open_bps > 0)
+            or (side == "DOWN" and distance_from_open_bps < 0)
+        )
+        depth_key = "up_depth_top3_both_sides" if side == "UP" else "down_depth_top3_both_sides"
+        depth = _safe_float(almost_signal.get(depth_key), 0.0)
+        required_distance = passive_capture_required_distance_v1(
+            secs_to_end=secs or 0,
+            recent_vol_floor_usd=recent_vol,
+            cfg=cfg,
+        )
+        required_distance_usd = _safe_float(
+            almost_signal.get("passive_capture_required_distance_usd"),
+            _safe_float(required_distance.get("required_usd"), cfg.passive_capture_min_safe_distance_usd),
+        )
+        fixed_min_distance = _safe_float(
+            almost_signal.get("passive_capture_fixed_min_distance_usd"),
+            _safe_float(required_distance.get("fixed_min_usd"), cfg.passive_capture_min_safe_distance_usd),
+        )
+        vol_min_distance = _safe_float(
+            almost_signal.get("passive_capture_vol_min_distance_usd"),
+            _safe_float(required_distance.get("vol_min_usd"), recent_vol * cfg.passive_capture_min_distance_vs_recent_vol_mult),
+        )
+        vol_mult = _safe_float(
+            almost_signal.get("passive_capture_vol_mult"),
+            _safe_float(required_distance.get("vol_mult"), cfg.passive_capture_min_distance_vs_recent_vol_mult),
+        )
+        distance_tier = str(almost_signal.get("passive_capture_distance_tier") or required_distance.get("tier") or "-")
+        safe_distance_ok = (
+            distance_usd >= required_distance_usd
+            and distance_bps >= cfg.passive_capture_min_safe_distance_bps
+        )
+        max_score_without_extra_distance = 82 if secs is not None and secs <= cfg.passive_capture_preferred_secs else 78
+        distance_bonus = min(18, int(max(0.0, distance_usd - cfg.passive_capture_min_safe_distance_usd) / 8.0))
+
+        def criterion(key: str, label: str, value: Any, accepted: str, ok: bool, detail: str = "") -> dict[str, Any]:
+            return {
+                "key": key,
+                "label": label,
+                "value": value,
+                "accepted": accepted,
+                "ok": bool(ok),
+                "detail": detail,
+            }
+
+        return [
+            criterion(
+                "time_window",
+                "Tempo para o fim",
+                "-" if secs is None else f"{secs}s",
+                f"{cfg.extreme_99_min_secs_to_end}-{cfg.passive_capture_max_secs}s",
+                secs is not None and cfg.extreme_99_min_secs_to_end <= secs <= cfg.passive_capture_max_secs,
+            ),
+            criterion(
+                "leader_price",
+                "Lado quase resolvido",
+                f"{side or '-'} {leader_price:.2f}" if leader_price >= 0 else "-",
+                f">= {cfg.passive_capture_min_leader_price:.2f}; preferivel >= {cfg.passive_capture_preferred_leader_price:.2f}",
+                side in ("UP", "DOWN") and leader_price >= cfg.passive_capture_min_leader_price,
+            ),
+            criterion(
+                "counter_price",
+                "Preco do lado contrario",
+                f"{counter_price:.2f}" if counter_price >= 0 else "-",
+                f"<= {cfg.passive_capture_max_counter_price:.2f}",
+                counter_price >= 0 and counter_price <= cfg.passive_capture_max_counter_price,
+            ),
+            criterion(
+                "price_to_beat_distance",
+                "Distancia do price to beat",
+                f"${distance_usd:.2f} / {distance_bps:.2f}bps",
+                f">= ${required_distance_usd:.2f}, >= {cfg.passive_capture_min_safe_distance_bps:.2f}bps",
+                safe_distance_ok,
+                f"modelo hibrido {distance_tier}; piso ${fixed_min_distance:.2f}; vol {vol_mult:.1f}x = ${vol_min_distance:.2f}",
+            ),
+            criterion(
+                "price_to_beat_direction",
+                "Direcao do price to beat",
+                f"{distance_from_open_bps:.2f}bps",
+                "UP precisa estar acima do price to beat; DOWN precisa estar abaixo",
+                direction_ok,
+            ),
+            criterion(
+                "buffer",
+                "Buffer apos reversao",
+                f"${buffer_usd:.2f} / {buffer_bps:.2f}bps",
+                f">= ${cfg.near_end_min_price_to_beat_buffer_usd:.2f} e >= {cfg.near_end_min_price_to_beat_buffer_bps:.2f}bps",
+                buffer_usd >= cfg.near_end_min_price_to_beat_buffer_usd
+                and buffer_bps >= cfg.near_end_min_price_to_beat_buffer_bps,
+            ),
+            criterion(
+                "adverse_5s",
+                "Reversao contra em 5s",
+                f"{adverse_5s:.2f}bps",
+                f"<= {cfg.passive_capture_max_adverse_spot_5s_bps:.2f}bps",
+                adverse_5s <= cfg.passive_capture_max_adverse_spot_5s_bps,
+            ),
+            criterion(
+                "adverse_15s",
+                "Reversao contra em 15s",
+                f"{adverse_15s:.2f}bps",
+                f"<= {cfg.passive_capture_max_adverse_spot_15s_bps:.2f}bps",
+                adverse_15s <= cfg.passive_capture_max_adverse_spot_15s_bps,
+            ),
+            criterion(
+                "adverse_30s",
+                "Reversao contra em 30s",
+                f"{adverse_30s:.2f}bps",
+                f"<= {cfg.passive_capture_max_adverse_spot_30s_bps:.2f}bps",
+                adverse_30s <= cfg.passive_capture_max_adverse_spot_30s_bps,
+            ),
+            criterion(
+                "market_range_30s",
+                "Range do book em 30s",
+                f"{market_range_30s:.3f}",
+                f"<= {cfg.passive_capture_max_market_range_30s:.3f}",
+                market_range_30s <= cfg.passive_capture_max_market_range_30s,
+            ),
+            criterion(
+                "passive_score",
+                "Score de captura",
+                str(passive_score),
+                f">= {cfg.passive_capture_min_score}",
+                passive_score >= cfg.passive_capture_min_score,
+                f"bonus distancia={distance_bonus}; base maxima sem folga extra={max_score_without_extra_distance}; profundidade={depth:.2f}/{cfg.min_depth_top3:.2f}",
+            ),
+            criterion(
+                "reversal_risk",
+                "Risco de reversao",
+                reversal_risk,
+                "precisa ser low ou medium",
+                reversal_risk != "high",
+            ),
+            criterion(
+                "runner_decision",
+                "Decisao final do setup",
+                str(almost_signal.get("reason") or "-"),
+                "setup quase resolvido liberado; risco aceitavel",
+                bool(almost_signal.get("allow")) and reversal_risk != "high" and score >= 55,
+            ),
+        ]
+
     def _suggested_action(
         self,
         *,
@@ -1107,6 +1314,14 @@ class ManualOverlayEngineV1:
                 active_setup=active_setup,
                 now_ts=now,
             )
+            entry_criteria = self._build_entry_criteria(
+                current_secs=current_secs,
+                setup_side=setup_side,
+                almost_signal=almost_signal,
+                scalp_signal=scalp_signal,
+                reversal_risk=reversal_risk,
+                score=score,
+            )
             market_context = self._build_market_context(scalp_signal, almost_signal, early_signal, trend_label)
             next_seconds_outlook = self._build_next_seconds_outlook(scalp_signal, almost_signal, early_signal, active_setup)
             if exit_alert:
@@ -1167,6 +1382,7 @@ class ManualOverlayEngineV1:
                 risk_plan=risk_plan,
                 exit_alert=exit_alert,
                 status_note=status_note,
+                entry_criteria=entry_criteria,
             )
         except Exception as exc:
             compute_finished_ts = time.time()

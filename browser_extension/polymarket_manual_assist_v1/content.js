@@ -13,6 +13,15 @@
     return `${Number(value).toFixed(digits)}${suffix}`;
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
   function statusMode(state) {
     const action = String(state.active_action || state.suggested_action || "").toLowerCase();
     const price = state.active_price ?? state.entry_price;
@@ -49,6 +58,7 @@
     if (!panel) return;
     if (event.target instanceof HTMLButtonElement) return;
     const rect = panel.getBoundingClientRect();
+    if (event.clientX > rect.right - 18 && event.clientY > rect.bottom - 18) return;
     dragState = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
     panel.style.transform = "none";
   }
@@ -126,33 +136,75 @@
     return `<div class="pm-row"><span class="pm-label">${label}:</span> ${value}</div>`;
   }
 
+  function criteriaRows(state) {
+    const criteria = Array.isArray(state.entry_criteria) && state.entry_criteria.length
+      ? state.entry_criteria
+      : [
+          {
+            label: "Servidor de criterios",
+            value: "sem dados",
+            accepted: "aguardando /state com entry_criteria",
+            ok: false,
+            detail: state.status_note || "reinicie o servidor manual se persistir",
+          },
+        ];
+    return `
+      <div class="pm-criteria">
+        ${criteria
+          .map((item) => {
+            const ok = Boolean(item.ok);
+            const cls = ok ? "pm-ok" : "pm-block";
+            const detail = item.detail ? `<div class="pm-criterion-detail">${escapeHtml(item.detail)}</div>` : "";
+            return `
+              <div class="pm-criterion ${cls}">
+                <div class="pm-criterion-main">
+                  <span class="pm-dot"></span>
+                  <span class="pm-criterion-label">${escapeHtml(item.label)}</span>
+                  <span class="pm-criterion-value">${escapeHtml(item.value)}</span>
+                </div>
+                <div class="pm-criterion-accepted">${escapeHtml(item.accepted)}</div>
+                ${detail}
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
+  }
+
   function render(state) {
     const panel = ensurePanel();
     const mode = statusMode(state);
     const badge = badgeColor(mode);
-    const activeSetup = state.active_setup_name || "sem setup";
-    const activeMarket = state.active_setup_market || state.title || "BTC current";
-    const activeAction = state.active_action || state.suggested_action || "-";
-    const activePrice = state.active_price ?? state.entry_price;
-    const side = state.active_side || state.setup_side || "";
+    const activeSetup = "quase resolvido";
+    const activeMarket = state.title || state.active_setup_market || "BTC current";
+    const activePrice = state.entry_price ?? state.active_price;
+    const side = state.setup_side || state.active_side || "";
+    const criteria = Array.isArray(state.entry_criteria) ? state.entry_criteria : [];
+    const criteriaReady = criteria.length > 0 && criteria.every((item) => Boolean(item.ok));
+    const activeAction = criteriaReady ? "entrada liberada" : "aguardar";
 
     const headline =
-      mode === "PRONTO" && side && activePrice !== null && activePrice !== undefined
-        ? `${activeSetup} | ${activeAction} ${fmt(activePrice, 2)}`
-        : `${activeSetup} | ${mode}`;
+      side && activePrice !== null && activePrice !== undefined
+        ? `${activeSetup} | ${side} ${fmt(activePrice, 2)}`
+        : `${activeSetup} | ${side || "sem lado"}`;
 
     const actionLine = `${activeMarket} | ${activeAction || "-"}${side ? ` ${side}` : ""}${activePrice !== null && activePrice !== undefined ? ` ${fmt(activePrice, 2)}` : ""}`;
-    const message = [state.market_context, state.next_seconds_outlook, state.suggested_detail]
+    const message = [state.suggested_detail, state.status_note]
       .filter((part) => part && String(part).trim() && String(part).trim() !== "-")
       .join(" | ");
+    const releaseText = criteriaReady ? "entrada liberada" : "entrada bloqueada";
+    const releaseClass = criteriaReady ? "pm-release-ready" : "pm-release-wait";
 
     panel.innerHTML = `
       <div class="pm-head">
         <div class="pm-title">${headline}</div>
-        <div class="pm-badge" style="background:${badge}">${mode}</div>
+        <div class="pm-badge" style="background:${criteriaReady ? "#1f9d55" : badge}">${criteriaReady ? "LIBERADA" : mode}</div>
       </div>
-      ${row("Acao", actionLine)}
-      ${row("Mensagem", message || state.status_note || "-")}
+      <div class="pm-release ${releaseClass}">${releaseText}</div>
+      ${row("Acao", escapeHtml(actionLine))}
+      ${criteriaRows(state)}
+      ${row("Mensagem", escapeHtml(message || "-"))}
       <div class="pm-actions">
         <button class="pm-fill" id="${PANEL_ID}-fill">Preencher</button>
         <button class="pm-hide" id="${PANEL_ID}-hide">Ocultar</button>
@@ -164,6 +216,16 @@
   }
 
   async function fetchState() {
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: "pm_manual_assist_state" });
+        if (response?.ok && response.state) return response.state;
+        throw new Error(response?.error || "background_state_unavailable");
+      } catch (err) {
+        // Fall back to direct fetch below. This keeps the unpacked script usable
+        // if the background worker is not loaded yet.
+      }
+    }
     const urls = [lastWorkingUrl, ...STATE_URLS.filter((url) => url !== lastWorkingUrl)];
     let lastError = null;
     for (const url of urls) {
@@ -189,15 +251,20 @@
     } catch (err) {
       render({
         title: "Assistente Manual",
-        active_setup_name: "sem setup",
-        active_setup_market: "BTC current",
-        active_action: "aguardar",
-        active_side: "",
-        active_price: null,
-        market_context: "servidor local indisponivel",
-        next_seconds_outlook: "sem leitura curta disponivel",
+        setup_side: "",
+        entry_price: null,
         secs_to_end: "-",
-        suggested_detail: "inicie python run_manual_signal_server_v1.py --qty 6",
+        suggested_detail: "sem conexao com http://127.0.0.1:8765/state",
+        status_note: String(err?.message || err || "servidor local indisponivel"),
+        entry_criteria: [
+          {
+            label: "Conexao com servidor local",
+            value: "falhou",
+            accepted: "background da extensao deve acessar /state",
+            ok: false,
+            detail: String(err?.message || err || "recarregue a extensao"),
+          },
+        ],
       });
     }
   }

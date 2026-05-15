@@ -3,6 +3,9 @@
   "name": "Polymarket Manual Assist V1",
   "version": "1.0.0",
   "description": "In-page manual assist overlay for Polymarket current/almost-resolved decisions.",
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://polymarket.com/*"],

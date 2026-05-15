@@ -22,6 +22,15 @@
     return `${Number(value).toFixed(digits)}${suffix}`;
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
   function panelColor(label) {
     if (label === "SAFE") return "#1f9d55";
     if (label === "CAUTION") return "#d69e2e";
@@ -111,8 +120,11 @@
     panel.style.left = "50%";
     panel.style.transform = "translateX(-50%)";
     panel.style.zIndex = "999999";
-    panel.style.minWidth = "420px";
-    panel.style.maxWidth = "560px";
+    panel.style.width = "420px";
+    panel.style.minWidth = "220px";
+    panel.style.maxWidth = "min(92vw, 620px)";
+    panel.style.minHeight = "180px";
+    panel.style.maxHeight = "82vh";
     panel.style.background = "rgba(16,20,24,0.94)";
     panel.style.color = "#ecf1f7";
     panel.style.borderRadius = "10px";
@@ -121,6 +133,8 @@
     panel.style.boxShadow = "0 8px 30px rgba(0,0,0,0.35)";
     panel.style.pointerEvents = "auto";
     panel.style.cursor = "move";
+    panel.style.resize = "both";
+    panel.style.overflow = "auto";
     document.body.appendChild(panel);
     panel.addEventListener("mousedown", startDrag);
     window.addEventListener("mousemove", onDrag);
@@ -133,6 +147,7 @@
     if (!panel) return;
     if (event.target instanceof HTMLButtonElement) return;
     const rect = panel.getBoundingClientRect();
+    if (event.clientX > rect.right - 18 && event.clientY > rect.bottom - 18) return;
     dragState = {
       offsetX: event.clientX - rect.left,
       offsetY: event.clientY - rect.top,
@@ -175,6 +190,46 @@
     return `<div style="margin-top:4px;font-size:12px;color:#98a7b8;"><span style="color:#cbd5e1;">${label}:</span> ${value}</div>`;
   }
 
+  function criteriaRows(state) {
+    const criteria = Array.isArray(state.entry_criteria) && state.entry_criteria.length
+      ? state.entry_criteria
+      : [
+          {
+            label: "Servidor de criterios",
+            value: "sem dados",
+            accepted: "aguardando /state com entry_criteria",
+            ok: false,
+            detail: state.status_note || "reinicie o servidor manual se persistir",
+          },
+        ];
+    return `
+      <div style="margin-top:8px;display:grid;gap:5px;">
+        ${criteria
+          .map((item) => {
+            const ok = Boolean(item.ok);
+            const bg = ok ? "rgba(31,157,85,0.14)" : "rgba(214,69,69,0.13)";
+            const border = ok ? "rgba(31,157,85,0.45)" : "rgba(214,69,69,0.45)";
+            const dot = ok ? "#1f9d55" : "#d64545";
+            const detail = item.detail
+              ? `<div style="margin-left:16px;margin-top:2px;font-size:10px;color:#98a7b8;">${escapeHtml(item.detail)}</div>`
+              : "";
+            return `
+              <div style="padding:5px 7px;border-radius:6px;background:${bg};border:1px solid ${border};">
+                <div style="display:grid;grid-template-columns:10px minmax(0,1fr);align-items:center;gap:6px;font-size:11px;">
+                  <span style="width:7px;height:7px;border-radius:999px;background:${dot};display:inline-block;"></span>
+                  <span style="color:#ecf1f7;font-weight:700;min-width:0;overflow-wrap:anywhere;">${escapeHtml(item.label)}</span>
+                  <span style="grid-column:2;color:#ecf1f7;text-align:left;white-space:normal;overflow-wrap:anywhere;font-size:10px;">${escapeHtml(item.value)}</span>
+                </div>
+                <div style="margin-left:16px;margin-top:2px;font-size:10px;color:#98a7b8;overflow-wrap:anywhere;">${escapeHtml(item.accepted)}</div>
+                ${detail}
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
+  }
+
   function sideArrow(side) {
     if (side === "UP") return "↑";
     if (side === "DOWN") return "↓";
@@ -186,12 +241,14 @@
     const mode = classifyState(state);
     const badge = mode === "READY" ? "#1f9d55" : mode === "DISCARD" ? "#d64545" : "#6b7280";
     const inWindow = inOperationalWindow(state);
+    const criteria = Array.isArray(state.entry_criteria) ? state.entry_criteria : [];
+    const criteriaReady = criteria.length > 0 && criteria.every((item) => Boolean(item.ok));
     const headline =
-      mode === "READY"
+      criteriaReady
         ? `READY ${state.setup_side} ${fmt(state.entry_price, 2)} x ${state.default_qty || 6}`
         : mode === "DISCARD"
           ? "DISCARD"
-          : `WAIT ${fmt(state.watch_window_eta_secs, 0, "s")}`;
+          : `QUASE RESOLVIDO | ${state.setup_side || "sem lado"}`;
     const secondary =
       mode === "READY"
         ? `edge active | reason=${state.setup_reason || "-"}`
@@ -200,8 +257,16 @@
           : `outside window | reason=${state.setup_reason || "-"}`
     ;
     const lines = [];
+    lines.push(
+      `<div style="margin-top:8px;padding:6px 8px;border-radius:6px;text-align:center;text-transform:uppercase;font-size:13px;font-weight:700;background:${
+        criteriaReady ? "rgba(31,157,85,0.22)" : "rgba(214,69,69,0.14)"
+      };color:${criteriaReady ? "#8ff0b5" : "#ffb4b4"};border:1px solid ${criteriaReady ? "rgba(31,157,85,0.6)" : "rgba(214,69,69,0.45)"};">${
+        criteriaReady ? "entrada liberada" : "entrada bloqueada"
+      }</div>`
+    );
     lines.push(row("Status", `${mode} | secs=${state.secs_to_end ?? "-"} | score=${state.manual_score ?? 0}`));
-    lines.push(row("Action", `${state.suggested_action || "-"} | ${state.suggested_detail || "-"}`));
+    lines.push(row("Action", `${escapeHtml(state.suggested_action || "-")} | ${escapeHtml(state.suggested_detail || "-")}`));
+    lines.push(criteriaRows(state));
     if (hasValue(state.watch_window_eta_secs) && Number(state.watch_window_eta_secs) > 0) {
       lines.push(row("Watch In", fmt(state.watch_window_eta_secs, 0, "s")));
     }
@@ -223,7 +288,7 @@
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
         <div style="font-size:14px;font-weight:700;">${headline}</div>
-        <div style="background:${badge};padding:4px 8px;border-radius:6px;font-weight:700;">${mode}</div>
+        <div style="background:${criteriaReady ? "#1f9d55" : badge};padding:4px 8px;border-radius:6px;font-weight:700;">${criteriaReady ? "LIBERADA" : mode}</div>
       </div>
       <div style="margin-top:8px;">${lines.join("")}</div>
       <div style="margin-top:8px;display:flex;gap:8px;">

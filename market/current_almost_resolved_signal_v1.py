@@ -164,7 +164,7 @@ class CurrentAlmostResolvedConfigV1:
     resolved_pullback_max_adverse_spot_15s_bps: float = 0.8
     resolved_pullback_max_adverse_spot_30s_bps: float = 1.0
     passive_capture_enabled: bool = True
-    passive_capture_max_secs: int = 60
+    passive_capture_max_secs: int = 90
     passive_capture_preferred_secs: int = 45
     passive_capture_min_leader_price: float = 0.98
     passive_capture_preferred_leader_price: float = 0.99
@@ -177,7 +177,16 @@ class CurrentAlmostResolvedConfigV1:
     passive_capture_max_adverse_spot_15s_bps: float = 0.8
     passive_capture_max_adverse_spot_30s_bps: float = 1.0
     passive_capture_max_market_range_30s: float = 0.045
-    passive_capture_min_score: int = 85
+    passive_capture_min_score: int = 75
+    passive_capture_dynamic_distance_enabled: bool = True
+    passive_capture_near_secs: int = 30
+    passive_capture_mid_secs: int = 60
+    passive_capture_near_min_safe_distance_usd: float = 50.0
+    passive_capture_mid_min_safe_distance_usd: float = 70.0
+    passive_capture_far_min_safe_distance_usd: float = 100.0
+    passive_capture_near_distance_vs_recent_vol_mult: float = 2.0
+    passive_capture_mid_distance_vs_recent_vol_mult: float = 2.5
+    passive_capture_far_distance_vs_recent_vol_mult: float = 3.0
 
     def as_dict(self) -> Dict:
         return asdict(self)
@@ -185,6 +194,39 @@ class CurrentAlmostResolvedConfigV1:
 
 def _passive_limit_price(leader_price: float, tick_size: float, ticks_below: int) -> float:
     return round(max(0.01, leader_price - max(1, ticks_below) * max(0.001, tick_size)), 6)
+
+
+def passive_capture_required_distance_v1(
+    *,
+    secs_to_end: int,
+    recent_vol_floor_usd: float,
+    cfg: CurrentAlmostResolvedConfigV1,
+) -> Dict:
+    if not cfg.passive_capture_dynamic_distance_enabled:
+        fixed_min = cfg.passive_capture_min_safe_distance_usd
+        vol_mult = cfg.passive_capture_min_distance_vs_recent_vol_mult
+        tier = "fixed"
+    elif secs_to_end <= cfg.passive_capture_near_secs:
+        fixed_min = cfg.passive_capture_near_min_safe_distance_usd
+        vol_mult = cfg.passive_capture_near_distance_vs_recent_vol_mult
+        tier = "near"
+    elif secs_to_end <= cfg.passive_capture_mid_secs:
+        fixed_min = cfg.passive_capture_mid_min_safe_distance_usd
+        vol_mult = cfg.passive_capture_mid_distance_vs_recent_vol_mult
+        tier = "mid"
+    else:
+        fixed_min = cfg.passive_capture_far_min_safe_distance_usd
+        vol_mult = cfg.passive_capture_far_distance_vs_recent_vol_mult
+        tier = "far"
+    vol_min = _safe_float(recent_vol_floor_usd) * vol_mult
+    required = max(fixed_min, vol_min)
+    return {
+        "tier": tier,
+        "fixed_min_usd": round(fixed_min, 4),
+        "vol_mult": round(vol_mult, 4),
+        "vol_min_usd": round(vol_min, 4),
+        "required_usd": round(required, 4),
+    }
 
 
 def _passive_capture_score(
@@ -199,13 +241,15 @@ def _passive_capture_score(
     market_range_30s: float,
     depth: float,
     cfg: CurrentAlmostResolvedConfigV1,
+    min_safe_distance_usd: float | None = None,
 ) -> int:
+    distance_floor = cfg.passive_capture_min_safe_distance_usd if min_safe_distance_usd is None else float(min_safe_distance_usd)
     score = 0
     if safe_distance_ok:
         score += 28
-    elif distance_usd >= cfg.passive_capture_min_safe_distance_usd and distance_bps >= cfg.passive_capture_min_safe_distance_bps:
+    elif distance_usd >= distance_floor and distance_bps >= cfg.passive_capture_min_safe_distance_bps:
         score += 18
-    score += min(18, int(max(0.0, distance_usd - cfg.passive_capture_min_safe_distance_usd) / 8.0))
+    score += min(18, int(max(0.0, distance_usd - distance_floor) / 8.0))
     if secs_to_end <= cfg.passive_capture_preferred_secs:
         score += 12
     elif secs_to_end <= cfg.passive_capture_max_secs:
@@ -338,6 +382,11 @@ def evaluate_current_almost_resolved_v1(
     result["market_range_60s"] = market_range_60s
     result["spot_range_60s_usd"] = spot_range_60s_usd
     recent_vol_floor_usd = max(spot_range_60s_usd, up_adverse_spot_usd, down_adverse_spot_usd)
+    passive_required_distance = passive_capture_required_distance_v1(
+        secs_to_end=int(secs_to_end),
+        recent_vol_floor_usd=recent_vol_floor_usd,
+        cfg=cfg,
+    )
     resolved_pullback_safe_distance_ok = (
         distance_to_price_to_beat_usd >= cfg.resolved_pullback_min_safe_distance_usd
         and distance_to_price_to_beat_bps >= cfg.resolved_pullback_min_safe_distance_bps
@@ -364,9 +413,8 @@ def evaluate_current_almost_resolved_v1(
     up_tick_size = max(0.001, _safe_float(up.get("tick_size"), 0.01))
     down_tick_size = max(0.001, _safe_float(down.get("tick_size"), 0.01))
     passive_safe_distance_ok = (
-        distance_to_price_to_beat_usd >= cfg.passive_capture_min_safe_distance_usd
+        distance_to_price_to_beat_usd >= _safe_float(passive_required_distance.get("required_usd"), cfg.passive_capture_min_safe_distance_usd)
         and distance_to_price_to_beat_bps >= cfg.passive_capture_min_safe_distance_bps
-        and distance_to_price_to_beat_usd >= recent_vol_floor_usd * cfg.passive_capture_min_distance_vs_recent_vol_mult
     )
     passive_up_score = _passive_capture_score(
         leader_price=up_buy,
@@ -379,6 +427,7 @@ def evaluate_current_almost_resolved_v1(
         market_range_30s=market_range_30s,
         depth=up_depth,
         cfg=cfg,
+        min_safe_distance_usd=_safe_float(passive_required_distance.get("fixed_min_usd"), cfg.passive_capture_min_safe_distance_usd),
     )
     passive_down_score = _passive_capture_score(
         leader_price=down_buy,
@@ -391,8 +440,15 @@ def evaluate_current_almost_resolved_v1(
         market_range_30s=market_range_30s,
         depth=down_depth,
         cfg=cfg,
+        min_safe_distance_usd=_safe_float(passive_required_distance.get("fixed_min_usd"), cfg.passive_capture_min_safe_distance_usd),
     )
     result["passive_capture_safe_distance_ok"] = passive_safe_distance_ok
+    result["passive_capture_distance_model"] = "hybrid_fixed_or_vol_max" if cfg.passive_capture_dynamic_distance_enabled else "fixed"
+    result["passive_capture_distance_tier"] = passive_required_distance.get("tier")
+    result["passive_capture_required_distance_usd"] = passive_required_distance.get("required_usd")
+    result["passive_capture_fixed_min_distance_usd"] = passive_required_distance.get("fixed_min_usd")
+    result["passive_capture_vol_min_distance_usd"] = passive_required_distance.get("vol_min_usd")
+    result["passive_capture_vol_mult"] = passive_required_distance.get("vol_mult")
     result["passive_capture_up_score"] = passive_up_score
     result["passive_capture_down_score"] = passive_down_score
 
