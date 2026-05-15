@@ -35,6 +35,20 @@ def _state_payload() -> dict:
         return {}
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _state_residual_qty(payload: dict) -> float:
+    return max(
+        0.0,
+        _safe_float(payload.get("entry_qty_filled"), 0.0) - _safe_float(payload.get("exit_qty_filled"), 0.0),
+    )
+
+
 def _validate_preflight() -> tuple[bool, str]:
     broker_status = load_broker_env()
     guarded = load_live_guarded_config()
@@ -65,7 +79,15 @@ def _validate_preflight() -> tuple[bool, str]:
     if str(state_payload.get("mode") or "idle") == "awaiting_redeem":
         print("[CURRENT_ALMOST_RESOLVED_STATE]")
         pprint(state_payload)
-        return False, "Startup guard blocked execution: previous position is awaiting claim/redeem."
+        dust_archive_qty = _safe_float(os.getenv("POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY", "0.01"), 0.01)
+        residual_qty = _state_residual_qty(state_payload)
+        if 0 < residual_qty <= dust_archive_qty:
+            print(
+                "[STARTUP_GUARD] Allowing awaiting_redeem dust state",
+                {"residual_qty": residual_qty, "dust_archive_qty": dust_archive_qty},
+            )
+        else:
+            return False, "Startup guard blocked execution: previous position is awaiting claim/redeem."
 
     qty = int(os.getenv("POLY_CURRENT_ALMOST_RESOLVED_QTY", "6"))
     if qty < 5:

@@ -73,7 +73,8 @@ python run_live_current_almost_resolved_real_v1.py --seconds 300
 ```
 
 Esse runner fica armado apenas com `POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED=true`. A primeira versao real e dedicada ao setup de quase resolvidos, bloqueia startup se houver ordens abertas e nao deve ser executada junto com o `next1 scalp real` enquanto a validacao simultanea ainda nao estiver pronta.
-Residual microscopico abaixo de `POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY` e arquivado como poeira para nao travar o runner em `pending_exit`.
+Na entrada hibrida, a ordem passiva fica sempre 1 tick abaixo do melhor bid atual; ela so e substituida por limite agressiva quando o sinal segue valido, a janela esta perto do fim e a distancia ate o price-to-beat continua segura.
+Residual microscopico abaixo de `POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY` e arquivado como poeira para nao travar o runner em `pending_exit` ou `awaiting_redeem`.
 
 ### CLOB V2 e allowance
 
