@@ -300,11 +300,12 @@ def _safe_to_chase_aggressive_entry(
         return False
     if current_secs is None or current_secs > 35:
         return False
-    if bool(signal.get("resolved_pullback_safe_distance_ok")) or bool(signal.get("passive_capture_safe_distance_ok")):
-        return True
-    distance_usd = abs(_safe_float(signal.get("distance_to_price_to_beat_usd"), 0.0))
-    pullback_cap = _safe_float(signal.get("pullback_usd_cap"), 0.0)
-    return pullback_cap > 0 and distance_usd >= pullback_cap
+    side = str(signal.get("side") or "").lower()
+    if bool(signal.get("missing_market_midpoint_context")):
+        return False
+    if side and bool(signal.get(f"{side}_counter_alert")):
+        return False
+    return bool(signal.get("resolved_pullback_safe_distance_ok")) or bool(signal.get("passive_capture_safe_distance_ok"))
 
 
 def _has_sufficient_collateral_for_entry(broker, *, entry_price: float, qty: float, buffer_usd: float = 0.25) -> bool:
