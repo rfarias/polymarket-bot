@@ -328,15 +328,41 @@ def _manual_exit_reason(
     side = trade.side or "UP"
     trade.best_bid = max(_safe_float(trade.best_bid), bid_now)
     buffer_bps = _safe_float(signal.get("up_price_to_beat_buffer_bps" if side == "UP" else "down_price_to_beat_buffer_bps"), 0.0)
+    open_distance_bps = abs(_safe_float(signal.get("distance_to_price_to_beat_bps"), 0.0))
+    market_range_15s = _safe_float(signal.get("market_range_15s"), 0.0)
     market_range_30s = _safe_float(signal.get("market_range_30s"), 0.0)
     adverse_spot_bps = _safe_float(signal.get("up_adverse_spot_bps" if side == "UP" else "down_adverse_spot_bps"), 0.0)
     edge_vs_counter = _safe_float(signal.get("up_edge_vs_counter" if side == "UP" else "down_edge_vs_counter"), 0.0)
+    setup_variant = str(trade.setup_variant or signal.get("setup_variant") or "")
+    pnl_positive = bid_now > _safe_float(trade.entry_price, 0.0)
 
     if not hold_winner_to_resolution and secs_to_end is not None and secs_to_end <= flatten_deadline_secs:
         return "deadline_flatten"
+    if not hold_winner_to_resolution and not trade.hold_to_resolution and trade.target_price is not None and bid_now >= float(trade.target_price):
+        return "target"
+    if (
+        setup_variant == "controlled_late_entry"
+        and pnl_positive
+        and (
+            market_range_15s >= cfg.controlled_late_max_market_range_15s
+            or adverse_spot_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
+            or buffer_bps <= cfg.paper_structural_stop_buffer_bps
+            or open_distance_bps <= cfg.min_price_to_beat_distance_bps
+        )
+    ):
+        return "controlled_late_profit_take"
+    if (
+        setup_variant == "resolved_pullback_limit"
+        and (
+            market_range_15s >= cfg.near_end_max_market_range_15s
+            or market_range_30s >= cfg.paper_profit_take_on_market_range_30s
+            or adverse_spot_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
+        )
+    ):
+        return "resolved_pullback_exit"
     if trade.stop_price is not None and bid_now <= float(trade.stop_price):
         return "stop"
-    if signal.get("setup_variant") == "resolved_pullback_limit" and secs_to_end is not None and secs_to_end <= cfg.resolved_pullback_preferred_secs:
+    if setup_variant == "resolved_pullback_limit" and secs_to_end is not None and secs_to_end <= cfg.resolved_pullback_preferred_secs:
         trade.hold_to_resolution = True
     if (
         adverse_spot_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
@@ -345,9 +371,7 @@ def _manual_exit_reason(
         or (signal.get("side") not in (None, side) and signal.get("allow"))
         or buffer_bps <= cfg.paper_structural_stop_buffer_bps
     ):
-        return "profit_protect" if bid_now > _safe_float(trade.entry_price, 0.0) else "structural_stop"
-    if not hold_winner_to_resolution and not trade.hold_to_resolution and trade.target_price is not None and bid_now >= float(trade.target_price):
-        return "target"
+        return "profit_protect" if pnl_positive else "structural_stop"
     if not hold_winner_to_resolution and not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
         return "timeout"
     return None
