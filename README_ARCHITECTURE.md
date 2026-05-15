@@ -146,6 +146,23 @@ Se outro programador for continuar o projeto nos mesmos padrões:
 - preserve persistência e reconciliação antes de expandir volume ou paralelismo
 - trate `diagnostics_*` como suporte, não como API estável
 
+## 6.1 Fluxo De Agente Esperado
+
+O projeto deve ser conduzido em ciclos completos sempre que a acao for segura:
+
+- rodar paper, replay ou diagnostico
+- medir funil, PnL, fills, slippage e risco de saida
+- identificar o gargalo principal
+- implementar ajuste pequeno
+- compilar/testar
+- documentar
+- commitar
+- deixar handoff ou comando de continuidade pronto
+
+O agente/programador pode prosseguir sem pedir confirmacao para analise de logs, paper trading sem ordens reais, replay historico, melhorias de diagnostico, documentacao e commits de mudancas testadas.
+
+O agente/programador deve pedir confirmacao antes de postar ordens reais, aumentar tamanho de mao, remover travas de risco, alterar credenciais, ligar autonomia de execucao ou apagar logs/estado operacional.
+
 ## 7. Próximo lugar para olhar no código
 
 Para continuar `next1 scalp`:

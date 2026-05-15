@@ -184,6 +184,48 @@ nenhum caso de saida dependente de book fino
 agressiva trazendo ganho incremental ou sendo removida
 ```
 
+## Preferencia De Fluxo De Trabalho
+
+O projeto deve evoluir com um fluxo mais automatico. O agente/programador nao deve esperar o usuario pedir cada proximo passo quando a acao for segura e fizer parte do ciclo normal de engenharia.
+
+Fluxo esperado:
+
+```text
+rodar paper/replay
+medir funil, PnL, fills, slippage e risco de saida
+identificar o gargalo principal
+implementar ajuste pequeno e conservador
+compilar/testar
+documentar
+commitar
+deixar comando de continuidade pronto
+```
+
+O agente pode prosseguir sozinho em:
+
+```text
+analise de logs
+replay historico
+paper trading sem ordens reais
+melhorias de diagnostico
+documentacao
+commits de mudancas ja testadas
+organizacao de handoff
+```
+
+O agente deve pedir confirmacao antes de:
+
+```text
+postar ordens reais
+aumentar tamanho de mao
+remover ou afrouxar trava de risco
+alterar credenciais ou ambiente real
+ligar autonomia de execucao
+apagar logs ou estado operacional
+```
+
+Objetivo do fluxo: reduzir a necessidade de microgerenciamento pelo usuario e manter ciclos longos de evolucao operacional, sem ultrapassar limites de risco real.
+
 ## Roadmap Registrado
 
 Tambem ficou documentado:
