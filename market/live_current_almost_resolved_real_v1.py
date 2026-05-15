@@ -262,6 +262,104 @@ def _clamp_limit_price(price: float, *, tick_size: float) -> float:
     return round(bounded, 6)
 
 
+def _side_book(snap: dict, side: str) -> dict:
+    return (snap.get("up") if side == "UP" else snap.get("down")) or {}
+
+
+def _bid_levels_for_side(snap: dict, side: str) -> list:
+    levels = _side_book(snap, side).get("top_bids") or []
+    return [level for level in levels if isinstance(level, dict)]
+
+
+def _exit_liquidity_risk(
+    snap: dict,
+    executable: Optional[dict],
+    *,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    qty: float,
+    tick_size: float,
+) -> dict:
+    side = side if side in ("UP", "DOWN") else "UP"
+    entry_price = _safe_float(entry_price, 0.0)
+    stop_price = _safe_float(stop_price, 0.0)
+    qty = max(0.0, _safe_float(qty, 0.0))
+    tick_size = max(0.001, _safe_float(tick_size, 0.01))
+    best_bid = _bid_for_side(executable, side)
+    levels = _bid_levels_for_side(snap, side)
+
+    qty_at_or_above_stop = 0.0
+    qty_at_best_three = 0.0
+    remaining = qty
+    notional = 0.0
+    worst_price_for_qty = 0.0
+    observed_bid_depth = 0.0
+
+    for idx, level in enumerate(levels):
+        price = _safe_float(level.get("price"), 0.0)
+        size = _safe_float(level.get("size"), 0.0)
+        if price <= 0 or size <= 0:
+            continue
+        observed_bid_depth += size
+        if price >= stop_price:
+            qty_at_or_above_stop += size
+        if idx < 3:
+            qty_at_best_three += size
+        if remaining > 0:
+            take = min(remaining, size)
+            notional += take * price
+            remaining = round(remaining - take, 6)
+            worst_price_for_qty = price
+
+    if qty <= 0:
+        vwap_exit_for_qty = best_bid
+        enough_depth_for_qty = True
+    elif remaining <= 0:
+        vwap_exit_for_qty = round(notional / qty, 6)
+        enough_depth_for_qty = True
+    else:
+        vwap_exit_for_qty = round(notional / max(0.000001, qty - remaining), 6) if notional > 0 else 0.0
+        enough_depth_for_qty = False
+
+    theoretical_stop_loss_ticks = (
+        round(max(0.0, entry_price - stop_price) / tick_size, 4) if entry_price > 0 and stop_price > 0 else None
+    )
+    best_bid_loss_ticks = (
+        round(max(0.0, entry_price - best_bid) / tick_size, 4) if entry_price > 0 and best_bid > 0 else None
+    )
+    pessimistic_exit_loss_ticks = (
+        round(max(0.0, entry_price - vwap_exit_for_qty) / tick_size, 4)
+        if entry_price > 0 and vwap_exit_for_qty > 0
+        else None
+    )
+    worst_level_loss_ticks = (
+        round(max(0.0, entry_price - worst_price_for_qty) / tick_size, 4)
+        if entry_price > 0 and worst_price_for_qty > 0
+        else None
+    )
+
+    return {
+        "side": side,
+        "entry_price": round(entry_price, 6) if entry_price > 0 else None,
+        "stop_price": round(stop_price, 6) if stop_price > 0 else None,
+        "qty": round(qty, 6),
+        "best_bid": round(best_bid, 6) if best_bid > 0 else None,
+        "bid_levels_seen": len(levels),
+        "observed_bid_depth": round(observed_bid_depth, 6),
+        "qty_at_or_above_stop": round(qty_at_or_above_stop, 6),
+        "qty_at_best_three": round(qty_at_best_three, 6),
+        "vwap_exit_for_qty": vwap_exit_for_qty if vwap_exit_for_qty > 0 else None,
+        "worst_price_for_qty": round(worst_price_for_qty, 6) if worst_price_for_qty > 0 else None,
+        "enough_depth_for_qty": bool(enough_depth_for_qty),
+        "theoretical_stop_loss_ticks": theoretical_stop_loss_ticks,
+        "best_bid_loss_ticks": best_bid_loss_ticks,
+        "pessimistic_exit_loss_ticks": pessimistic_exit_loss_ticks,
+        "worst_level_loss_ticks": worst_level_loss_ticks,
+        "exit_depth_covers_stop": bool(qty <= 0 or qty_at_or_above_stop >= qty),
+    }
+
+
 def _should_await_platform_redeem(
     trade: LiveCurrentAlmostResolvedTradeState,
     *,
@@ -839,6 +937,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg)
     trade = restored_trade
     current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
+    last_leader_price_by_key: dict[str, float] = {}
     started_at = time.time()
 
     while time.time() - started_at < run_for:
@@ -960,6 +1059,50 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         tick_size=tick_size,
                     )
                     order_style = "passive_limit"
+
+                # tick_up_confirmed: for passive entries, only proceed if leader_price
+                # has ticked up since the last poll on this (slug, side) pair. Prevents
+                # posting passive orders on stale signals that have already lost momentum.
+                is_passive_signal = (
+                    str(signal.get("setup_variant") or "") == "passive_extreme_liquidity_capture"
+                    and str(signal.get("execution_style") or "") == "post_only"
+                )
+                leader_price = _safe_float(signal.get("leader_price"), 0.0)
+                leader_key = f"{event_slug}:{side}"
+                prev_leader_price = last_leader_price_by_key.get(leader_key)
+                tick_up_confirmed = (
+                    not is_passive_signal
+                    or prev_leader_price is None
+                    or leader_price > prev_leader_price
+                )
+                if side in ("UP", "DOWN") and leader_price > 0:
+                    last_leader_price_by_key[leader_key] = leader_price
+                if not tick_up_confirmed:
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "entry_blocked",
+                            "ts": now,
+                            "session_id": session_id,
+                            "reason": "passive_tick_up_required",
+                            "leader_price": leader_price,
+                            "prev_leader_price": prev_leader_price,
+                            "signal": signal,
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
+
+                planned_exit_risk = _exit_liquidity_risk(
+                    current_snap,
+                    current_exec,
+                    side=side,
+                    entry_price=entry_price,
+                    stop_price=round(max(0.01, _safe_float(signal.get("stop_price"), entry_price - signal_cfg.stop_ticks * tick_size)), 6),
+                    qty=float(qty),
+                    tick_size=tick_size,
+                )
+
                 try:
                     trade = _post_entry_order(
                         broker,
@@ -1021,6 +1164,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "entry_order_style": order_style,
                         "signal_entry_price": signal_entry_price,
                         "posted_entry_price": entry_price,
+                        "planned_exit_risk": planned_exit_risk,
                         "trade": _trade_summary(trade),
                     },
                 )
