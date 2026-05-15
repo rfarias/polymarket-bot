@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(git *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(pip *)",
+      "Bash(pip3 *)",
+      "Bash(powershell *)",
+      "Bash(py_compile *)",
+      "Bash(python -m py_compile *)",
+      "Bash(python -m pytest *)",
+      "Bash(python -m json.tool *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(dir *)",
+      "Bash(Get-Content *)",
+      "Bash(Get-ChildItem *)",
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash(python run_live_*)",
+      "Bash(python run_guarded_bot*)",
+      "Bash(python run_multi_setup_bot*)",
+      "Bash(python run_portfolio_settlement*)",
+      "Bash(powershell *watch_next1*)",
+      "Bash(powershell *watch_current*)",
+      "Bash(powershell *watch_portfolio*)"
+    ]
+  }
+}

@@ -265,8 +265,6 @@ def _clamp_limit_price(price: float, *, tick_size: float) -> float:
 def _should_await_platform_redeem(
     trade: LiveCurrentAlmostResolvedTradeState,
     *,
-    active_bid: float,
-    tick_size: float,
     current_secs: Optional[int],
     current_slug: Optional[str],
     hold_winner_to_resolution: bool,
@@ -275,11 +273,9 @@ def _should_await_platform_redeem(
         return False
     if not trade.token_id or not trade.side:
         return False
-    tick = max(0.001, _safe_float(tick_size, 0.001))
     event_rolled = bool(current_slug and trade.event_slug and current_slug != trade.event_slug)
-    at_resolution_price = _safe_float(active_bid, 0.0) >= 1.0 - tick
     settle_window = current_secs is not None and current_secs <= 1
-    return event_rolled or settle_window or at_resolution_price
+    return event_rolled or settle_window
 
 
 def _passive_entry_price_for_signal(signal: dict, *, bid_now: float, tick_size: float) -> float:
@@ -1239,8 +1235,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 )
                 platform_redeem_path = _should_await_platform_redeem(
                     trade,
-                    active_bid=active_bid,
-                    tick_size=tick_size,
                     current_secs=current_secs,
                     current_slug=str(current_item.get("slug") or "") if current_item else None,
                     hold_winner_to_resolution=hold_winner_to_resolution,
@@ -1318,9 +1312,19 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     },
                 )
                 if _is_flat_qty(token_balance_qty):
-                    _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
-                    trade = LiveCurrentAlmostResolvedTradeState()
-                    _clear_state(state_path)
+                    # Guard: the balance API can return 0 for ~10-15s after a fill
+                    # while the blockchain state propagates. If we know the position
+                    # was filled (entry_qty_filled > 0), wait for the API to catch up
+                    # before declaring the trade closed — a premature reset here leaves
+                    # real shares unmanaged.
+                    known_filled = _safe_float(trade.entry_qty_filled, 0.0) > 0
+                    secs_since_resolution = now - _safe_float(trade.resolution_detected_at, now)
+                    if known_filled and secs_since_resolution < 15.0:
+                        _append_jsonl(log_path, {"type": "awaiting_redeem_balance_lag", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "entry_qty_filled": trade.entry_qty_filled, "secs_since_resolution": round(secs_since_resolution, 2), "trade": _trade_summary(trade)})
+                    else:
+                        _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                        trade = LiveCurrentAlmostResolvedTradeState()
+                        _clear_state(state_path)
                 elif 0 < token_balance_qty <= dust_archive_qty:
                     _append_jsonl(
                         log_path,
@@ -1346,8 +1350,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         _clear_state(state_path)
                     elif _should_await_platform_redeem(
                         trade,
-                        active_bid=active_bid,
-                        tick_size=_tick_size_from_snap(current_snap, trade.side or "UP"),
                         current_secs=current_secs,
                         current_slug=str(current_item.get("slug") or "") if current_item else None,
                         hold_winner_to_resolution=hold_winner_to_resolution,
