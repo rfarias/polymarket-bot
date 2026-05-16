@@ -977,6 +977,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     trade = restored_trade
     current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
     last_leader_price_by_key: dict[str, float] = {}
+    leader_velocity_history: dict[str, list[tuple[float, float]]] = {}
     started_at = time.time()
 
     while time.time() - started_at < run_for:
@@ -1028,6 +1029,17 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 signal["event_slug"] = current_item.get("slug")
                 signal["signed_distance_from_open_bps"] = current_scalp_signal.get("distance_from_open_bps")
                 signal["guardian_hold_winner_to_resolution"] = bool(hold_winner_to_resolution)
+
+            # Update rolling 60s leader velocity history for both sides
+            _event_slug_for_vel = str(current_item.get("slug") or "") if current_item else ""
+            if _event_slug_for_vel:
+                for _vel_side, _vel_key in (("UP", "up_buy"), ("DOWN", "down_buy")):
+                    _vel_price = _safe_float(signal.get(_vel_key), 0.0)
+                    if _vel_price > 0:
+                        _hist_key = f"{_event_slug_for_vel}:{_vel_side}"
+                        _hist = leader_velocity_history.setdefault(_hist_key, [])
+                        _hist.append((now, _vel_price))
+                        leader_velocity_history[_hist_key] = [(t, p) for t, p in _hist if now - t <= 60.0]
 
             active_book = _fetch_active_book(trade) if trade.mode in ("pending_entry", "open_position", "pending_exit", "exit_pending_confirm") else None
             active_bid = _best_bid(active_book or {})
@@ -1131,6 +1143,28 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                     time.sleep(poll_secs)
                     continue
+
+                # Block entry if leader moved too fast in the last 60s (velocity filter)
+                _vel_hist = leader_velocity_history.get(leader_key, [])
+                if len(_vel_hist) >= 2:
+                    _vel_prices = [p for _, p in _vel_hist]
+                    _vel_range = max(_vel_prices) - min(_vel_prices)
+                    if _vel_range > 0.06:
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "entry_blocked",
+                                "ts": now,
+                                "session_id": session_id,
+                                "reason": "leader_velocity_too_high",
+                                "velocity_range": round(_vel_range, 4),
+                                "velocity_window_secs": 60.0,
+                                "threshold": 0.06,
+                                "signal": signal,
+                            },
+                        )
+                        time.sleep(poll_secs)
+                        continue
 
                 planned_exit_risk = _exit_liquidity_risk(
                     current_snap,
