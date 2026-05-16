@@ -1157,7 +1157,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 if len(_vel_hist) >= 2:
                     _vel_prices = [p for _, p in _vel_hist]
                     _vel_range = max(_vel_prices) - min(_vel_prices)
-                    if _vel_range > 0.06:
+                    if _vel_range >= 0.06:
                         _append_jsonl(
                             log_path,
                             {
