@@ -28,6 +28,7 @@ from market.live_current_almost_resolved_real_v1 import (
     _load_state,
     _post_exit_order,
     _save_state,
+    _should_hold_to_resolution,
     _token_balance_qty,
     _trade_summary,
 )
@@ -362,6 +363,9 @@ def _manual_exit_reason(
         return "resolved_pullback_exit"
     if trade.stop_price is not None and bid_now <= float(trade.stop_price):
         return "stop"
+    if setup_variant == "extreme_99_limit":
+        trade.hold_to_resolution = True
+        return None
     if setup_variant == "resolved_pullback_limit" and secs_to_end is not None and secs_to_end <= cfg.resolved_pullback_preferred_secs:
         trade.hold_to_resolution = True
     if (
@@ -712,6 +716,10 @@ def monitor_manual_adopt_current_almost_resolved_v1(duration_seconds: Optional[i
                 continue
 
         if trade.mode == "open_position":
+            if trade.side and _should_hold_to_resolution(
+                signal, bid_now=active_bid, secs_to_end=current_secs, cfg=signal_cfg, side=trade.side
+            ):
+                trade.hold_to_resolution = True
             if hold_winner_to_resolution and current_secs is not None and current_secs <= 1:
                 trade.mode = "awaiting_redeem"
                 trade.updated_at = now
