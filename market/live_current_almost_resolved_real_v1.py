@@ -136,6 +136,7 @@ class LiveCurrentAlmostResolvedTradeState:
     entry_qty_requested: float = 0.0
     entry_qty_filled: float = 0.0
     exit_qty_filled: float = 0.0
+    exit_price_posted: Optional[float] = None
     target_price: Optional[float] = None
     stop_price: Optional[float] = None
     best_bid: Optional[float] = None
@@ -544,7 +545,13 @@ def _exit_reason(
         and secs_to_end <= cfg.paper_hold_to_resolution_secs
     ):
         return "late_profit_take"
-    if (
+    # In a binary CLOB, up_ask + down_ask ≈ 1.0. If both sides show prices > 0.50
+    # (sum > 1.10), the snapshot is stale/corrupt. Skip structural_stop in that case
+    # to avoid exiting profitable positions based on bad data.
+    _snap_up_ask = _safe_float(signal.get("up_buy"), 0.0)
+    _snap_down_ask = _safe_float(signal.get("down_buy"), 0.0)
+    _snap_data_ok = not (_snap_up_ask > 0 and _snap_down_ask > 0 and _snap_up_ask + _snap_down_ask > 1.10)
+    if _snap_data_ok and (
         buffer_bps <= cfg.paper_structural_stop_buffer_bps
         or market_range_30s >= cfg.paper_structural_stop_market_range_30s
         or edge_vs_counter <= cfg.paper_structural_stop_edge_vs_counter
@@ -677,6 +684,7 @@ def _post_exit_order(
     try:
         order = broker.place_limit_order(req)
         trade.exit_order_id = order.order_id
+        trade.exit_price_posted = post_price
         trade.mode = "pending_exit"
         trade.updated_at = now
         trade.last_reason = f"exit_posted:{reason}:{req.order_type.lower()}"
