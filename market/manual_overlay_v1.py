@@ -36,6 +36,20 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(default)
 
 
+def _variant_exit_hint(variant: str) -> str:
+    if variant == "extreme_99_limit":
+        return "hold ate resolucao; stop ignorado para esta variante"
+    if variant == "controlled_late_entry":
+        return "sair com lucro se range_15s alto, spot adverso ou buffer baixo"
+    if variant == "resolved_pullback_limit":
+        return "sair se range_15s >= 0.03 ou range_30s >= 0.025 ou spot adverso alto"
+    if variant == "passive_extreme_liquidity_capture":
+        return "saida no target; requisita tick-up no lider antes do fill"
+    if variant == "dual_rich_late_limit":
+        return "saida no target ou stop padrao; ambos os lados ricos"
+    return "saida no target ou stop padrao"
+
+
 def _slot_secs_to_end(item: dict | None) -> int | None:
     if not item:
         return None
@@ -395,6 +409,10 @@ class ManualOverlayEngineV1:
                 return "almost resolved late"
             if variant == "resolved_pullback_limit":
                 return "almost resolved pullback"
+            if variant == "extreme_99_limit":
+                return "almost resolved extreme 99"
+            if variant == "passive_extreme_liquidity_capture":
+                return "almost resolved passive capture"
             return "almost resolved"
         if name == "continuation":
             return "scalp current continuation"
@@ -1012,6 +1030,14 @@ class ManualOverlayEngineV1:
                 "setup quase resolvido liberado; risco aceitavel",
                 bool(almost_signal.get("allow")) and reversal_risk != "high" and score >= 55,
             ),
+            criterion(
+                "setup_variant",
+                "Variante / regra de saida",
+                str(almost_signal.get("setup_variant") or "standard"),
+                "informa a regra de saida aplicavel para esta entrada",
+                True,
+                _variant_exit_hint(str(almost_signal.get("setup_variant") or "")),
+            ),
         ]
 
     def _suggested_action(
@@ -1062,10 +1088,20 @@ class ManualOverlayEngineV1:
             and market_range_30s <= max(self.signal_cfg.controlled_late_max_market_range_30s, distance_bps / 10000.0)
             and market_range_15s <= max(self.signal_cfg.controlled_late_max_market_range_15s, market_range_30s)
         )
+        setup_variant = str(almost_signal.get("setup_variant") or "")
         exit_alert = "MANTER"
-        if side in ("UP", "DOWN"):
+        if setup_variant == "extreme_99_limit":
+            exit_alert = "HOLD ATE RESOLUCAO | stop ignorado para extreme 99"
+        elif side in ("UP", "DOWN"):
             if adverse_5s >= 1.2 or adverse_15s >= 1.8 or reversal_risk == "high":
                 exit_alert = "SAIR NA PRIMEIRA OSCILACAO CONTRA"
+            elif setup_variant == "controlled_late_entry" and market_range_15s >= self.signal_cfg.controlled_late_max_market_range_15s:
+                exit_alert = "REALIZAR LUCRO | range alto para entrada tardia"
+            elif setup_variant == "resolved_pullback_limit" and (
+                market_range_15s >= self.signal_cfg.near_end_max_market_range_15s
+                or market_range_30s >= self.signal_cfg.paper_profit_take_on_market_range_30s
+            ):
+                exit_alert = "SAIR | pullback esgotou | range deteriorando"
             elif market_range_15s >= 0.02 or market_range_30s >= 0.03:
                 exit_alert = "REALIZAR RAPIDO EM OSCILACAO"
             elif current_secs is not None and current_secs <= 12 and buffer_bps >= 4.0:
@@ -1113,6 +1149,13 @@ class ManualOverlayEngineV1:
             return "EVITAR", "setup existe, mas o risco de reversão ainda está alto", "SEM ENTRADA", exit_alert
         if side not in ("UP", "DOWN"):
             return "AGUARDAR", "lado ainda indefinido", "SEM ENTRADA", exit_alert
+        if setup_variant == "extreme_99_limit":
+            return (
+                f"COMPRAR {side}",
+                "ENTRADA 0.99 | HOLD ATE RESOLUCAO SEMPRE",
+                "RISCO ELEVADO | NAO USAR STOP | SEGURAR ATE FIM",
+                exit_alert,
+            )
         if controlled_late_window:
             return (
                 f"COMPRAR {side}",

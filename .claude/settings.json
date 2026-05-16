@@ -2,21 +2,7 @@
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
-      "Bash(git *)",
-      "Bash(python *)",
-      "Bash(python3 *)",
-      "Bash(pip *)",
-      "Bash(pip3 *)",
-      "Bash(powershell *)",
-      "Bash(py_compile *)",
-      "Bash(python -m py_compile *)",
-      "Bash(python -m pytest *)",
-      "Bash(python -m json.tool *)",
-      "Bash(cat *)",
-      "Bash(ls *)",
-      "Bash(dir *)",
-      "Bash(Get-Content *)",
-      "Bash(Get-ChildItem *)",
+      "Bash(*)",
       "Read",
       "Glob",
       "Grep"
