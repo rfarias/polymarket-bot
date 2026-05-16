@@ -1275,7 +1275,14 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     trade.updated_at = now
                     trade.last_reason = "entry_fill_detected"
                     _save_state(state_path, trade)
-                    _append_jsonl(log_path, {"type": "fill", "ts": now, "session_id": session_id, "cancel_remainder": resp, "trade": _trade_summary(trade)})
+                    # Detect fills where the signal is already invalid or bid already breached stop.
+                    # Log separately so these can be identified in analysis.
+                    _fill_bid = active_bid
+                    _fill_stop = _safe_float(trade.stop_price, 0.0)
+                    _fill_signal_ok = bool(signal.get("allow")) and signal.get("side") == trade.side
+                    _fill_at_stop = _fill_stop > 0 and _fill_bid > 0 and _fill_bid <= _fill_stop
+                    _fill_event = "fill_on_invalid_signal" if (not _fill_signal_ok or _fill_at_stop) else "fill"
+                    _append_jsonl(log_path, {"type": _fill_event, "ts": now, "session_id": session_id, "cancel_remainder": resp, "fill_bid": _fill_bid, "fill_signal_ok": _fill_signal_ok, "fill_at_stop": _fill_at_stop, "trade": _trade_summary(trade)})
                 elif trade.entry_order_style in ("patient_limit", "passive_limit"):
                     current_slug = str(current_item.get("slug") or "") if current_item else ""
                     signal_still_valid = (
