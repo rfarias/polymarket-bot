@@ -671,12 +671,16 @@ def _post_exit_order(
     active_book = _fetch_active_book(trade)
     tick_size = _safe_float((active_book or {}).get("tick_size"), 0.001)
     post_price = _clamp_limit_price(float(exit_price) if exit_price > 0 else tick_size, tick_size=tick_size)
+    # Urgent exits (stop-type) use FAK to guarantee immediate fill rather than leaving
+    # a GTC resting in the book while the market continues to move against the position.
+    # Non-urgent exits (profit targets) use GTC so the order can rest at the desired price.
+    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid"))
     req = BrokerOrderRequest(
         token_id=trade.token_id or "",
         side="SELL",
         price=post_price,
         size=float(qty),
-        order_type="GTC" if qty >= float(min_limit_exit_qty) else "FAK",
+        order_type="FAK" if _urgent else ("GTC" if qty >= float(min_limit_exit_qty) else "FAK"),
         market_slug=trade.event_slug,
         outcome=trade.side,
         client_order_key=f"current_almost_resolved:exit:{reason}:{int(now)}:{trade.side}",
