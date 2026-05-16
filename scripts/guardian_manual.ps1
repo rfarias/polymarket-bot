@@ -10,11 +10,14 @@
     # Monitorar apenas (sem executar — para testar):
     .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.97 -Qty 50
 
-    # Monitorar e executar stop real:
+    # Monitorar e executar stop real (5min, padrão):
     .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.97 -Qty 50 -ExecuteStop
 
+    # Mercado de 15 minutos (auto-detecta slot atual 15m):
+    .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.97 -Qty 50 -ExecuteStop -Timeframe 15m
+
     # Com slug específico (se não for o slot current):
-    .\scripts\guardian_manual.ps1 -Side DOWN -EntryPrice 0.98 -Qty 200 -ExecuteStop -Slug btc-updown-5m-1778856900
+    .\scripts\guardian_manual.ps1 -Side DOWN -EntryPrice 0.98 -Qty 200 -ExecuteStop -Slug btc-updown-15m-1778856900
 
     # Parâmetros customizados:
     .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.96 -Qty 100 -ExecuteStop -MaxLossTicks 4 -PollSecs 0.5
@@ -43,7 +46,10 @@ param(
 
     [double]$StopPrice = 0.0,
 
-    [switch]$NoBeep
+    [switch]$NoBeep,
+
+    [ValidateSet("5m","15m")]
+    [string]$Timeframe = "5m"
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,6 +87,7 @@ if ($Slug)        { $args_list += @("--slug", $Slug) }
 if ($Seconds -gt 0) { $args_list += @("--seconds", [string]$Seconds) }
 if ($StopPrice -gt 0) { $args_list += @("--price-stop", [string]$StopPrice) }
 if ($NoBeep)      { $args_list += "--no-beep" }
+if ($Timeframe -ne "5m") { $args_list += @("--timeframe", $Timeframe) }
 
 $ts = Get-Date -Format "yyyyMMdd_HHmmss"
 $logFile = Join-Path $repo "logs\guardian_manual_${Side}_${ts}.jsonl"
@@ -91,6 +98,7 @@ Write-Host "========================================"
 Write-Host " GUARDIAN MANUAL — CONTA MANUAL"
 Write-Host "========================================"
 Write-Host " Side        : $Side"
+Write-Host " Timeframe   : $Timeframe"
 Write-Host " Entry Price : $EntryPrice"
 Write-Host " Qty         : $Qty"
 Write-Host " Max Loss    : $MaxLossTicks ticks"

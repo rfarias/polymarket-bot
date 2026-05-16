@@ -25,6 +25,7 @@ from market.rest_5m_shadow_public_v5 import (
     _fetch_slot_state,
     _slot_snapshot,
 )
+from market.rest_15m_shadow_public_v1 import build_slot_bundle_15m_v1
 from market.slug_discovery import fetch_event_by_slug
 
 
@@ -258,8 +259,10 @@ def _enrich_guardian_signal_metrics(signal: dict, scalp_signal: dict, side: str)
     return enriched
 
 
-def _current_slug_slot_bundle(slug: Optional[str]) -> dict:
+def _current_slug_slot_bundle(slug: Optional[str], timeframe: str = "5m") -> dict:
     if not slug:
+        if timeframe == "15m":
+            return build_slot_bundle_15m_v1()
         return _build_slot_bundle()
     meta = fetch_market_metadata_from_slug(slug)
     event = fetch_event_by_slug(slug)
@@ -600,6 +603,13 @@ def main() -> int:
     parser.add_argument("--execute-stop", action="store_true", help="Actually post/cancel/retry SELL stop orders when STOP triggers")
     parser.add_argument("--no-beep", action="store_true")
     parser.add_argument(
+        "--timeframe",
+        type=str,
+        default="5m",
+        choices=["5m", "15m"],
+        help="Market timeframe to monitor. 5m = BTC 5-min slot (default); 15m = BTC 15-min slot.",
+    )
+    parser.add_argument(
         "--env-file",
         type=str,
         default=None,
@@ -663,7 +673,7 @@ def main() -> int:
         now = time.time()
         row: dict = {"type": "snapshot", "ts": now, "guardian": asdict(cfg)}
         try:
-            slot_bundle = _current_slug_slot_bundle(args.slug)
+            slot_bundle = _current_slug_slot_bundle(args.slug, args.timeframe)
             current_item = slot_bundle["queue"].get("current")
             if not current_item:
                 row.update({"status": "WARN", "reasons": ["current_slot_unavailable"]})
