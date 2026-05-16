@@ -266,9 +266,27 @@ def _side_book(snap: dict, side: str) -> dict:
     return (snap.get("up") if side == "UP" else snap.get("down")) or {}
 
 
-def _bid_levels_for_side(snap: dict, side: str) -> list:
-    levels = _side_book(snap, side).get("top_bids") or []
-    return [level for level in levels if isinstance(level, dict)]
+def _bid_levels_for_exit(snap: dict, side: str) -> list:
+    """Exit liquidity for a position in `side` comes from the counter side's asks.
+    In Polymarket binary CLOBs, selling DOWN is matched by UP asks (and vice versa).
+    Converts counter-ask prices to equivalent same-side bid prices (1 - counter_ask)."""
+    counter = "UP" if side == "DOWN" else "DOWN"
+    levels = (_side_book(snap, counter).get("top_asks") or [])
+    result = []
+    for level in levels:
+        if isinstance(level, dict):
+            p = _safe_float(level.get("price"), 0.0)
+            s = _safe_float(level.get("size"), 0.0)
+        elif isinstance(level, (list, tuple)) and len(level) >= 2:
+            p = _safe_float(level[0], 0.0)
+            s = _safe_float(level[1], 0.0)
+        else:
+            continue
+        if p <= 0.0 or p >= 1.0 or s <= 0.0:
+            continue
+        result.append({"price": round(1.0 - p, 6), "size": s})
+    result.sort(key=lambda lvl: lvl["price"], reverse=True)
+    return result
 
 
 def _exit_liquidity_risk(
@@ -287,7 +305,7 @@ def _exit_liquidity_risk(
     qty = max(0.0, _safe_float(qty, 0.0))
     tick_size = max(0.001, _safe_float(tick_size, 0.01))
     best_bid = _bid_for_side(executable, side)
-    levels = _bid_levels_for_side(snap, side)
+    levels = _bid_levels_for_exit(snap, side)
 
     qty_at_or_above_stop = 0.0
     qty_at_best_three = 0.0
