@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -598,7 +599,18 @@ def main() -> int:
     parser.add_argument("--min-market-order-qty", type=float, default=5.0, help="Minimum qty for market FAK; smaller residuals use FAK limit")
     parser.add_argument("--execute-stop", action="store_true", help="Actually post/cancel/retry SELL stop orders when STOP triggers")
     parser.add_argument("--no-beep", action="store_true")
+    parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Path to .env file for broker credentials (default: .env). Use to trade a different account.",
+    )
     args = parser.parse_args()
+
+    if args.env_file:
+        from dotenv import load_dotenv
+        load_dotenv(args.env_file, override=True)
+        print(f"[GUARDIAN_ENV] Loaded credentials from {args.env_file}")
 
     cfg = GuardianConfig(
         side=args.side,
