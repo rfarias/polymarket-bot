@@ -107,6 +107,48 @@ def _build_default_log_path() -> Path:
     return Path("logs") / f"current_almost_resolved_guardian_{ts}.jsonl"
 
 
+def _flash_window(kind: str) -> None:
+    """Flash the taskbar button without stealing focus (Windows only)."""
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        FLASHW_STOP     = 0
+        FLASHW_ALL      = 3   # flash caption + taskbar
+        FLASHW_TIMERNOFG = 12  # keep flashing until window is focused
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize",   ctypes.wintypes.UINT),
+                ("hwnd",     ctypes.wintypes.HWND),
+                ("dwFlags",  ctypes.wintypes.DWORD),
+                ("uCount",   ctypes.wintypes.UINT),
+                ("dwTimeout", ctypes.wintypes.DWORD),
+            ]
+
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if not hwnd:
+            return
+        fi = FLASHWINFO(cbSize=ctypes.sizeof(FLASHWINFO), hwnd=hwnd, dwTimeout=0)
+        if kind == "stop":
+            fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG  # pisca até o usuário clicar
+            fi.uCount  = 0
+        elif kind == "warn":
+            fi.dwFlags = FLASHW_ALL
+            fi.uCount  = 5
+        elif kind == "detect":
+            fi.dwFlags = FLASHW_ALL
+            fi.uCount  = 3
+        elif kind == "error":
+            fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG
+            fi.uCount  = 0
+        else:
+            return
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(fi))
+    except Exception:
+        return
+
+
 def _beep(kind: str) -> None:
     try:
         import winsound
@@ -117,6 +159,8 @@ def _beep(kind: str) -> None:
                 time.sleep(0.08)
         elif kind == "warn":
             winsound.Beep(900, 180)
+        elif kind == "detect":
+            winsound.Beep(1000, 120)
     except Exception:
         return
 
@@ -716,6 +760,8 @@ def main() -> int:
                             f"entry={detected['entry_price']} qty={detected['qty']} "
                             f"trades_usados={detected['trades_used']}"
                         )
+                        _flash_window("detect")
+                        _beep("detect")
                         args.side = detected["side"]
                         if args.entry_price is None:
                             args.entry_price = detected["entry_price"]
@@ -868,6 +914,7 @@ def main() -> int:
             if decision == "STOP":
                 if cfg.beep:
                     _beep("stop")
+                _flash_window("stop")
                 if (not exit_state.active) or now - exit_state.last_attempt_at >= cfg.exit_retry_secs:
                     stop_resp = _execute_or_simulate_stop_cycle(
                         cfg=cfg,
@@ -891,13 +938,16 @@ def main() -> int:
                 if exit_state.flat:
                     _append_jsonl(log_path, row)
                     break
-            elif decision == "WARN" and cfg.beep:
-                _beep("warn")
+            elif decision == "WARN":
+                if cfg.beep:
+                    _beep("warn")
+                _flash_window("warn")
             _append_jsonl(log_path, row)
         except Exception as exc:
             row.update({"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"})
             _append_jsonl(log_path, row)
             print(f"[GUARDIAN_ERROR] {type(exc).__name__}: {exc}")
+            _flash_window("error")
         time.sleep(max(0.25, float(args.poll_secs)))
 
     return 0
