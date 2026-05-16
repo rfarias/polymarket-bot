@@ -567,11 +567,80 @@ def _execute_or_simulate_stop_cycle(
         }
 
 
+def _slot_start_ts(timeframe: str) -> int:
+    step = 900 if timeframe == "15m" else 300
+    return (int(time.time()) // step) * step
+
+
+def _fetch_trades_filtered(broker, token_id: str, after_ts: int) -> list:
+    try:
+        try:
+            from py_clob_client_v2.clob_types import TradeParams
+        except ImportError:
+            from py_clob_client.clob_types import TradeParams
+        params = TradeParams(asset_id=token_id, after=after_ts)
+        result = broker.get_trades(params)
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def _vwap_from_trade_list(trades: list, token_id: str) -> Optional[float]:
+    notional = 0.0
+    qty = 0.0
+    for t in trades or []:
+        if not isinstance(t, dict):
+            continue
+        side = str(t.get("side") or t.get("taker_side") or t.get("maker_side") or "").upper()
+        if side and side not in ("BUY", ""):
+            continue
+        asset = str(t.get("asset_id") or t.get("token_id") or t.get("asset") or "")
+        if asset and asset != token_id and token_id not in str(t):
+            continue
+        trade_qty = 0.0
+        for key in ("size", "size_matched", "matched_size", "filled_size", "qty", "quantity"):
+            trade_qty = _safe_float(t.get(key), 0.0)
+            if trade_qty > 0:
+                break
+        price = _safe_float(t.get("price"), 0.0)
+        if trade_qty > 0 and price > 0:
+            notional += trade_qty * price
+            qty += trade_qty
+    if qty <= 0:
+        return None
+    return round(notional / qty, 6)
+
+
+def _detect_open_position(broker, snap: dict, slot_start_ts: int) -> Optional[dict]:
+    best = None
+    for side in ("UP", "DOWN"):
+        token_id = _token_id_for_side(snap, side)
+        if not token_id:
+            continue
+        qty = _token_balance_qty(broker, token_id)
+        if not qty or qty < 0.001:
+            continue
+        if best is None or qty > best["qty"]:
+            trades = _fetch_trades_filtered(broker, token_id, slot_start_ts)
+            entry_price = _vwap_from_trade_list(trades, token_id)
+            if not entry_price or entry_price <= 0:
+                book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
+                entry_price = _safe_float(book.get("best_ask") or book.get("best_bid"), 0.0)
+            best = {
+                "side": side,
+                "qty": round(qty, 4),
+                "entry_price": round(entry_price, 6) if entry_price else 0.0,
+                "token_id": token_id,
+                "trades_used": len(trades),
+            }
+    return best
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Background guardian for manual current almost-resolved positions")
-    parser.add_argument("--side", required=True, choices=["UP", "DOWN"], help="Manual position side")
-    parser.add_argument("--entry-price", type=float, required=True, help="Average manual entry price")
-    parser.add_argument("--qty", type=float, default=0.0, help="Contracts to sell if --execute-stop is used")
+    parser.add_argument("--side", default=None, choices=["UP", "DOWN"], help="Position side. Omit for auto-detect.")
+    parser.add_argument("--entry-price", type=float, default=None, help="Average entry price. Omit for auto-detect from trade history.")
+    parser.add_argument("--qty", type=float, default=None, help="Contracts to sell on stop. Omit for auto-detect from token balance.")
     parser.add_argument("--slug", type=str, default=None, help="Optional event slug. Defaults to current 5m slot.")
     parser.add_argument("--seconds", type=int, default=0, help="Run duration. Use 0 to run indefinitely.")
     parser.add_argument("--poll-secs", type=float, default=1.0)
@@ -622,6 +691,54 @@ def main() -> int:
         load_dotenv(args.env_file, override=True)
         print(f"[GUARDIAN_ENV] Loaded credentials from {args.env_file}")
 
+    # Auto-detect mode: scan for open position when side/entry/qty are not given
+    auto_detect = args.side is None or args.entry_price is None or args.qty is None
+    if auto_detect:
+        print()
+        print("[GUARDIAN] MODO AUTO-DETECT — aguardando posição aberta...")
+        print(f"[GUARDIAN] Timeframe: {args.timeframe} | Poll: {args.poll_secs}s")
+        print("[GUARDIAN] Pressione Ctrl+C para cancelar.")
+        print()
+        broker_scan = PolymarketBrokerV3.from_env()
+        detected = None
+        while detected is None:
+            try:
+                slot_bundle = _current_slug_slot_bundle(args.slug, args.timeframe)
+                current_item = slot_bundle["queue"].get("current")
+                if current_item:
+                    slot_state = _fetch_slot_state(slot_bundle)
+                    snap = _slot_snapshot(slot_state, "current")
+                    slot_start_ts = _slot_start_ts(args.timeframe)
+                    detected = _detect_open_position(broker_scan, snap, slot_start_ts)
+                    if detected:
+                        print(
+                            f"[GUARDIAN_DETECT] Posição encontrada: side={detected['side']} "
+                            f"entry={detected['entry_price']} qty={detected['qty']} "
+                            f"trades_usados={detected['trades_used']}"
+                        )
+                        args.side = detected["side"]
+                        if args.entry_price is None:
+                            args.entry_price = detected["entry_price"]
+                        if args.qty is None:
+                            args.qty = detected["qty"]
+                    else:
+                        slug_now = str(current_item.get("slug") or "")
+                        secs = current_item.get("seconds_to_end")
+                        print(f"[GUARDIAN_SCAN] Sem posição aberta | {slug_now} | {secs}s restantes")
+                else:
+                    print("[GUARDIAN_SCAN] Slot indisponível — aguardando...")
+            except Exception as exc:
+                print(f"[GUARDIAN_SCAN_ERROR] {type(exc).__name__}: {exc}")
+            if detected is None:
+                time.sleep(max(0.25, float(args.poll_secs)))
+
+    if not args.side:
+        raise SystemExit("[GUARDIAN] Erro: --side não definido e auto-detect não encontrou posição.")
+    if args.entry_price is None or args.entry_price <= 0:
+        raise SystemExit("[GUARDIAN] Erro: --entry-price não definido e auto-detect não conseguiu calcular preço de entrada.")
+    if args.qty is None:
+        args.qty = 0.0
+
     cfg = GuardianConfig(
         side=args.side,
         entry_price=float(args.entry_price),
@@ -654,7 +771,7 @@ def main() -> int:
         beep=not bool(args.no_beep),
     )
     if cfg.execute_stop and cfg.qty <= 0:
-        raise SystemExit("--qty is required and must be > 0 with --execute-stop")
+        raise SystemExit("--qty deve ser > 0 com --execute-stop (não foi detectado automaticamente ou passou 0)")
 
     signal_cfg = CurrentAlmostResolvedConfigV1()
     scalp_cfg = CurrentScalpConfigV1()

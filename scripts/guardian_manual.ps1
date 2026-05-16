@@ -7,32 +7,31 @@
     quando os critérios forem atingidos. Usa as credenciais de .env.manual.
 
 .EXAMPLE
-    # Monitorar apenas (sem executar — para testar):
-    .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.97 -Qty 50
+    # AUTO-DETECT (recomendado): inicie antes de entrar, o guardian detecta tudo sozinho
+    .\scripts\guardian_manual.ps1 -ExecuteStop
+    .\scripts\guardian_manual.ps1 -ExecuteStop -Timeframe 15m
 
-    # Monitorar e executar stop real (5min, padrão):
+    # Manual (quando já sabe exatamente o que entrou):
     .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.97 -Qty 50 -ExecuteStop
-
-    # Mercado de 15 minutos (auto-detecta slot atual 15m):
     .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.97 -Qty 50 -ExecuteStop -Timeframe 15m
 
-    # Com slug específico (se não for o slot current):
-    .\scripts\guardian_manual.ps1 -Side DOWN -EntryPrice 0.98 -Qty 200 -ExecuteStop -Slug btc-updown-15m-1778856900
+    # Monitor sem executar (testes):
+    .\scripts\guardian_manual.ps1
+
+    # Com slug específico:
+    .\scripts\guardian_manual.ps1 -ExecuteStop -Slug btc-updown-15m-1778856900
 
     # Parâmetros customizados:
-    .\scripts\guardian_manual.ps1 -Side UP -EntryPrice 0.96 -Qty 100 -ExecuteStop -MaxLossTicks 4 -PollSecs 0.5
+    .\scripts\guardian_manual.ps1 -ExecuteStop -MaxLossTicks 4 -PollSecs 0.5
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
-    [ValidateSet("UP","DOWN")]
-    [string]$Side,
+    [ValidateSet("UP","DOWN","")]
+    [string]$Side = "",
 
-    [Parameter(Mandatory=$true)]
-    [double]$EntryPrice,
+    [double]$EntryPrice = 0.0,
 
-    [Parameter(Mandatory=$true)]
-    [double]$Qty,
+    [double]$Qty = 0.0,
 
     [switch]$ExecuteStop,
 
@@ -74,14 +73,14 @@ if (-not $hasPK) {
 
 # Construir argumentos
 $args_list = @(
-    "--side", $Side,
-    "--entry-price", [string]$EntryPrice,
-    "--qty", [string]$Qty,
     "--poll-secs", [string]$PollSecs,
     "--max-loss-ticks", [string]$MaxLossTicks,
     "--env-file", $envFile
 )
 
+if ($Side)        { $args_list += @("--side", $Side) }
+if ($EntryPrice -gt 0) { $args_list += @("--entry-price", [string]$EntryPrice) }
+if ($Qty -gt 0)   { $args_list += @("--qty", [string]$Qty) }
 if ($ExecuteStop) { $args_list += "--execute-stop" }
 if ($Slug)        { $args_list += @("--slug", $Slug) }
 if ($Seconds -gt 0) { $args_list += @("--seconds", [string]$Seconds) }
@@ -97,10 +96,13 @@ Write-Host ""
 Write-Host "========================================"
 Write-Host " GUARDIAN MANUAL — CONTA MANUAL"
 Write-Host "========================================"
-Write-Host " Side        : $Side"
+$sideDisplay = if ($Side) { $Side } else { "AUTO-DETECT" }
+$entryDisplay = if ($EntryPrice -gt 0) { $EntryPrice } else { "AUTO-DETECT" }
+$qtyDisplay   = if ($Qty -gt 0) { $Qty } else { "AUTO-DETECT" }
+Write-Host " Side        : $sideDisplay"
 Write-Host " Timeframe   : $Timeframe"
-Write-Host " Entry Price : $EntryPrice"
-Write-Host " Qty         : $Qty"
+Write-Host " Entry Price : $entryDisplay"
+Write-Host " Qty         : $qtyDisplay"
 Write-Host " Max Loss    : $MaxLossTicks ticks"
 Write-Host " Execute Stop: $ExecuteStop"
 Write-Host " Log         : $logFile"
@@ -109,6 +111,9 @@ if ($Slug) { Write-Host " Slug        : $Slug" }
 Write-Host "========================================"
 Write-Host ""
 
+if (-not $Side) {
+    Write-Host "[GUARDIAN] MODO AUTO-DETECT — detectará posição automaticamente ao entrar." -ForegroundColor Cyan
+}
 if ($ExecuteStop) {
     Write-Host "[GUARDIAN] MODO REAL — STOP AUTOMÁTICO ATIVADO" -ForegroundColor Red
     Write-Host "[GUARDIAN] Se o stop disparar, uma ordem SELL será enviada automaticamente." -ForegroundColor Red
