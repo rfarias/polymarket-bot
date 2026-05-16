@@ -107,22 +107,58 @@ def _build_default_log_path() -> Path:
     return Path("logs") / f"current_almost_resolved_guardian_{ts}.jsonl"
 
 
+import threading as _threading
+
+_TASKBAR_COLOR: dict = {"current": ""}
+_alert_thread: object = None
+_alert_stop_event = _threading.Event()
+
+
+def _set_taskbar_color(color: str) -> None:
+    """
+    Set taskbar progress indicator color (Windows Terminal OSC 9;4) and window title.
+    color: "green" | "yellow" | "red" | "clear"
+    Only writes when color actually changes to avoid redundant I/O.
+    """
+    if _TASKBAR_COLOR.get("current") == color:
+        return
+    _TASKBAR_COLOR["current"] = color
+    try:
+        import sys
+        # OSC 9;4 — Windows Terminal progress state: 0=off 1=green 2=red 3=yellow
+        osc_state = {"green": "1", "yellow": "3", "red": "2", "clear": "0"}.get(color, "0")
+        sys.stdout.write(f"\033]9;4;{osc_state}\007")
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        import ctypes
+        titles = {
+            "green":  "🟢 GUARDIAN — monitorando",
+            "yellow": "🟡 GUARDIAN — ATENÇÃO",
+            "red":    "🔴 GUARDIAN — STOP",
+            "clear":  "GUARDIAN",
+        }
+        ctypes.windll.kernel32.SetConsoleTitleW(titles.get(color, "GUARDIAN"))
+    except Exception:
+        pass
+
+
 def _flash_window(kind: str) -> None:
     """Flash the taskbar button without stealing focus (Windows only)."""
     try:
         import ctypes
         import ctypes.wintypes
 
-        FLASHW_STOP     = 0
-        FLASHW_ALL      = 3   # flash caption + taskbar
-        FLASHW_TIMERNOFG = 12  # keep flashing until window is focused
+        FLASHW_ALL       = 3
+        FLASHW_TIMERNOFG = 12
 
         class FLASHWINFO(ctypes.Structure):
             _fields_ = [
-                ("cbSize",   ctypes.wintypes.UINT),
-                ("hwnd",     ctypes.wintypes.HWND),
-                ("dwFlags",  ctypes.wintypes.DWORD),
-                ("uCount",   ctypes.wintypes.UINT),
+                ("cbSize",    ctypes.wintypes.UINT),
+                ("hwnd",      ctypes.wintypes.HWND),
+                ("dwFlags",   ctypes.wintypes.DWORD),
+                ("uCount",    ctypes.wintypes.UINT),
                 ("dwTimeout", ctypes.wintypes.DWORD),
             ]
 
@@ -130,18 +166,15 @@ def _flash_window(kind: str) -> None:
         if not hwnd:
             return
         fi = FLASHWINFO(cbSize=ctypes.sizeof(FLASHWINFO), hwnd=hwnd, dwTimeout=0)
-        if kind == "stop":
-            fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG  # pisca até o usuário clicar
+        if kind in ("stop", "error"):
+            fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG  # pisca até clicar
             fi.uCount  = 0
         elif kind == "warn":
             fi.dwFlags = FLASHW_ALL
-            fi.uCount  = 5
+            fi.uCount  = 3
         elif kind == "detect":
             fi.dwFlags = FLASHW_ALL
-            fi.uCount  = 3
-        elif kind == "error":
-            fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG
-            fi.uCount  = 0
+            fi.uCount  = 1
         else:
             return
         ctypes.windll.user32.FlashWindowEx(ctypes.byref(fi))
@@ -149,18 +182,38 @@ def _flash_window(kind: str) -> None:
         return
 
 
+def _start_continuous_alert() -> None:
+    """Background thread: beeps repeatedly until the user focuses the guardian window."""
+    global _alert_thread
+    if _alert_thread is not None and _alert_thread.is_alive():
+        return
+    _alert_stop_event.clear()
+
+    def _loop() -> None:
+        try:
+            import ctypes, winsound
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            while not _alert_stop_event.is_set():
+                fg = ctypes.windll.user32.GetForegroundWindow()
+                if fg == hwnd:
+                    _alert_stop_event.set()
+                    break
+                winsound.Beep(1100, 280)
+                _alert_stop_event.wait(1.4)
+        except Exception:
+            pass
+
+    _alert_thread = _threading.Thread(target=_loop, daemon=True)
+    _alert_thread.start()
+
+
 def _beep(kind: str) -> None:
     try:
         import winsound
-
         if kind == "stop":
-            for _ in range(3):
-                winsound.Beep(1200, 250)
-                time.sleep(0.08)
-        elif kind == "warn":
-            winsound.Beep(900, 180)
+            winsound.Beep(1200, 300)
         elif kind == "detect":
-            winsound.Beep(1000, 120)
+            winsound.Beep(880, 150)
     except Exception:
         return
 
@@ -760,6 +813,7 @@ def main() -> int:
                             f"entry={detected['entry_price']} qty={detected['qty']} "
                             f"trades_usados={detected['trades_used']}"
                         )
+                        _set_taskbar_color("green")
                         _flash_window("detect")
                         _beep("detect")
                         args.side = detected["side"]
@@ -911,10 +965,17 @@ def main() -> int:
                 row["status"] = decision
                 row["reasons"] = reasons
 
+            if decision == "HOLD":
+                _set_taskbar_color("green")
+            elif decision == "WARN":
+                _set_taskbar_color("yellow")
+                _flash_window("warn")
+
             if decision == "STOP":
+                _set_taskbar_color("red")
+                _flash_window("stop")
                 if cfg.beep:
                     _beep("stop")
-                _flash_window("stop")
                 if (not exit_state.active) or now - exit_state.last_attempt_at >= cfg.exit_retry_secs:
                     stop_resp = _execute_or_simulate_stop_cycle(
                         cfg=cfg,
@@ -938,16 +999,14 @@ def main() -> int:
                 if exit_state.flat:
                     _append_jsonl(log_path, row)
                     break
-            elif decision == "WARN":
-                if cfg.beep:
-                    _beep("warn")
-                _flash_window("warn")
             _append_jsonl(log_path, row)
         except Exception as exc:
             row.update({"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"})
             _append_jsonl(log_path, row)
             print(f"[GUARDIAN_ERROR] {type(exc).__name__}: {exc}")
+            _set_taskbar_color("red")
             _flash_window("error")
+            _start_continuous_alert()
         time.sleep(max(0.25, float(args.poll_secs)))
 
     return 0
