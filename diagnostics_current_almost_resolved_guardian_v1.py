@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ from market.rest_5m_shadow_public_v5 import (
     _fetch_slot_state,
     _slot_snapshot,
 )
+from market.rest_15m_shadow_public_v1 import build_slot_bundle_15m_v1
 from market.slug_discovery import fetch_event_by_slug
 
 
@@ -105,16 +107,113 @@ def _build_default_log_path() -> Path:
     return Path("logs") / f"current_almost_resolved_guardian_{ts}.jsonl"
 
 
+import threading as _threading
+
+_TASKBAR_COLOR: dict = {"current": ""}
+_alert_thread: object = None
+_alert_stop_event = _threading.Event()
+
+
+def _set_taskbar_color(color: str) -> None:
+    """
+    Set taskbar progress indicator color (Windows Terminal OSC 9;4) and window title.
+    color: "green" | "yellow" | "red" | "clear"
+    Only writes when color actually changes to avoid redundant I/O.
+    """
+    if _TASKBAR_COLOR.get("current") == color:
+        return
+    _TASKBAR_COLOR["current"] = color
+    try:
+        import sys
+        # OSC 9;4 — Windows Terminal progress state: 0=off 1=green 2=red 3=yellow
+        osc_state = {"green": "1", "yellow": "3", "red": "2", "clear": "0"}.get(color, "0")
+        sys.stdout.write(f"\033]9;4;{osc_state}\007")
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        import ctypes
+        titles = {
+            "green":  "🟢 GUARDIAN — monitorando",
+            "yellow": "🟡 GUARDIAN — ATENÇÃO",
+            "red":    "🔴 GUARDIAN — STOP",
+            "clear":  "GUARDIAN",
+        }
+        ctypes.windll.kernel32.SetConsoleTitleW(titles.get(color, "GUARDIAN"))
+    except Exception:
+        pass
+
+
+def _flash_window(kind: str) -> None:
+    """Flash the taskbar button without stealing focus (Windows only)."""
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        FLASHW_ALL       = 3
+        FLASHW_TIMERNOFG = 12
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize",    ctypes.wintypes.UINT),
+                ("hwnd",      ctypes.wintypes.HWND),
+                ("dwFlags",   ctypes.wintypes.DWORD),
+                ("uCount",    ctypes.wintypes.UINT),
+                ("dwTimeout", ctypes.wintypes.DWORD),
+            ]
+
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if not hwnd:
+            return
+        fi = FLASHWINFO(cbSize=ctypes.sizeof(FLASHWINFO), hwnd=hwnd, dwTimeout=0)
+        if kind in ("stop", "error"):
+            fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG  # pisca até clicar
+            fi.uCount  = 0
+        elif kind == "warn":
+            fi.dwFlags = FLASHW_ALL
+            fi.uCount  = 3
+        elif kind == "detect":
+            fi.dwFlags = FLASHW_ALL
+            fi.uCount  = 1
+        else:
+            return
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(fi))
+    except Exception:
+        return
+
+
+def _start_continuous_alert() -> None:
+    """Background thread: beeps repeatedly until the user focuses the guardian window."""
+    global _alert_thread
+    if _alert_thread is not None and _alert_thread.is_alive():
+        return
+    _alert_stop_event.clear()
+
+    def _loop() -> None:
+        try:
+            import ctypes, winsound
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            while not _alert_stop_event.is_set():
+                fg = ctypes.windll.user32.GetForegroundWindow()
+                if fg == hwnd:
+                    _alert_stop_event.set()
+                    break
+                winsound.Beep(1100, 280)
+                _alert_stop_event.wait(1.4)
+        except Exception:
+            pass
+
+    _alert_thread = _threading.Thread(target=_loop, daemon=True)
+    _alert_thread.start()
+
+
 def _beep(kind: str) -> None:
     try:
         import winsound
-
         if kind == "stop":
-            for _ in range(3):
-                winsound.Beep(1200, 250)
-                time.sleep(0.08)
-        elif kind == "warn":
-            winsound.Beep(900, 180)
+            winsound.Beep(1200, 300)
+        elif kind == "detect":
+            winsound.Beep(880, 150)
     except Exception:
         return
 
@@ -257,8 +356,10 @@ def _enrich_guardian_signal_metrics(signal: dict, scalp_signal: dict, side: str)
     return enriched
 
 
-def _current_slug_slot_bundle(slug: Optional[str]) -> dict:
+def _current_slug_slot_bundle(slug: Optional[str], timeframe: str = "5m") -> dict:
     if not slug:
+        if timeframe == "15m":
+            return build_slot_bundle_15m_v1()
         return _build_slot_bundle()
     meta = fetch_market_metadata_from_slug(slug)
     event = fetch_event_by_slug(slug)
@@ -563,11 +664,80 @@ def _execute_or_simulate_stop_cycle(
         }
 
 
+def _slot_start_ts(timeframe: str) -> int:
+    step = 900 if timeframe == "15m" else 300
+    return (int(time.time()) // step) * step
+
+
+def _fetch_trades_filtered(broker, token_id: str, after_ts: int) -> list:
+    try:
+        try:
+            from py_clob_client_v2.clob_types import TradeParams
+        except ImportError:
+            from py_clob_client.clob_types import TradeParams
+        params = TradeParams(asset_id=token_id, after=after_ts)
+        result = broker.get_trades(params)
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def _vwap_from_trade_list(trades: list, token_id: str) -> Optional[float]:
+    notional = 0.0
+    qty = 0.0
+    for t in trades or []:
+        if not isinstance(t, dict):
+            continue
+        side = str(t.get("side") or t.get("taker_side") or t.get("maker_side") or "").upper()
+        if side and side not in ("BUY", ""):
+            continue
+        asset = str(t.get("asset_id") or t.get("token_id") or t.get("asset") or "")
+        if asset and asset != token_id and token_id not in str(t):
+            continue
+        trade_qty = 0.0
+        for key in ("size", "size_matched", "matched_size", "filled_size", "qty", "quantity"):
+            trade_qty = _safe_float(t.get(key), 0.0)
+            if trade_qty > 0:
+                break
+        price = _safe_float(t.get("price"), 0.0)
+        if trade_qty > 0 and price > 0:
+            notional += trade_qty * price
+            qty += trade_qty
+    if qty <= 0:
+        return None
+    return round(notional / qty, 6)
+
+
+def _detect_open_position(broker, snap: dict, slot_start_ts: int) -> Optional[dict]:
+    best = None
+    for side in ("UP", "DOWN"):
+        token_id = _token_id_for_side(snap, side)
+        if not token_id:
+            continue
+        qty = _token_balance_qty(broker, token_id)
+        if not qty or qty < 0.001:
+            continue
+        if best is None or qty > best["qty"]:
+            trades = _fetch_trades_filtered(broker, token_id, slot_start_ts)
+            entry_price = _vwap_from_trade_list(trades, token_id)
+            if not entry_price or entry_price <= 0:
+                book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
+                entry_price = _safe_float(book.get("best_ask") or book.get("best_bid"), 0.0)
+            best = {
+                "side": side,
+                "qty": round(qty, 4),
+                "entry_price": round(entry_price, 6) if entry_price else 0.0,
+                "token_id": token_id,
+                "trades_used": len(trades),
+            }
+    return best
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Background guardian for manual current almost-resolved positions")
-    parser.add_argument("--side", required=True, choices=["UP", "DOWN"], help="Manual position side")
-    parser.add_argument("--entry-price", type=float, required=True, help="Average manual entry price")
-    parser.add_argument("--qty", type=float, default=0.0, help="Contracts to sell if --execute-stop is used")
+    parser.add_argument("--side", default=None, choices=["UP", "DOWN"], help="Position side. Omit for auto-detect.")
+    parser.add_argument("--entry-price", type=float, default=None, help="Average entry price. Omit for auto-detect from trade history.")
+    parser.add_argument("--qty", type=float, default=None, help="Contracts to sell on stop. Omit for auto-detect from token balance.")
     parser.add_argument("--slug", type=str, default=None, help="Optional event slug. Defaults to current 5m slot.")
     parser.add_argument("--seconds", type=int, default=0, help="Run duration. Use 0 to run indefinitely.")
     parser.add_argument("--poll-secs", type=float, default=1.0)
@@ -598,7 +768,76 @@ def main() -> int:
     parser.add_argument("--min-market-order-qty", type=float, default=5.0, help="Minimum qty for market FAK; smaller residuals use FAK limit")
     parser.add_argument("--execute-stop", action="store_true", help="Actually post/cancel/retry SELL stop orders when STOP triggers")
     parser.add_argument("--no-beep", action="store_true")
+    parser.add_argument(
+        "--timeframe",
+        type=str,
+        default="5m",
+        choices=["5m", "15m"],
+        help="Market timeframe to monitor. 5m = BTC 5-min slot (default); 15m = BTC 15-min slot.",
+    )
+    parser.add_argument(
+        "--env-file",
+        type=str,
+        default=None,
+        help="Path to .env file for broker credentials (default: .env). Use to trade a different account.",
+    )
     args = parser.parse_args()
+
+    if args.env_file:
+        from dotenv import load_dotenv
+        load_dotenv(args.env_file, override=True)
+        print(f"[GUARDIAN_ENV] Loaded credentials from {args.env_file}")
+
+    # Auto-detect mode: scan for open position when side/entry/qty are not given
+    auto_detect = args.side is None or args.entry_price is None or args.qty is None
+    if auto_detect:
+        print()
+        print("[GUARDIAN] MODO AUTO-DETECT — aguardando posição aberta...")
+        print(f"[GUARDIAN] Timeframe: {args.timeframe} | Poll: {args.poll_secs}s")
+        print("[GUARDIAN] Pressione Ctrl+C para cancelar.")
+        print()
+        broker_scan = PolymarketBrokerV3.from_env()
+        detected = None
+        while detected is None:
+            try:
+                slot_bundle = _current_slug_slot_bundle(args.slug, args.timeframe)
+                current_item = slot_bundle["queue"].get("current")
+                if current_item:
+                    slot_state = _fetch_slot_state(slot_bundle)
+                    snap = _slot_snapshot(slot_state, "current")
+                    slot_start_ts = _slot_start_ts(args.timeframe)
+                    detected = _detect_open_position(broker_scan, snap, slot_start_ts)
+                    if detected:
+                        print(
+                            f"[GUARDIAN_DETECT] Posição encontrada: side={detected['side']} "
+                            f"entry={detected['entry_price']} qty={detected['qty']} "
+                            f"trades_usados={detected['trades_used']}"
+                        )
+                        _set_taskbar_color("green")
+                        _flash_window("detect")
+                        _beep("detect")
+                        args.side = detected["side"]
+                        if args.entry_price is None:
+                            args.entry_price = detected["entry_price"]
+                        if args.qty is None:
+                            args.qty = detected["qty"]
+                    else:
+                        slug_now = str(current_item.get("slug") or "")
+                        secs = current_item.get("seconds_to_end")
+                        print(f"[GUARDIAN_SCAN] Sem posição aberta | {slug_now} | {secs}s restantes")
+                else:
+                    print("[GUARDIAN_SCAN] Slot indisponível — aguardando...")
+            except Exception as exc:
+                print(f"[GUARDIAN_SCAN_ERROR] {type(exc).__name__}: {exc}")
+            if detected is None:
+                time.sleep(max(0.25, float(args.poll_secs)))
+
+    if not args.side:
+        raise SystemExit("[GUARDIAN] Erro: --side não definido e auto-detect não encontrou posição.")
+    if args.entry_price is None or args.entry_price <= 0:
+        raise SystemExit("[GUARDIAN] Erro: --entry-price não definido e auto-detect não conseguiu calcular preço de entrada.")
+    if args.qty is None:
+        args.qty = 0.0
 
     cfg = GuardianConfig(
         side=args.side,
@@ -632,7 +871,7 @@ def main() -> int:
         beep=not bool(args.no_beep),
     )
     if cfg.execute_stop and cfg.qty <= 0:
-        raise SystemExit("--qty is required and must be > 0 with --execute-stop")
+        raise SystemExit("--qty deve ser > 0 com --execute-stop (não foi detectado automaticamente ou passou 0)")
 
     signal_cfg = CurrentAlmostResolvedConfigV1()
     scalp_cfg = CurrentScalpConfigV1()
@@ -651,7 +890,7 @@ def main() -> int:
         now = time.time()
         row: dict = {"type": "snapshot", "ts": now, "guardian": asdict(cfg)}
         try:
-            slot_bundle = _current_slug_slot_bundle(args.slug)
+            slot_bundle = _current_slug_slot_bundle(args.slug, args.timeframe)
             current_item = slot_bundle["queue"].get("current")
             if not current_item:
                 row.update({"status": "WARN", "reasons": ["current_slot_unavailable"]})
@@ -726,7 +965,15 @@ def main() -> int:
                 row["status"] = decision
                 row["reasons"] = reasons
 
+            if decision == "HOLD":
+                _set_taskbar_color("green")
+            elif decision == "WARN":
+                _set_taskbar_color("yellow")
+                _flash_window("warn")
+
             if decision == "STOP":
+                _set_taskbar_color("red")
+                _flash_window("stop")
                 if cfg.beep:
                     _beep("stop")
                 if (not exit_state.active) or now - exit_state.last_attempt_at >= cfg.exit_retry_secs:
@@ -752,13 +999,14 @@ def main() -> int:
                 if exit_state.flat:
                     _append_jsonl(log_path, row)
                     break
-            elif decision == "WARN" and cfg.beep:
-                _beep("warn")
             _append_jsonl(log_path, row)
         except Exception as exc:
             row.update({"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"})
             _append_jsonl(log_path, row)
             print(f"[GUARDIAN_ERROR] {type(exc).__name__}: {exc}")
+            _set_taskbar_color("red")
+            _flash_window("error")
+            _start_continuous_alert()
         time.sleep(max(0.25, float(args.poll_secs)))
 
     return 0
