@@ -1697,7 +1697,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     if known_filled and secs_since_resolution < 15.0:
                         _append_jsonl(log_path, {"type": "awaiting_redeem_balance_lag", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "entry_qty_filled": trade.entry_qty_filled, "secs_since_resolution": round(secs_since_resolution, 2), "trade": _trade_summary(trade)})
                     else:
-                        _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                        _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "collateral_balance_usd": collateral_balance, "trade": _trade_summary(trade)})
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
                 elif 0 < token_balance_qty <= dust_archive_qty:
