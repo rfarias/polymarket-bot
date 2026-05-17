@@ -402,6 +402,54 @@ def _passive_entry_price_for_signal(signal: dict, *, bid_now: float, tick_size: 
     return round(max(tick, anchor - tick), 6)
 
 
+def _runaway_chase_params(
+    signal: dict,
+    trade: "LiveCurrentAlmostResolvedTradeState",
+    *,
+    current_secs: Optional[int],
+    max_chase_price: float = 0.98,
+    max_chase_distance: float = 0.04,
+    min_secs: int = 25,
+) -> Optional[dict]:
+    """
+    Returns chase parameters if the market ran in the correct direction while a
+    passive entry was pending (signal now invalid because price moved away from
+    the limit). Returns None if conditions aren't met.
+
+    Conditions:
+    - current buy price > original entry price + 1 tick (market moved right)
+    - chase via ask price <= max_chase_price (at least 1 cent headroom to $1)
+    - chase distance <= max_chase_distance (don't overpay for stale momentum)
+    - enough time remaining (>= min_secs)
+    - no missing midpoint context
+    """
+    side = str(trade.side or "")
+    if side not in ("UP", "DOWN"):
+        return None
+    original_entry = _safe_float(trade.entry_price, 0.0)
+    if original_entry <= 0:
+        return None
+
+    buy_key = "up_buy" if side == "UP" else "down_buy"
+    ask_key = "up_sell" if side == "UP" else "down_sell"
+    current_buy = _safe_float(signal.get(buy_key), 0.0)
+    current_ask = _safe_float(signal.get(ask_key), 0.0) or current_buy + 0.01
+
+    chase_distance = current_buy - original_entry
+    if chase_distance < 0.01:
+        return None
+    if chase_distance > max_chase_distance:
+        return None
+    if current_ask <= 0 or current_ask > max_chase_price:
+        return None
+    if current_secs is None or current_secs < min_secs:
+        return None
+    if bool(signal.get("missing_market_midpoint_context")):
+        return None
+
+    return {"ask": round(current_ask, 6), "buy": round(current_buy, 6), "chase_distance": round(chase_distance, 4)}
+
+
 def _safe_to_chase_aggressive_entry(
     signal: dict,
     *,
@@ -907,6 +955,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     hybrid_aggressive_after_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_AFTER_SECS", 2.0)
     hybrid_aggressive_max_price = _env_float("POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_MAX_PRICE", 0.99)
     aggressive_entry_fak = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AGGRESSIVE_ENTRY_FAK", True)
+    runaway_chase_max_price = _env_float("POLY_CURRENT_ALMOST_RESOLVED_RUNAWAY_CHASE_MAX_PRICE", 0.98)
+    runaway_chase_max_distance = _env_float("POLY_CURRENT_ALMOST_RESOLVED_RUNAWAY_CHASE_MAX_DISTANCE", 0.04)
+    runaway_chase_min_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_RUNAWAY_CHASE_MIN_SECS", 25)
     hold_winner_to_resolution = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION", True)
     resolution_settle_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_RESOLUTION_SETTLE_SECS", 1)
     auto_redeem_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED", False)
@@ -1156,12 +1207,18 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     time.sleep(poll_secs)
                     continue
 
-                # Block entry if leader moved too fast in the last 60s (velocity filter)
+                # Block entry if leader moved too fast (dual-window velocity filter).
+                # Blocks if: vel_range_30s >= 0.04  OR  vel_range_60s >= 0.10
+                # Old single rule (>= 0.06 on 60s) was too aggressive for spikes
+                # that already faded — market_range_15s/30s is near 0 but 60s window
+                # still "sees" the old move, blocking clean setups unnecessarily.
                 _vel_hist = leader_velocity_history.get(leader_key, [])
                 if len(_vel_hist) >= 2:
-                    _vel_prices = [p for _, p in _vel_hist]
-                    _vel_range = max(_vel_prices) - min(_vel_prices)
-                    if _vel_range >= 0.06:
+                    _vel_prices_60 = [p for _, p in _vel_hist]
+                    _vel_prices_30 = [p for t, p in _vel_hist if now - t <= 30.0]
+                    _vel_range_60 = max(_vel_prices_60) - min(_vel_prices_60)
+                    _vel_range_30 = (max(_vel_prices_30) - min(_vel_prices_30)) if len(_vel_prices_30) >= 2 else 0.0
+                    if _vel_range_60 >= 0.10 or _vel_range_30 >= 0.04:
                         _append_jsonl(
                             log_path,
                             {
@@ -1169,9 +1226,11 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                                 "ts": now,
                                 "session_id": session_id,
                                 "reason": "leader_velocity_too_high",
-                                "velocity_range": round(_vel_range, 4),
+                                "velocity_range": round(_vel_range_60, 4),
+                                "velocity_range_30s": round(_vel_range_30, 4),
                                 "velocity_window_secs": 60.0,
-                                "threshold": 0.06,
+                                "threshold": 0.10,
+                                "threshold_30s": 0.04,
                                 "signal": signal,
                             },
                         )
@@ -1306,6 +1365,86 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             if last_second
                             else "passive_signal_invalidated"
                         )
+
+                        # Runaway aggressive chase: signal became invalid because market
+                        # moved in the correct direction without revisiting our passive limit.
+                        # Cancel the passive and replace with a FAK at the current ask.
+                        _runaway = None
+                        if (
+                            cancel_reason == "passive_signal_invalidated"
+                            and hybrid_entry_enabled
+                            and trade.entry_qty_filled <= 0
+                        ):
+                            _runaway = _runaway_chase_params(
+                                signal,
+                                trade,
+                                current_secs=current_secs,
+                                max_chase_price=runaway_chase_max_price,
+                                max_chase_distance=runaway_chase_max_distance,
+                                min_secs=runaway_chase_min_secs,
+                            )
+
+                        if _runaway and trade.entry_qty_filled <= 0:
+                            _runaway_cancel_resp = _cancel_if_live(broker, trade.entry_order_id)
+                            # Re-check: did the passive fill during cancel?
+                            _synced = _sync_entry_order(broker, trade)
+                            if _synced.entry_qty_filled > 0:
+                                trade = _synced
+                                trade.mode = "open_position"
+                                trade.updated_at = now
+                                trade.last_reason = "runaway_passive_filled_before_chase"
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {"type": "fill", "ts": now, "session_id": session_id, "cancel_remainder": _runaway_cancel_resp, "fill_bid": active_bid, "fill_signal_ok": False, "fill_at_stop": False, "trade": _trade_summary(trade)})
+                                time.sleep(poll_secs)
+                                continue
+                            _runaway_from = _trade_summary(trade)
+                            _runaway_chase_price = _runaway["ask"]
+                            _runaway_tick_size = _tick_size_from_snap(current_snap, trade.side or "UP")
+                            try:
+                                trade = _post_entry_order(
+                                    broker,
+                                    signal=signal,
+                                    snap=current_snap,
+                                    qty=qty,
+                                    tick_size=_runaway_tick_size,
+                                    now=now,
+                                    cfg=signal_cfg,
+                                    entry_price_override=_runaway_chase_price,
+                                    order_style="aggressive_limit",
+                                    aggressive_entry_fak=True,
+                                )
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "entry_runaway_chase",
+                                    "ts": now,
+                                    "session_id": session_id,
+                                    "cancel": _runaway_cancel_resp,
+                                    "from_trade": _runaway_from,
+                                    "chase_price": _runaway_chase_price,
+                                    "chase_distance": _runaway["chase_distance"],
+                                    "runaway": _runaway,
+                                    "signal": signal,
+                                    "trade": _trade_summary(trade),
+                                })
+                            except Exception as _runaway_exc:
+                                _is_no_match = aggressive_entry_fak and _is_fak_no_match_exception(_runaway_exc)
+                                if trade.event_slug:
+                                    blocked_entry_events[str(trade.event_slug)] = "runaway_fak_no_match" if _is_no_match else "runaway_chase_error"
+                                _append_jsonl(log_path, {
+                                    "type": "entry_runaway_chase_failed",
+                                    "ts": now,
+                                    "session_id": session_id,
+                                    "cancel": _runaway_cancel_resp,
+                                    "from_trade": _runaway_from,
+                                    "chase_price": _runaway_chase_price,
+                                    "error": f"{type(_runaway_exc).__name__}: {_exception_message(_runaway_exc)}",
+                                    "signal": signal,
+                                })
+                                trade = LiveCurrentAlmostResolvedTradeState()
+                                _clear_state(state_path)
+                            time.sleep(poll_secs)
+                            continue
+
                         resp = _cancel_if_live(broker, trade.entry_order_id)
                         if trade.event_slug:
                             blocked_entry_events[trade.event_slug] = cancel_reason
