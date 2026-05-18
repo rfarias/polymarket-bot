@@ -1049,6 +1049,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     state_path = _state_path()
     session_id = session_dir.name
     blocked_entry_events: dict[str, str] = {}
+    _reentry_blocked_until: dict[str, float] = {}
+    reentry_cooldown_secs: float = 25.0
 
     print(
         "[CURRENT_ALMOST_RESOLVED_REAL_PARAMS]",
@@ -1292,6 +1294,21 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             "ts": now,
                             "session_id": session_id,
                             "reason": f"event_entry_cooldown:{blocked_entry_events[event_slug]}",
+                            "signal": signal,
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
+                if event_slug and _reentry_blocked_until.get(event_slug, 0.0) > now:
+                    _remaining = round(_reentry_blocked_until[event_slug] - now, 1)
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "entry_blocked",
+                            "ts": now,
+                            "session_id": session_id,
+                            "reason": "reentry_cooldown",
+                            "cooldown_remaining_secs": _remaining,
                             "signal": signal,
                         },
                     )
@@ -1758,6 +1775,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         },
                     )
                     print(f"[GUARD] External close detected — balance=0 after {round(_secs_since_entry, 1)}s. Resetting to idle.")
+                    if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                        _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
                     time.sleep(poll_secs)
@@ -1890,6 +1909,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         _append_jsonl(log_path, {"type": "awaiting_redeem_balance_lag", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "entry_qty_filled": trade.entry_qty_filled, "secs_since_resolution": round(secs_since_resolution, 2), "trade": _trade_summary(trade)})
                     else:
                         _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "collateral_balance_usd": collateral_balance, "trade": _trade_summary(trade)})
+                        if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                            _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
                 elif 0 < token_balance_qty <= dust_archive_qty:
@@ -1904,6 +1925,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             "trade": _trade_summary(trade),
                         },
                     )
+                    if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                        _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
 
@@ -1913,6 +1936,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 if exit_order is None:
                     if _is_flat_qty(token_balance_qty):
                         _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "exit_order": None, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                        if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                            _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
                     elif _should_await_platform_redeem(
@@ -1944,6 +1969,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     status = str(getattr(exit_order, "status", "") or "").lower()
                     if _is_flat_qty(token_balance_qty) or trade.remaining_position_qty <= 0:
                         _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "exit_order": exit_order.as_dict(), "exit_status": status, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                        if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                            _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
                     elif _is_match_status(status) and token_balance_qty > 0:
@@ -1971,6 +1998,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
                 if _is_flat_qty(token_balance_qty):
                     _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                    if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                        _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
                 elif now - trade.confirm_started_at >= 2.0 or trade.confirm_polls >= 2:
