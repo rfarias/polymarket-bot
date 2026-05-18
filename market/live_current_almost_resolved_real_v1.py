@@ -1116,6 +1116,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     last_leader_price_by_key: dict[str, float] = {}
     leader_velocity_history: dict[str, list[tuple[float, float]]] = {}
     started_at = time.time()
+    _health_check_polls = max(1, int(60.0 / max(0.25, poll_secs)))
+    _health_poll_counter = 0
+    _platform_paused_until = 0.0
 
     oracle = (
         ChainlinkBTCOracle(rpc_urls=[chainlink_rpc_url] if chainlink_rpc_url else None)
@@ -1130,6 +1133,19 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     while time.time() - started_at < run_for:
         now = time.time()
         try:
+            _health_poll_counter += 1
+            if _health_poll_counter >= _health_check_polls:
+                _health_poll_counter = 0
+                try:
+                    _loop_health = broker.healthcheck()
+                    if not _loop_health.ok:
+                        _platform_paused_until = now + 120.0
+                        _append_jsonl(log_path, {"type": "loop_health_failed", "ts": now, "session_id": session_id, "health": _loop_health.as_dict(), "paused_until": _platform_paused_until})
+                        print(f"[GUARD] Broker healthcheck failed in loop — entries paused 120s: {_loop_health.as_dict()}")
+                except Exception as _hc_exc:
+                    _platform_paused_until = now + 120.0
+                    _append_jsonl(log_path, {"type": "loop_health_error", "ts": now, "session_id": session_id, "error": f"{type(_hc_exc).__name__}: {_hc_exc}", "paused_until": _platform_paused_until})
+
             slot_bundle = _build_slot_bundle()
             current_item = slot_bundle["queue"].get("current")
             current_secs = int(current_item.get("seconds_to_end")) if current_item and current_item.get("seconds_to_end") is not None else None
@@ -1221,12 +1237,17 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "oracle_price": _last_oracle_price,
                 "oracle_open_price": _oracle_open_prices.get(current_item.get("slug") if current_item else None),
                 "oracle_staleness_secs": round(_last_oracle_staleness, 1) if _last_oracle_staleness < 1e6 else None,
+                "platform_paused_until": round(_platform_paused_until, 1) if _platform_paused_until > now else None,
             }
             _append_jsonl(log_path, snapshot)
             print(
                 f"[CURRENT_ALMOST_RESOLVED_REAL] current_secs={current_secs} allow={signal.get('allow')} "
                 f"side={signal.get('side')} mode={trade.mode} qty={trade.entry_qty_filled}/{trade.remaining_position_qty}"
             )
+
+            if trade.mode == "idle" and now < _platform_paused_until:
+                time.sleep(poll_secs)
+                continue
 
             if trade.mode == "idle" and current_item and signal.get("allow") and not counter_reversal_active:
                 event_slug = str(signal.get("event_slug") or current_item.get("slug") or "")
@@ -1696,6 +1717,30 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     _clear_state(state_path)
 
             if trade.mode == "open_position" and trade.side:
+                # External-close detection: if balance hit 0 while we think we're open,
+                # the position was closed externally (market resolved as loss, manual exit,
+                # or a resolution event not yet reflected in the slot bundle).
+                # Use a 20s grace period to absorb blockchain propagation lag after entry.
+                _ext_balance = _token_balance_qty(broker, trade.token_id)
+                _secs_since_entry = now - _safe_float(trade.created_at, now)
+                if _is_flat_qty(_ext_balance) and _secs_since_entry >= 20.0:
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "external_close_detected",
+                            "ts": now,
+                            "session_id": session_id,
+                            "token_balance_qty": _ext_balance,
+                            "secs_since_entry": round(_secs_since_entry, 1),
+                            "trade": _trade_summary(trade),
+                        },
+                    )
+                    print(f"[GUARD] External close detected — balance=0 after {round(_secs_since_entry, 1)}s. Resetting to idle.")
+                    trade = LiveCurrentAlmostResolvedTradeState()
+                    _clear_state(state_path)
+                    time.sleep(poll_secs)
+                    continue
+
                 tick_size = _tick_size_from_snap(current_snap, trade.side)
                 if _should_hold_to_resolution(signal, bid_now=active_bid, secs_to_end=current_secs, cfg=signal_cfg, side=trade.side):
                     trade.hold_to_resolution = True
