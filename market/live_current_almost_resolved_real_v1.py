@@ -166,7 +166,12 @@ def _tick_size_from_snap(snap: dict, side: str) -> float:
 
 
 def _token_id_for_side(snap: dict, side: str) -> str:
-    side_book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
+    if side == "UP":
+        side_book = snap.get("up") or {}
+    elif side == "DOWN":
+        side_book = snap.get("down") or {}
+    else:
+        return ""
     return str(side_book.get("token_id") or "")
 
 
@@ -1491,10 +1496,13 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             _runaway_from = _trade_summary(trade)
                             _runaway_chase_price = _runaway["ask"]
                             _runaway_tick_size = _tick_size_from_snap(current_snap, trade.side or "UP")
+                            # Preserve original trade side — signal may have lost it if market
+                            # moved outside the entry window during the cancel/recheck cycle.
+                            _chase_signal = {**signal, "side": trade.side}
                             try:
                                 trade = _post_entry_order(
                                     broker,
-                                    signal=signal,
+                                    signal=_chase_signal,
                                     snap=current_snap,
                                     qty=qty,
                                     tick_size=_runaway_tick_size,

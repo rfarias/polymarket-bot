@@ -22,8 +22,8 @@ _DECIMALS = 8
 
 # RPCs públicas do Polygon — usadas em fallback sequencial
 DEFAULT_RPC_URLS: list[str] = [
-    "https://polygon-rpc.com",
-    "https://rpc.ankr.com/polygon",
+    "https://1rpc.io/matic",
+    "https://polygon.drpc.org",
 ]
 
 
