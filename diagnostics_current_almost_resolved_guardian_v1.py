@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from pprint import pprint
 from typing import Optional
@@ -1076,6 +1076,50 @@ def main() -> int:
                 oracle_staleness_secs=oracle_staleness,
             )
             pnl_ticks = round((bid_now - cfg.entry_price) / tick_size, 4) if bid_now > 0 and tick_size > 0 else None
+
+            # Modo monitor (sem posição real): avalia UP e DOWN de forma independente.
+            # Usa o entry_price do sinal para o lado que tem allow=True; para o outro lado
+            # usa o ask atual como referência (preço que pagaria entrando agora).
+            monitor_both_sides: dict | None = None
+            if cfg.qty <= 0:
+                monitor_both_sides = {}
+                for _mon_side in ("UP", "DOWN"):
+                    _mon_bid = _bid_for_side(executable, _mon_side)
+                    _mon_tick = _tick_size_from_snap(snap, _mon_side)
+                    # Entry reference: preço do sinal se ele deu allow para este lado;
+                    # caso contrário, usa o ask (melhor estimativa de entrada agora).
+                    _mon_entry = 0.0
+                    if signal.get("allow") and signal.get("side") == _mon_side:
+                        _mon_entry = _safe_float(signal.get("entry_price"), 0.0)
+                    if _mon_entry <= 0:
+                        _mon_book = (snap.get("up") if _mon_side == "UP" else snap.get("down")) or {}
+                        _mon_entry = _safe_float(
+                            _mon_book.get("best_ask") or _mon_book.get("best_bid"), 0.0
+                        ) or _mon_bid
+                    if _mon_entry <= 0:
+                        _mon_entry = 0.97
+                    _mon_sig = _enrich_guardian_signal_metrics(signal, scalp_signal, _mon_side)
+                    _mon_cfg = replace(cfg, side=_mon_side, entry_price=_mon_entry, qty=0.0, price_stop=None)
+                    _mon_dec, _mon_reas = _decision(
+                        cfg=_mon_cfg,
+                        signal=_mon_sig,
+                        scalp_signal=scalp_signal,
+                        bid_now=_mon_bid,
+                        tick_size=_mon_tick,
+                        secs_to_end=secs_to_end,
+                        oracle_price=oracle_price,
+                        oracle_open_price=oracle_open_price,
+                        oracle_staleness_secs=oracle_staleness,
+                    )
+                    _mon_pnl = round((_mon_bid - _mon_entry) / _mon_tick, 4) if _mon_bid > 0 and _mon_tick > 0 else None
+                    monitor_both_sides[_mon_side] = {
+                        "decision": _mon_dec,
+                        "reasons": _mon_reas,
+                        "bid": round(_mon_bid, 4),
+                        "entry_ref": round(_mon_entry, 4),
+                        "pnl_ticks": _mon_pnl,
+                    }
+
             row.update(
                 {
                     "status": decision,
@@ -1095,16 +1139,26 @@ def main() -> int:
                     "open_reference": open_ref,
                     "current_scalp_context": scalp_signal,
                     "almost_resolved_signal": signal,
+                    "monitor_both_sides": monitor_both_sides,
                 }
             )
-            print(
-                f"[GUARDIAN_{decision}] side={cfg.side} secs={secs_to_end} bid={bid_now} "
-                f"pnl_ticks={pnl_ticks} spot={scalp_signal.get('reference_price')} "
-                f"open={scalp_signal.get('opening_reference_price')} "
-                f"buffer_bps={_side_buffer_bps(signal, cfg.side)} "
-                f"adverse_bps={_side_adverse_bps(signal, cfg.side)} "
-                f"counter={_guardian_counter_ask(signal, scalp_signal, cfg.side)} reasons={';'.join(reasons) or '-'}"
-            )
+            if monitor_both_sides:
+                _up = monitor_both_sides["UP"]
+                _dn = monitor_both_sides["DOWN"]
+                print(
+                    f"[GUARDIAN_MONITOR] secs={secs_to_end} | "
+                    f"UP bid={_up['bid']} entry={_up['entry_ref']} pnl={_up['pnl_ticks']} → {_up['decision']} | "
+                    f"DOWN bid={_dn['bid']} entry={_dn['entry_ref']} pnl={_dn['pnl_ticks']} → {_dn['decision']}"
+                )
+            else:
+                print(
+                    f"[GUARDIAN_{decision}] side={cfg.side} secs={secs_to_end} bid={bid_now} "
+                    f"pnl_ticks={pnl_ticks} spot={scalp_signal.get('reference_price')} "
+                    f"open={scalp_signal.get('opening_reference_price')} "
+                    f"buffer_bps={_side_buffer_bps(signal, cfg.side)} "
+                    f"adverse_bps={_side_adverse_bps(signal, cfg.side)} "
+                    f"counter={_guardian_counter_ask(signal, scalp_signal, cfg.side)} reasons={';'.join(reasons) or '-'}"
+                )
             if exit_state.active and decision != "STOP":
                 decision = "STOP"
                 reasons = ["exit_already_active"]
