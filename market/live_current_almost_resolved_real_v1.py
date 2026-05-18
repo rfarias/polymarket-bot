@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from market.book_5m import fetch_books_for_tokens
 from market.broker_env import load_broker_env
 from market.broker_types import BrokerOrderRequest
+from market.chainlink_oracle import ChainlinkBTCOracle
 from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
 from market.current_scalp_signal_v1 import (
     CurrentScalpConfigV1,
@@ -722,7 +723,7 @@ def _post_exit_order(
     # Urgent exits (stop-type) use FAK to guarantee immediate fill rather than leaving
     # a GTC resting in the book while the market continues to move against the position.
     # Non-urgent exits (profit targets) use GTC so the order can rest at the desired price.
-    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid"))
+    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid", "near_win", "oracle_margin"))
     req = BrokerOrderRequest(
         token_id=trade.token_id or "",
         side="SELL",
@@ -746,6 +747,65 @@ def _post_exit_order(
         trade.updated_at = now
         trade.last_reason = f"close_failed_residual_position:{round(qty, 6)}:{type(exc).__name__}:{_exception_message(exc)}"
     return trade
+
+
+def _check_emergency_exit(
+    side: str,
+    active_bid: float,
+    secs_to_end: Optional[int],
+    oracle_price: Optional[float],
+    oracle_open_price: Optional[float],
+    oracle_staleness_secs: float,
+    *,
+    near_win_enabled: bool,
+    near_win_threshold: float,
+    near_win_secs: int,
+    oracle_margin_enabled: bool,
+    oracle_margin_bps_threshold: float,
+    oracle_margin_secs: int,
+    max_oracle_staleness_secs: float = 120.0,
+) -> Optional[str]:
+    """
+    Retorna razão de saída de emergência (FAK imediato) ou None.
+
+    Regra 1 — near_win_exit:
+      Token >= threshold (default 0.995) com <= near_win_secs restantes.
+      Trava o lucro quase-certo sem esperar o evento binário da resolução.
+
+    Regra 2 — oracle_margin_exit:
+      O oráculo Chainlink indica que a margem até a fronteira de resolução
+      é < oracle_margin_bps_threshold (default 2 bps ≈ $1.57 em $78k BTC).
+      Saída antes que a reversão on-chain propague para a Polymarket.
+    """
+    if secs_to_end is None or secs_to_end <= 0:
+        return None
+
+    # Regra 1: near-win lock-in
+    if near_win_enabled and secs_to_end <= near_win_secs and active_bid >= near_win_threshold:
+        return f"near_win_exit:bid={round(active_bid, 4)}:secs={secs_to_end}"
+
+    # Regra 2: margem do oráculo perigosamente pequena
+    if (
+        oracle_margin_enabled
+        and oracle_price is not None
+        and oracle_open_price is not None
+        and oracle_open_price > 0
+        and oracle_staleness_secs <= max_oracle_staleness_secs
+        and secs_to_end <= oracle_margin_secs
+    ):
+        if side == "DOWN":
+            # DOWN ganha se oracle_price < oracle_open_price
+            margin_bps = (oracle_open_price - oracle_price) / oracle_open_price * 10_000
+        elif side == "UP":
+            # UP ganha se oracle_price > oracle_open_price
+            margin_bps = (oracle_price - oracle_open_price) / oracle_open_price * 10_000
+        else:
+            margin_bps = None
+
+        if margin_bps is not None and margin_bps < oracle_margin_bps_threshold:
+            return f"oracle_margin_exit:{round(margin_bps, 2)}bps:oracle={round(oracle_price, 2)}:open={round(oracle_open_price, 2)}"
+
+    return None
 
 
 def _mark_awaiting_redeem(
@@ -967,6 +1027,15 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     min_limit_exit_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_MIN_LIMIT_EXIT_QTY", 5.0)
     poll_secs = max(0.25, _env_float("POLY_CURRENT_ALMOST_RESOLVED_POLL_SECS", 0.5))
     run_for = int(duration_seconds or _env_int("POLY_CURRENT_ALMOST_RESOLVED_RUN_SECONDS", 1800))
+    # --- Chainlink oracle + saídas de emergência ---
+    chainlink_enabled = _env_bool("POLY_CHAINLINK_ENABLED", True)
+    chainlink_rpc_url = os.getenv("POLY_CHAINLINK_RPC_URL", "")
+    near_win_exit_enabled = _env_bool("POLY_NEAR_WIN_EXIT_ENABLED", True)
+    near_win_exit_threshold = _env_float("POLY_NEAR_WIN_EXIT_THRESHOLD", 0.995)
+    near_win_exit_secs = _env_int("POLY_NEAR_WIN_EXIT_SECS", 15)
+    oracle_margin_exit_enabled = _env_bool("POLY_ORACLE_MARGIN_EXIT_ENABLED", True)
+    oracle_margin_exit_bps = _env_float("POLY_ORACLE_MARGIN_EXIT_BPS", 2.0)
+    oracle_margin_exit_secs = _env_int("POLY_ORACLE_MARGIN_EXIT_SECS", 30)
     session_dir = Path(log_dir) if log_dir else _build_log_dir()
     session_dir.mkdir(parents=True, exist_ok=True)
     log_path = session_dir / "current_almost_resolved_real.jsonl"
@@ -1043,6 +1112,16 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     leader_velocity_history: dict[str, list[tuple[float, float]]] = {}
     started_at = time.time()
 
+    oracle = (
+        ChainlinkBTCOracle(rpc_urls=[chainlink_rpc_url] if chainlink_rpc_url else None)
+        if chainlink_enabled
+        else None
+    )
+    _oracle_open_prices: dict[str, float] = {}
+    _last_oracle_price: Optional[float] = None
+    _last_oracle_staleness: float = float("inf")
+    _last_known_slug: Optional[str] = None
+
     while time.time() - started_at < run_for:
         now = time.time()
         try:
@@ -1112,6 +1191,15 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     active_bid = max(active_bid, exec_bid)
             counter_reversal_active = _state_file_active(_counter_reversal_state_path())
 
+            # Chainlink oracle — query e rastreamento de preço de abertura por slug
+            if oracle is not None:
+                _last_oracle_price, _, _last_oracle_staleness = oracle.get_price()
+                _current_slug_now = current_item.get("slug") if current_item else None
+                if _current_slug_now and _current_slug_now != _last_known_slug:
+                    if _last_oracle_price is not None:
+                        _oracle_open_prices[_current_slug_now] = _last_oracle_price
+                    _last_known_slug = _current_slug_now
+
             snapshot = {
                 "type": "snapshot",
                 "ts": now,
@@ -1125,6 +1213,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "trade": _trade_summary(trade),
                 "active_bid": active_bid,
                 "counter_reversal_active": counter_reversal_active,
+                "oracle_price": _last_oracle_price,
+                "oracle_open_price": _oracle_open_prices.get(current_item.get("slug") if current_item else None),
+                "oracle_staleness_secs": round(_last_oracle_staleness, 1) if _last_oracle_staleness < 1e6 else None,
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -1641,28 +1732,54 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         },
                     )
                 else:
-                    reason = _exit_reason(
-                        trade,
-                        bid_now=active_bid,
-                        tick_size=tick_size,
-                        now=now,
+                    _emerg_reason = _check_emergency_exit(
+                        side=trade.side,
+                        active_bid=active_bid,
                         secs_to_end=current_secs,
-                        signal=signal,
-                        cfg=signal_cfg,
-                        flatten_deadline_secs=flatten_deadline_secs,
-                        hold_winner_to_resolution=hold_winner_to_resolution,
+                        oracle_price=_last_oracle_price,
+                        oracle_open_price=_oracle_open_prices.get(trade.event_slug),
+                        oracle_staleness_secs=_last_oracle_staleness,
+                        near_win_enabled=near_win_exit_enabled,
+                        near_win_threshold=near_win_exit_threshold,
+                        near_win_secs=near_win_exit_secs,
+                        oracle_margin_enabled=oracle_margin_exit_enabled,
+                        oracle_margin_bps_threshold=oracle_margin_exit_bps,
+                        oracle_margin_secs=oracle_margin_exit_secs,
                     )
-                    if reason:
+                    if _emerg_reason:
                         trade = _post_exit_order(
                             broker,
                             trade,
                             exit_price=active_bid,
                             now=now,
-                            reason=reason,
+                            reason=_emerg_reason,
                             min_limit_exit_qty=min_limit_exit_qty,
                         )
                         _save_state(state_path, trade)
-                        _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": reason, "trade": _trade_summary(trade)})
+                        _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": _emerg_reason, "trade": _trade_summary(trade)})
+                    else:
+                        reason = _exit_reason(
+                            trade,
+                            bid_now=active_bid,
+                            tick_size=tick_size,
+                            now=now,
+                            secs_to_end=current_secs,
+                            signal=signal,
+                            cfg=signal_cfg,
+                            flatten_deadline_secs=flatten_deadline_secs,
+                            hold_winner_to_resolution=hold_winner_to_resolution,
+                        )
+                        if reason:
+                            trade = _post_exit_order(
+                                broker,
+                                trade,
+                                exit_price=active_bid,
+                                now=now,
+                                reason=reason,
+                                min_limit_exit_qty=min_limit_exit_qty,
+                            )
+                            _save_state(state_path, trade)
+                            _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": reason, "trade": _trade_summary(trade)})
 
             if trade.mode == "awaiting_redeem":
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
