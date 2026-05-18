@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from market.book_5m import fetch_books_for_tokens
 from market.broker_env import load_broker_env
+from market.btc_chart_context_v1 import BtcChartContext, fetch_btc_chart_context
 from market.broker_types import BrokerOrderRequest
 from market.chainlink_oracle import ChainlinkBTCOracle
 from market.current_almost_resolved_signal_v1 import CurrentAlmostResolvedConfigV1, evaluate_current_almost_resolved_v1
@@ -1129,6 +1130,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     _last_oracle_price: Optional[float] = None
     _last_oracle_staleness: float = float("inf")
     _last_known_slug: Optional[str] = None
+    _last_chart_ctx: Optional[BtcChartContext] = None
+    _last_chart_ctx_bucket: int = -1
 
     while time.time() - started_at < run_for:
         now = time.time()
@@ -1221,6 +1224,22 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         _oracle_open_prices[_current_slug_now] = _last_oracle_price
                     _last_known_slug = _current_slug_now
 
+            # Chart context — fetch once per 5min BTC candle (cached per bucket)
+            _ctx_bucket_now = int(now / 300)
+            if _ctx_bucket_now != _last_chart_ctx_bucket and signal.get("allow") and current_item:
+                _ref_price_ctx = _safe_float((reference or {}).get("reference_price"), _last_oracle_price or 80_000.0)
+                _event_slug_ctx = str(current_item.get("slug") or "")
+                _event_end_ctx = (float(_event_slug_ctx.split("-")[-1]) + 300.0) if _event_slug_ctx else now + 300.0
+                try:
+                    _last_chart_ctx = fetch_btc_chart_context(
+                        current_price=_ref_price_ctx,
+                        entry_ts=now,
+                        event_end_ts=_event_end_ctx,
+                    )
+                    _last_chart_ctx_bucket = _ctx_bucket_now
+                except Exception:
+                    pass  # keep previous context on failure
+
             snapshot = {
                 "type": "snapshot",
                 "ts": now,
@@ -1238,6 +1257,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "oracle_open_price": _oracle_open_prices.get(current_item.get("slug") if current_item else None),
                 "oracle_staleness_secs": round(_last_oracle_staleness, 1) if _last_oracle_staleness < 1e6 else None,
                 "platform_paused_until": round(_platform_paused_until, 1) if _platform_paused_until > now else None,
+                "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -1426,6 +1446,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "signal_entry_price": signal_entry_price,
                         "posted_entry_price": entry_price,
                         "planned_exit_risk": planned_exit_risk,
+                        "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
+                        "btc_chart_penalty": round(_last_chart_ctx.get_penalty_for_side(side), 3) if _last_chart_ctx and side else None,
                         "trade": _trade_summary(trade),
                     },
                 )

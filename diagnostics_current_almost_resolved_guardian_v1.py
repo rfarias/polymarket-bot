@@ -18,6 +18,7 @@ from market.current_scalp_signal_v1 import (
     fetch_binance_open_price_for_event_start_v1,
     fetch_external_btc_reference_v1,
 )
+from market.btc_chart_context_v1 import BtcChartContext, fetch_btc_chart_context
 from market.chainlink_oracle import ChainlinkBTCOracle
 from market.polymarket_broker_v3 import PolymarketBrokerV3
 from market.rest_5m_shadow_public_v5 import (
@@ -1008,6 +1009,8 @@ def main() -> int:
     open_reference_cache: dict[str, object | None] = {}
     oracle_open_prices: dict[str, float] = {}
     exit_state = StopExitState()
+    _last_chart_ctx: Optional[BtcChartContext] = None
+    _last_chart_ctx_bucket: int = -1
 
     # Initialize Chainlink oracle (graceful — failures won't stop the guardian)
     oracle = ChainlinkBTCOracle()
@@ -1039,6 +1042,22 @@ def main() -> int:
             executable, executable_reason = _compute_executable_metrics(snap)
             secs_to_end = _slot_secs_to_end(current_item)
             reference = fetch_external_btc_reference_v1()
+
+            # Chart context — fetch once per 5min BTC candle (cached per bucket)
+            _ctx_bucket_now = int(now / 300)
+            if _ctx_bucket_now != _last_chart_ctx_bucket:
+                _ref_price_ctx = _safe_float((reference or {}).get("reference_price"), 80_000.0)
+                _event_end_ctx = (float(slug.split("-")[-1]) + 300.0) if slug else now + 300.0
+                try:
+                    _last_chart_ctx = fetch_btc_chart_context(
+                        current_price=_ref_price_ctx,
+                        entry_ts=now,
+                        event_end_ts=_event_end_ctx,
+                    )
+                    _last_chart_ctx_bucket = _ctx_bucket_now
+                except Exception:
+                    pass  # keep previous context on failure
+
             scalp_signal = current_scalp.evaluate(
                 snap=snap,
                 secs_to_end=secs_to_end,
@@ -1140,6 +1159,7 @@ def main() -> int:
                     "current_scalp_context": scalp_signal,
                     "almost_resolved_signal": signal,
                     "monitor_both_sides": monitor_both_sides,
+                    "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
                 }
             )
             if monitor_both_sides:
