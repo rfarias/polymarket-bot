@@ -18,6 +18,7 @@ from market.current_scalp_signal_v1 import (
     fetch_binance_open_price_for_event_start_v1,
     fetch_external_btc_reference_v1,
 )
+from market.chainlink_oracle import ChainlinkBTCOracle
 from market.polymarket_broker_v3 import PolymarketBrokerV3
 from market.rest_5m_shadow_public_v5 import (
     _build_slot_bundle,
@@ -60,6 +61,27 @@ class GuardianConfig:
     min_market_order_qty: float
     execute_stop: bool
     beep: bool
+    # Emergency exit
+    near_win_threshold: float = 0.995
+    near_win_secs: int = 15
+    oracle_margin_enabled: bool = True
+    oracle_margin_bps: float = 2.0
+    oracle_margin_secs: int = 30
+    # Structural stop (aligned with runner)
+    structural_stop_buffer_bps: float = 1.0
+    structural_stop_market_range_30s: float = 0.035
+    structural_stop_edge_vs_counter: float = 0.80
+    # Variant-aware exits
+    setup_variant: str = ""
+    hold_to_resolution: bool = False
+    # controlled_late_profit_take thresholds
+    controlled_late_max_market_range_15s: float = 0.02
+    controlled_late_max_adverse_spot_15s_bps: float = 1.6
+    # resolved_pullback_exit thresholds
+    resolved_pullback_max_market_range_15s: float = 0.03
+    resolved_pullback_max_market_range_30s: float = 0.025
+    # min distance for controlled_late profit-take gate
+    min_price_to_beat_distance_bps: float = 5.0
 
 
 @dataclass
@@ -402,6 +424,38 @@ def _price_to_beat_crossed(side: str, reference_price: float, opening_price: flo
     return reference_price >= opening_price
 
 
+def _check_emergency_exit(
+    side: str,
+    active_bid: float,
+    secs_to_end: Optional[int],
+    oracle_price: Optional[float],
+    oracle_open_price: Optional[float],
+    oracle_staleness_secs: float,
+    *,
+    cfg: GuardianConfig,
+    max_oracle_staleness_secs: float = 120.0,
+) -> Optional[str]:
+    if secs_to_end is None or secs_to_end <= 0:
+        return None
+    if secs_to_end <= cfg.near_win_secs and active_bid >= cfg.near_win_threshold:
+        return f"near_win_exit:bid={round(active_bid, 4)}:secs={secs_to_end}"
+    if (
+        cfg.oracle_margin_enabled
+        and oracle_price is not None
+        and oracle_open_price is not None
+        and oracle_open_price > 0
+        and oracle_staleness_secs <= max_oracle_staleness_secs
+        and secs_to_end <= cfg.oracle_margin_secs
+    ):
+        if side == "UP":
+            margin_bps = (oracle_price - oracle_open_price) / oracle_open_price * 10_000
+        else:
+            margin_bps = (oracle_open_price - oracle_price) / oracle_open_price * 10_000
+        if margin_bps is not None and margin_bps < cfg.oracle_margin_bps:
+            return f"oracle_margin_exit:{round(margin_bps, 2)}bps:oracle={round(oracle_price, 2)}:open={round(oracle_open_price, 2)}"
+    return None
+
+
 def _protective_grace_active(
     *,
     cfg: GuardianConfig,
@@ -445,6 +499,9 @@ def _decision(
     bid_now: float,
     tick_size: float,
     secs_to_end: Optional[int],
+    oracle_price: Optional[float] = None,
+    oracle_open_price: Optional[float] = None,
+    oracle_staleness_secs: float = 9999.0,
 ) -> tuple[str, list[str]]:
     side = cfg.side
     reasons: list[str] = []
@@ -460,9 +517,27 @@ def _decision(
     distance_bps = abs(_safe_float(signal.get("distance_to_price_to_beat_bps"), 0.0))
     adverse_bps = _side_adverse_bps(signal, side)
     counter_price = _guardian_counter_ask(signal, scalp_signal, side)
+    market_range_15s = _safe_float(signal.get("market_range_15s") or scalp_signal.get("market_range_15s"), 0.0)
     market_range_30s = _safe_float(signal.get("market_range_30s"), 0.0)
+    edge_vs_counter = _safe_float(signal.get(f"{'up' if side == 'UP' else 'down'}_edge_vs_counter"), 0.0)
+    pnl_ticks = (bid_now - cfg.entry_price) / tick_size if bid_now > 0 and tick_size > 0 else 0.0
     scalp_setup = str(scalp_signal.get("setup") or "")
     scalp_side = str(scalp_signal.get("side") or "")
+    setup_variant = str(cfg.setup_variant or signal.get("setup_variant") or "")
+
+    # --- Emergency exits (always hard, skip protective grace) ---
+    emergency = _check_emergency_exit(
+        side, bid_now, secs_to_end,
+        oracle_price, oracle_open_price, oracle_staleness_secs,
+        cfg=cfg,
+    )
+    if emergency:
+        return "STOP", [emergency]
+
+    # --- extreme_99_limit: hold to resolution, skip all stop logic ---
+    if setup_variant == "extreme_99_limit":
+        return "HOLD", ["extreme_99_hold_to_resolution"]
+
     protective_grace, protective_blockers = _protective_grace_active(
         cfg=cfg,
         signal=signal,
@@ -476,6 +551,28 @@ def _decision(
             warnings.append(f"protected_drawdown {reason}")
         else:
             reasons.append(reason)
+
+    # --- Variant-aware profit exits (non-stop, but urgent FAK) ---
+    if (
+        setup_variant == "controlled_late_entry"
+        and pnl_ticks > 0
+        and (
+            market_range_15s >= cfg.controlled_late_max_market_range_15s
+            or adverse_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
+            or buffer_bps <= cfg.structural_stop_buffer_bps
+            or distance_bps <= cfg.min_price_to_beat_distance_bps
+        )
+    ):
+        return "STOP", [f"controlled_late_profit_take pnl={round(pnl_ticks,2)} range15={market_range_15s} adverse={adverse_bps}"]
+    if (
+        setup_variant == "resolved_pullback_limit"
+        and (
+            market_range_15s >= cfg.resolved_pullback_max_market_range_15s
+            or market_range_30s >= cfg.resolved_pullback_max_market_range_30s
+            or adverse_bps >= cfg.controlled_late_max_adverse_spot_15s_bps
+        )
+    ):
+        return "STOP", [f"resolved_pullback_exit range15={market_range_15s} range30={market_range_30s} adverse={adverse_bps}"]
 
     if _price_to_beat_crossed(side, reference_price, opening_price):
         reasons.append(f"price_to_beat_crossed spot={reference_price} open={opening_price}")
@@ -503,7 +600,19 @@ def _decision(
     if market_range_30s >= cfg.market_range_30s_stop and adverse_bps >= cfg.adverse_5s_stop_bps:
         _stop_or_warn(f"market_range_with_adverse range30={market_range_30s} adverse={adverse_bps}")
     if secs_to_end is not None and secs_to_end <= cfg.deadline_exit_secs:
-        reasons.append(f"deadline secs_to_end={secs_to_end}")
+        reasons.append(f"deadline_flatten secs_to_end={secs_to_end}")
+
+    # --- Structural stop (aligned with runner) ---
+    _snap_up_ask = _safe_float(signal.get("up_buy"), 0.0)
+    _snap_down_ask = _safe_float(signal.get("down_buy"), 0.0)
+    _snap_data_ok = not (_snap_up_ask > 0 and _snap_down_ask > 0 and _snap_up_ask + _snap_down_ask > 1.10)
+    if not reasons and _snap_data_ok and (
+        buffer_bps <= cfg.structural_stop_buffer_bps
+        or market_range_30s >= cfg.structural_stop_market_range_30s
+        or (edge_vs_counter > 0 and edge_vs_counter <= cfg.structural_stop_edge_vs_counter)
+        or (signal.get("side") not in (None, side) and signal.get("allow"))
+    ):
+        reasons.append(f"structural_stop buffer={buffer_bps} range30={market_range_30s} edge={round(edge_vs_counter,3)}")
 
     if reasons:
         return "STOP", reasons
@@ -554,7 +663,13 @@ def _execute_or_simulate_stop_cycle(
         state.last_reason = ";".join(reasons)
 
     elapsed = max(0.0, now - state.first_triggered_at)
-    should_use_market = elapsed >= cfg.limit_first_secs and hasattr(PolymarketBrokerV3, "place_market_order")
+    _urgent_keywords = ("near_win", "oracle_margin", "structural_stop", "deadline_flatten",
+                        "controlled_late_profit", "resolved_pullback")
+    _is_urgent = any(kw in r for r in reasons for kw in _urgent_keywords)
+    should_use_market = (
+        (_is_urgent or elapsed >= cfg.limit_first_secs)
+        and hasattr(PolymarketBrokerV3, "place_market_order")
+    )
     method = "market_fak" if should_use_market else "limit_aggressive"
     qty = float(cfg.qty)
     exit_price = _limit_exit_price(bid_now, tick_size, cfg.exit_slippage_ticks)
@@ -768,6 +883,13 @@ def main() -> int:
     parser.add_argument("--min-market-order-qty", type=float, default=5.0, help="Minimum qty for market FAK; smaller residuals use FAK limit")
     parser.add_argument("--execute-stop", action="store_true", help="Actually post/cancel/retry SELL stop orders when STOP triggers")
     parser.add_argument("--no-beep", action="store_true")
+    parser.add_argument("--setup-variant", type=str, default="",
+        help="Setup variant: controlled_late_entry | resolved_pullback_limit | extreme_99_limit. Enables variant-specific exits.")
+    parser.add_argument("--near-win-threshold", type=float, default=0.995)
+    parser.add_argument("--near-win-secs", type=int, default=15)
+    parser.add_argument("--no-oracle", action="store_true", help="Disable Chainlink oracle margin exit.")
+    parser.add_argument("--oracle-margin-bps", type=float, default=2.0)
+    parser.add_argument("--oracle-margin-secs", type=int, default=30)
     parser.add_argument(
         "--timeframe",
         type=str,
@@ -869,6 +991,12 @@ def main() -> int:
         min_market_order_qty=float(args.min_market_order_qty),
         execute_stop=bool(args.execute_stop),
         beep=not bool(args.no_beep),
+        near_win_threshold=float(args.near_win_threshold),
+        near_win_secs=int(args.near_win_secs),
+        oracle_margin_enabled=not bool(args.no_oracle),
+        oracle_margin_bps=float(args.oracle_margin_bps),
+        oracle_margin_secs=int(args.oracle_margin_secs),
+        setup_variant=str(args.setup_variant or ""),
     )
     if cfg.execute_stop and cfg.qty <= 0:
         raise SystemExit("--qty deve ser > 0 com --execute-stop (não foi detectado automaticamente ou passou 0)")
@@ -878,7 +1006,12 @@ def main() -> int:
     current_scalp = CurrentScalpResearchV1(cfg=scalp_cfg, history_secs=180)
     log_path = Path(args.log_file) if args.log_file else _build_default_log_path()
     open_reference_cache: dict[str, object | None] = {}
+    oracle_open_prices: dict[str, float] = {}
     exit_state = StopExitState()
+
+    # Initialize Chainlink oracle (graceful — failures won't stop the guardian)
+    oracle = ChainlinkBTCOracle()
+    print("[GUARDIAN_ORACLE] Chainlink BTC oracle iniciado.")
 
     print("[CURRENT_ALMOST_RESOLVED_GUARDIAN_CONFIG]")
     pprint(asdict(cfg))
@@ -924,6 +1057,13 @@ def main() -> int:
             signal = _enrich_guardian_signal_metrics(signal, scalp_signal, cfg.side)
             tick_size = _tick_size_from_snap(snap, cfg.side)
             bid_now = _bid_for_side(executable, cfg.side)
+
+            # Chainlink oracle poll + open price tracking
+            oracle_price, _, oracle_staleness = oracle.get_price()
+            if slug and oracle_price and slug not in oracle_open_prices:
+                oracle_open_prices[slug] = oracle_price
+            oracle_open_price = oracle_open_prices.get(slug)
+
             decision, reasons = _decision(
                 cfg=cfg,
                 signal=signal,
@@ -931,6 +1071,9 @@ def main() -> int:
                 bid_now=bid_now,
                 tick_size=tick_size,
                 secs_to_end=secs_to_end,
+                oracle_price=oracle_price,
+                oracle_open_price=oracle_open_price,
+                oracle_staleness_secs=oracle_staleness,
             )
             pnl_ticks = round((bid_now - cfg.entry_price) / tick_size, 4) if bid_now > 0 and tick_size > 0 else None
             row.update(
@@ -945,6 +1088,9 @@ def main() -> int:
                     "counter_buy": _guardian_counter_ask(signal, scalp_signal, cfg.side),
                     "tick_size": tick_size,
                     "pnl_ticks": pnl_ticks,
+                    "oracle_price": oracle_price,
+                    "oracle_open_price": oracle_open_price,
+                    "oracle_staleness_secs": round(oracle_staleness, 1),
                     "reference": reference,
                     "open_reference": open_ref,
                     "current_scalp_context": scalp_signal,

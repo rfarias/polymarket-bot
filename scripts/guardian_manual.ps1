@@ -48,7 +48,12 @@ param(
     [switch]$NoBeep,
 
     [ValidateSet("5m","15m")]
-    [string]$Timeframe = "5m"
+    [string]$Timeframe = "5m",
+
+    [ValidateSet("","controlled_late_entry","resolved_pullback_limit","extreme_99_limit")]
+    [string]$SetupVariant = "",
+
+    [switch]$NoOracle
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +92,8 @@ if ($Seconds -gt 0) { $args_list += @("--seconds", [string]$Seconds) }
 if ($StopPrice -gt 0) { $args_list += @("--price-stop", [string]$StopPrice) }
 if ($NoBeep)      { $args_list += "--no-beep" }
 if ($Timeframe -ne "5m") { $args_list += @("--timeframe", $Timeframe) }
+if ($SetupVariant)        { $args_list += @("--setup-variant", $SetupVariant) }
+if ($NoOracle)            { $args_list += "--no-oracle" }
 
 $ts = Get-Date -Format "yyyyMMdd_HHmmss"
 $logFile = Join-Path $repo "logs\guardian_manual_${Side}_${ts}.jsonl"
