@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -197,6 +198,19 @@ def _parse_file(path: Path) -> List[TradeRecord]:
                     xp = _sf(tsnap.get("exit_price_posted") or tsnap.get("exit_price"))
                     ep = _sf(tsnap.get("entry_price") or rec.entry_price)
                     rec.entry_qty_filled = _sf(tsnap.get("entry_qty_filled"), rec.entry_qty_filled)
+
+                    # near_win_exit e oracle_margin_exit são ordens FAK: o fill
+                    # real é ao preço do maker (bid), não ao preço limite postado.
+                    # O bid no momento do post está explícito no last_reason.
+                    last_reason = str(tsnap.get("last_reason") or "")
+                    if xp > 0 and any(
+                        tag in last_reason
+                        for tag in ("near_win_exit", "oracle_margin_exit")
+                    ):
+                        m = re.search(r":bid=([0-9.]+)", last_reason)
+                        if m:
+                            xp = float(m.group(1))
+
                     if ep > 0 and xp > 0:
                         rec.pnl_ticks = round((xp - ep) / 0.01, 1)
 
