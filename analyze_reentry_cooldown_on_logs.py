@@ -34,6 +34,7 @@ EXIT_EVENT_TYPES = {
     "redeem_flat",
     "redeem_dust_archived",
     "external_close_detected",
+    "exit",  # paper runner format
 }
 
 
@@ -81,10 +82,16 @@ def _safe_float(v, default: float = 0.0) -> float:
 def _parse_trades_from_file(path: Path) -> List[TradeRecord]:
     """
     Parse enter/exit pairs from a single runner JSONL file.
-    Matches by event_slug (FIFO). Unmatched enters are reported as open/unknown.
+
+    Supports two formats:
+      Real runner: enter has signal.event_slug; exits are flat/redeem_flat keyed by event_slug
+      Paper runner: enter has no event_slug (slug from last snapshot); exits are 'exit' events
+                    keyed by trade.created_at matching the enter's ts
     """
     records: List[TradeRecord] = []
-    open_by_slug: Dict[str, TradeRecord] = {}  # slug -> open trade
+    open_by_slug: Dict[str, TradeRecord] = {}   # slug -> open trade (real runner)
+    open_by_ts: Dict[float, TradeRecord] = {}    # enter_ts -> open trade (paper runner)
+    last_slug: str = ""
 
     with open(path, encoding="utf-8") as fh:
         for raw in fh:
@@ -99,14 +106,19 @@ def _parse_trades_from_file(path: Path) -> List[TradeRecord]:
             etype = ev.get("type")
             ts = _safe_float(ev.get("ts"), 0.0)
 
-            if etype == "enter":
+            if etype == "snapshot":
+                s = str(ev.get("current_slug") or "")
+                if s:
+                    last_slug = s
+
+            elif etype == "enter":
                 sig = ev.get("signal") or {}
                 trade_snap = ev.get("trade") or {}
-                slug = str(sig.get("event_slug") or trade_snap.get("event_slug") or "")
+                slug = str(sig.get("event_slug") or trade_snap.get("event_slug") or last_slug or "")
                 side = str(sig.get("side") or trade_snap.get("side") or "")
                 entry_price = _safe_float(sig.get("entry_price") or trade_snap.get("entry_price"), 0.0)
                 variant = str(sig.get("setup_variant") or trade_snap.get("setup_variant") or "unknown")
-                qty = _safe_float(trade_snap.get("entry_qty_requested"), 0.0)
+                qty = _safe_float(trade_snap.get("entry_qty_requested") or 1.0, 1.0)  # paper=1
 
                 if not slug:
                     continue
@@ -117,6 +129,7 @@ def _parse_trades_from_file(path: Path) -> List[TradeRecord]:
                     prev.exit_ts = ts
                     prev.exit_type = "superceded_by_enter"
                     records.append(prev)
+                    open_by_ts.pop(prev.enter_ts, None)
 
                 rec = TradeRecord(
                     slug=slug, side=side, enter_ts=ts,
@@ -125,29 +138,42 @@ def _parse_trades_from_file(path: Path) -> List[TradeRecord]:
                 )
                 rec.entry_qty_filled = qty
                 open_by_slug[slug] = rec
+                open_by_ts[ts] = rec
 
             elif etype in EXIT_EVENT_TYPES:
                 trade_snap = ev.get("trade") or {}
-                slug = str(trade_snap.get("event_slug") or "")
-                if not slug:
-                    continue
+                rec = None
 
-                rec = open_by_slug.pop(slug, None)
+                # Real runner: keyed by event_slug
+                slug = str(trade_snap.get("event_slug") or "")
+                if slug and slug in open_by_slug:
+                    rec = open_by_slug.pop(slug)
+                    open_by_ts.pop(rec.enter_ts, None)
+
+                # Paper runner: keyed by trade.created_at == enter ts
                 if rec is None:
-                    # exit without matching enter (session restored from state)
+                    created_at = _safe_float(trade_snap.get("created_at"), 0.0)
+                    if created_at and created_at in open_by_ts:
+                        rec = open_by_ts.pop(created_at)
+                        open_by_slug.pop(rec.slug, None)
+
+                if rec is None:
                     continue
 
                 rec.exit_ts = ts
                 rec.exit_type = etype
-                rec.exit_price_posted = _safe_float(trade_snap.get("exit_price_posted"), 0.0)
-                rec.entry_qty_filled = _safe_float(trade_snap.get("entry_qty_filled"), rec.entry_qty_filled)
 
-                # Estimate PnL in ticks (tick size ~0.01 for most markets)
-                ep = _safe_float(trade_snap.get("entry_price"), rec.entry_price)
-                xp = rec.exit_price_posted
-                tick = 0.01
-                if ep > 0 and xp and xp > 0:
-                    rec.pnl_ticks_est = round((xp - ep) / tick, 1)
+                # PnL: paper logs have direct pnl_ticks; real runner needs estimation
+                direct_pnl = trade_snap.get("pnl_ticks")
+                if direct_pnl is not None:
+                    rec.pnl_ticks_est = float(direct_pnl)
+                else:
+                    exit_p = _safe_float(trade_snap.get("exit_price_posted") or trade_snap.get("exit_price"), 0.0)
+                    rec.exit_price_posted = exit_p
+                    rec.entry_qty_filled = _safe_float(trade_snap.get("entry_qty_filled"), rec.entry_qty_filled)
+                    ep = _safe_float(trade_snap.get("entry_price"), rec.entry_price)
+                    if ep > 0 and exit_p > 0:
+                        rec.pnl_ticks_est = round((exit_p - ep) / 0.01, 1)
 
                 records.append(rec)
 
