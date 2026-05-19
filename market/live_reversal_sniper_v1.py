@@ -1,0 +1,340 @@
+"""
+market/live_reversal_sniper_v1.py
+
+Reversal Sniper — Fase 1: paper only (zero ordens reais).
+
+Monitora mercados 5-min BTC onde o lado "quase vencedor" está a >= 0.88
+e secs_to_end entre 15 e 120. Quando Sinal A (divergência BTC oracle) e/ou
+Sinal B (desaceleração bid) disparam com score >= 4, registra would_enter=True
+no log JSONL mas NÃO posta nenhuma ordem.
+
+REGRAS INEGOCIÁVEIS:
+1. Fase 1 = somente logging. Nenhuma ordem real até validação dos logs paper.
+2. Nunca misturar bankroll com current_almost_resolved.
+3. analyze_reversal_candidates_on_logs.py DEVE ser rodado antes de ativar modo real.
+4. Position sizing real será FIXO — nunca all-in.
+5. Logs separados por data — nunca sobrescrever logs anteriores.
+6. Se win_rate real cair abaixo de 5% em 100+ trades, pausar e revisar sinais.
+
+Uso:
+    python market/live_reversal_sniper_v1.py
+    python market/live_reversal_sniper_v1.py --seconds 3600
+    python -m market.live_reversal_sniper_v1
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from collections import deque
+from datetime import date
+from pathlib import Path
+from typing import Deque, Dict, Optional, Tuple
+
+# ---- market modules ----
+from market.binance_ws_v1 import BinanceTickFeed
+from market.chainlink_oracle import ChainlinkBTCOracle
+from market.rest_5m_shadow_public_v4 import (
+    _build_slot_bundle,
+    _compute_executable_metrics,
+    _fetch_slot_state,
+    _slot_snapshot,
+)
+
+# ---------------------------------------------------------------------------
+# Parâmetros — Fase 1
+# ---------------------------------------------------------------------------
+
+MIN_WINNER_BID = 0.88       # active_bid mínimo para entrar na zona de monitoramento
+MAX_LOSER_PRICE = 0.15      # loser muito caro → edge sumiu
+MIN_SECS = 15               # muito perto da resolução → skip
+MAX_SECS = 120              # muito cedo → skip
+
+SCORE_THRESHOLD_PAPER = 4   # score mínimo para registrar would_enter
+COOLDOWN_SECS = 60.0        # cooldown por mercado após qualquer would_enter
+
+BID_HISTORY_SIZE = 6        # polls mantidos para cálculo de velocidade
+BID_DECEL_POLLS = 3         # velocity = bid_now - bid[N-3]
+
+PAPER_BET_SIZE = 20.0       # $ simulados por trade (apenas para log de contexto)
+
+# Sinal B thresholds
+SINAL_B_WEAK_VEL = -0.020   # peso 2
+SINAL_B_STRONG_VEL = -0.050 # peso 3
+
+# Sinal A threshold
+SINAL_A_BPS = 100.0         # divergência mínima oracle vs open (contra o vencedor)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _sf(v, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _build_log_path() -> Path:
+    today = date.today().strftime("%Y%m%d")
+    return Path("logs") / f"reversal_sniper_paper_{today}.jsonl"
+
+
+def _append_jsonl(path: Path, row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Deceleration gate — igual ao live runner
+# ---------------------------------------------------------------------------
+
+class _DecelTracker:
+    """Rastreia histórico de bid de um mercado (slug+side) para detectar desaceleração."""
+
+    def __init__(self):
+        self._history: Dict[str, Deque[Tuple[float, float]]] = {}
+
+    def update(self, slug: str, side: str, bid: float, now: float) -> dict:
+        key = f"{slug}:{side}"
+        hist = self._history.setdefault(key, deque(maxlen=BID_HISTORY_SIZE))
+        hist.append((now, bid))
+
+        if len(hist) < BID_DECEL_POLLS + 1:
+            return {"bid_now": bid, "bid_velocity": None, "would_block": False, "score": 0}
+
+        bid_3ago = list(hist)[-BID_DECEL_POLLS - 1][1]
+        velocity = round(bid - bid_3ago, 6)
+
+        if velocity < SINAL_B_STRONG_VEL:
+            score = 3
+        elif velocity < SINAL_B_WEAK_VEL:
+            score = 2
+        else:
+            score = 0
+
+        return {
+            "bid_now": bid,
+            "bid_velocity": velocity,
+            "would_block": score > 0,
+            "score": score,
+        }
+
+    def evict_old_slugs(self, current_slug: str) -> None:
+        stale = [k for k in self._history if not k.startswith(current_slug + ":")]
+        for k in stale:
+            del self._history[k]
+
+
+# ---------------------------------------------------------------------------
+# Main runner
+# ---------------------------------------------------------------------------
+
+def run_reversal_sniper_paper(
+    run_for: float = float("inf"),
+    poll_secs: float = 1.0,
+) -> None:
+    log_path = _build_log_path()
+    print(f"[REVERSAL_SNIPER] Iniciando — modo PAPER ONLY", flush=True)
+    print(f"[REVERSAL_SNIPER] Log: {log_path}", flush=True)
+    print(f"[REVERSAL_SNIPER] Parâmetros: min_bid={MIN_WINNER_BID} max_loser={MAX_LOSER_PRICE} "
+          f"secs=[{MIN_SECS},{MAX_SECS}] score>={SCORE_THRESHOLD_PAPER}", flush=True)
+
+    _append_jsonl(log_path, {
+        "type": "session_start",
+        "ts": time.time(),
+        "params": {
+            "min_winner_bid": MIN_WINNER_BID,
+            "max_loser_price": MAX_LOSER_PRICE,
+            "min_secs": MIN_SECS,
+            "max_secs": MAX_SECS,
+            "score_threshold": SCORE_THRESHOLD_PAPER,
+            "cooldown_secs": COOLDOWN_SECS,
+            "paper_bet_size": PAPER_BET_SIZE,
+            "sinal_a_bps": SINAL_A_BPS,
+            "sinal_b_weak_vel": SINAL_B_WEAK_VEL,
+            "sinal_b_strong_vel": SINAL_B_STRONG_VEL,
+        },
+    })
+
+    oracle = ChainlinkBTCOracle(cache_secs=5.0)
+    btc_feed = BinanceTickFeed()
+    btc_feed.start()
+
+    decel = _DecelTracker()
+    oracle_open_prices: Dict[str, float] = {}   # slug → oracle_price ao início do slug
+    cooldowns: Dict[str, float] = {}            # slug → ts fim do cooldown
+
+    started_at = time.time()
+
+    while time.time() - started_at < run_for:
+        now = time.time()
+        try:
+            slot_bundle = _build_slot_bundle()
+            current_item = slot_bundle["queue"].get("current")
+
+            if not current_item:
+                time.sleep(poll_secs)
+                continue
+
+            slug = str(current_item.get("slug") or "")
+            if not slug:
+                time.sleep(poll_secs)
+                continue
+
+            raw_secs = current_item.get("seconds_to_end")
+            current_secs = int(raw_secs) if raw_secs is not None else None
+
+            # ---- fora da janela de monitoramento → skip sem log ----
+            if current_secs is None or not (MIN_SECS <= current_secs <= MAX_SECS):
+                time.sleep(poll_secs)
+                continue
+
+            # ---- bid data ----
+            slot_state = _fetch_slot_state(slot_bundle)
+            snap = _slot_snapshot(slot_state, "current")
+            exec_metrics, exec_reason = _compute_executable_metrics(snap)
+
+            if exec_metrics is None:
+                time.sleep(poll_secs)
+                continue
+
+            up_bid = _sf(exec_metrics.get("up_bid"))
+            down_bid = _sf(exec_metrics.get("down_bid"))
+
+            winner_side = "UP" if up_bid >= down_bid else "DOWN"
+            winner_bid = up_bid if winner_side == "UP" else down_bid
+            loser_price = round(1.0 - winner_bid, 4)
+
+            # ---- fora da zona de monitoramento → skip ----
+            if winner_bid < MIN_WINNER_BID or loser_price <= 0 or loser_price > MAX_LOSER_PRICE:
+                time.sleep(poll_secs)
+                continue
+
+            # ---- oracle ----
+            oracle_price, _oracle_updated_at, _oracle_staleness = oracle.get_price()
+            if oracle_price is not None and slug not in oracle_open_prices:
+                oracle_open_prices[slug] = oracle_price
+            oracle_open = oracle_open_prices.get(slug)
+
+            # ---- Sinal A: divergência BTC oracle vs open (contra o vencedor) ----
+            sinal_a_score = 0
+            btc_divergence_bps: Optional[float] = None
+            if oracle_price is not None and oracle_open and oracle_open > 0:
+                btc_divergence_bps = round((oracle_price - oracle_open) / oracle_open * 10_000, 2)
+                if winner_side == "UP" and btc_divergence_bps < -SINAL_A_BPS:
+                    sinal_a_score = 2   # BTC caiu mas mercado precifica UP como vencedor
+                elif winner_side == "DOWN" and btc_divergence_bps > SINAL_A_BPS:
+                    sinal_a_score = 2   # BTC subiu mas mercado precifica DOWN como vencedor
+
+            # ---- Sinal B: desaceleração bid (decel gate) ----
+            decel.evict_old_slugs(slug)
+            decel_info = decel.update(slug, winner_side, winner_bid, now)
+            sinal_b_score = decel_info["score"]
+
+            total_score = sinal_a_score + sinal_b_score
+            would_enter = total_score >= SCORE_THRESHOLD_PAPER
+
+            # ---- log snapshot ----
+            snap_row = {
+                "type": "sniper_snapshot",
+                "ts": now,
+                "slug": slug,
+                "current_secs": current_secs,
+                "winner_side": winner_side,
+                "winner_bid": round(winner_bid, 4),
+                "loser_price": loser_price,
+                "up_bid": round(up_bid, 4),
+                "down_bid": round(down_bid, 4),
+                "oracle_price": oracle_price,
+                "oracle_open": oracle_open,
+                "btc_divergence_bps": btc_divergence_bps,
+                "sinal_a_score": sinal_a_score,
+                "sinal_b_score": sinal_b_score,
+                "bid_velocity": decel_info["bid_velocity"],
+                "total_score": total_score,
+                "would_enter": would_enter,
+                "in_cooldown": cooldowns.get(slug, 0) > now,
+                "btc_price": btc_feed.current_price() or None,
+                "btc_tick_direction": btc_feed.tick_direction_score(8.0),
+            }
+            _append_jsonl(log_path, snap_row)
+
+            # ---- would_enter sem cooldown → registrar evento ----
+            if would_enter and cooldowns.get(slug, 0) <= now:
+                shares = PAPER_BET_SIZE / loser_price
+                would_enter_row = {
+                    "type": "would_enter",
+                    "ts": now,
+                    "slug": slug,
+                    "current_secs": current_secs,
+                    "winner_side": winner_side,
+                    "winner_bid": round(winner_bid, 4),
+                    "sniper_side": "DOWN" if winner_side == "UP" else "UP",
+                    "loser_price": loser_price,
+                    "paper_bet_size": PAPER_BET_SIZE,
+                    "paper_shares": round(shares, 2),
+                    "paper_target_pnl": round(shares * 1.0 - PAPER_BET_SIZE, 2),
+                    "total_score": total_score,
+                    "sinal_a_score": sinal_a_score,
+                    "sinal_b_score": sinal_b_score,
+                    "bid_velocity": decel_info["bid_velocity"],
+                    "btc_divergence_bps": btc_divergence_bps,
+                    "oracle_price": oracle_price,
+                    "oracle_open": oracle_open,
+                    "btc_price": btc_feed.current_price() or None,
+                    "btc_tick_direction": btc_feed.tick_direction_score(8.0),
+                }
+                _append_jsonl(log_path, would_enter_row)
+                cooldowns[slug] = now + COOLDOWN_SECS
+
+                print(
+                    f"[SNIPER] would_enter slug={slug} side={'DOWN' if winner_side == 'UP' else 'UP'} "
+                    f"loser={loser_price:.3f} score={total_score} "
+                    f"(A={sinal_a_score} B={sinal_b_score}) secs={current_secs}",
+                    flush=True,
+                )
+
+        except KeyboardInterrupt:
+            break
+        except Exception as exc:
+            _append_jsonl(log_path, {
+                "type": "error",
+                "ts": time.time(),
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            print(f"[SNIPER] Erro no loop: {exc!r}", flush=True)
+            time.sleep(poll_secs)
+            continue
+
+        time.sleep(poll_secs)
+
+    btc_feed.stop()
+    _append_jsonl(log_path, {"type": "session_end", "ts": time.time()})
+    print(f"[REVERSAL_SNIPER] Sessão encerrada. Log: {log_path}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Reversal Sniper — Fase 1 (paper only)")
+    parser.add_argument("--seconds", type=float, default=float("inf"),
+                        help="Duração máxima em segundos (padrão: infinito)")
+    parser.add_argument("--poll", type=float, default=1.0,
+                        help="Intervalo de polling em segundos (padrão: 1.0)")
+    args = parser.parse_args()
+
+    run_reversal_sniper_paper(
+        run_for=args.seconds,
+        poll_secs=args.poll,
+    )
+
+
+if __name__ == "__main__":
+    main()
