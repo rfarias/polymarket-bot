@@ -69,29 +69,31 @@ def _reconstruct_bid_velocity(
     snapshots: List[dict],
     side: str,
     enter_ts: float,
+    slug: str,
     polls_back: int = 3,
     lookback_window: int = 6,
 ) -> Optional[float]:
     """
     Recalcula bid_velocity para um enter_ts dado.
-    Usa os N snapshots anteriores ao enter para reconstruir o buffer.
+    Filtra por slug para evitar mistura de preços entre janelas distintas.
     Retorna velocity = price_now - price_N_polls_ago, ou None se histórico insuficiente.
     """
     price_key = "up_buy" if side == "UP" else "down_buy"
-    # Coleta snapshots antes do enter ordenados por ts
+    # Coleta snapshots do mesmo slug antes do enter
     prior = [
         s for s in snapshots
         if s.get("type") == "snapshot"
         and _safe_float(s.get("ts"), 0.0) <= enter_ts
+        and str(s.get("current_slug") or "") == slug
         and _safe_float(s.get("signal", {}).get(price_key), 0.0) > 0
     ]
     if len(prior) < polls_back + 1:
         return None
     # Pega os últimos lookback_window snapshots
     buf = prior[-lookback_window:]
-    price_now = _safe_float(buf[-1].get("signal", {}).get(price_key), 0.0)
     if len(buf) < polls_back + 1:
         return None
+    price_now = _safe_float(buf[-1].get("signal", {}).get(price_key), 0.0)
     price_ago = _safe_float(buf[-(polls_back + 1)].get("signal", {}).get(price_key), 0.0)
     if price_now <= 0 or price_ago <= 0:
         return None
@@ -148,6 +150,14 @@ def _parse_trades(rows: List[dict]) -> List[TradeRecord]:
         t.setup_variant = str(sig.get("setup_variant") or "")
         t.entry_price = _safe_float(sig.get("entry_price") or ev.get("posted_entry_price") or ev.get("signal_entry_price"), 0.0)
         t.secs_to_end = sig.get("secs_to_end")
+        # Slug do evento — pode estar no signal/enter (logs novos) ou deduzido do snapshot anterior
+        t_slug = str(sig.get("event_slug") or ev.get("event_slug") or sig.get("current_slug") or "")
+        if not t_slug:
+            # Fallback: pega o current_slug do snapshot imediatamente antes do enter
+            for s in reversed(snapshots):
+                if _safe_float(s.get("ts"), 0.0) <= t.enter_ts:
+                    t_slug = str(s.get("current_slug") or "")
+                    break
 
         # bid_velocity já logado (logs novos)
         decel_logged = ev.get("bid_decel_gate") or {}
@@ -163,9 +173,9 @@ def _parse_trades(rows: List[dict]) -> List[TradeRecord]:
             if t.entry_price > 0 and exit_price > 0:
                 t.pnl_ticks = round((exit_price - t.entry_price) / 0.01, 2)
 
-        # Recalcula bid_velocity retroativamente
+        # Recalcula bid_velocity retroativamente (filtrado por slug)
         t.bid_velocity_reconstructed = _reconstruct_bid_velocity(
-            snapshots, t.side, t.enter_ts, polls_back=3
+            snapshots, t.side, t.enter_ts, slug=t_slug, polls_back=3
         )
 
         trades.append(t)
