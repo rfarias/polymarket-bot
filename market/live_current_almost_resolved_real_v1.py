@@ -1303,6 +1303,28 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                     time.sleep(poll_secs)
                     continue
+                # standard e dual_rich_late_limit com <30s restantes: o book fica
+                # thin demais para o stop preencher no preço correto (mesmo padrão
+                # do passive_extreme_liquidity_capture, já validado em logs reais).
+                # controlled_late_entry e resolved_pullback_limit são isentos por
+                # design — entram propositalmente nos segundos finais.
+                if (
+                    str(signal.get("setup_variant") or "") in ("standard", "dual_rich_late_limit")
+                    and current_secs is not None
+                    and current_secs < 30
+                ):
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "type": "entry_blocked",
+                            "ts": now,
+                            "session_id": session_id,
+                            "reason": f"entry_too_late:secs={current_secs}",
+                            "signal": signal,
+                        },
+                    )
+                    time.sleep(poll_secs)
+                    continue
                 if event_slug and event_slug in blocked_entry_events:
                     _append_jsonl(
                         log_path,
