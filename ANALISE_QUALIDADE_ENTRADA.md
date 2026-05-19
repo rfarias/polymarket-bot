@@ -1,7 +1,7 @@
 # Análise de Qualidade de Entrada — Documentação
 
 **Data:** 2026-05-19  
-**Status:** Hipótese validada em paper (289 trades). Aguarda validação nos logs reais do PC de casa.
+**Status:** Validado nos logs reais (48 trades). Gate `entry_too_late` implementado em produção (commit `985db6e`).
 
 ---
 
@@ -112,50 +112,98 @@ Se não existir, o script vai mostrar todos os trades em Tier 1 (por default exi
 
 ---
 
-## O Que Não Está Implementado Ainda
+## Resultado da Validação nos Logs Reais (2026-05-19)
 
-O gate no runner real ainda **não foi implementado**. O filtro existe apenas na análise. 
+### Hipótese original vs dados reais
 
-Só implementar após confirmar nos logs reais que:
-1. `exit_dist` está populado nos eventos `enter` do runner
-2. Os losses reais (ou quase-losses) estão no segmento `exit_dist >= 0.02`
-3. O segmento `exit_dist < 0.02` tem WR alto nos logs reais
+A hipótese exit_dist (paper) mostrou padrão diferente nos logs reais antes da correção de PnL:
 
-**Quando confirmar**: implementar o gate em `market/live_current_almost_resolved_real_v1.py`:
+**Problema identificado:** `analyze_entry_quality_on_logs.py` calculava PnL usando `exit_price_posted`
+para ordens FAK de `near_win_exit` e `oracle_margin_exit`. O fill real é ao preço do maker (bid),
+não ao limite postado. Ex: posted=0.99, bid=1.0 → script calculava pnl=0 (loss), real=+1 tick (win).
 
-```python
-# No bloco de entrada idle (após os outros gates):
-_exit_dist = _safe_float(signal.get("up_exit_distance" if side == "UP" else "down_exit_distance"))
-_range15s  = _safe_float(signal.get("market_range_15s"))
-_entry_p   = _safe_float(signal.get("entry_price"))
-_variant   = str(signal.get("setup_variant") or "")
+**Correção aplicada** (commit `5b9722a`): extrai bid de `last_reason` para esses tipos de exit.
 
-_tier1 = _exit_dist < 0.02
-_tier2 = _variant in ("controlled_late_entry", "resolved_pullback_limit")
-_tier3 = (_variant == "standard" and _exit_dist < 0.04 and _range15s == 0.0 and _entry_p >= 0.97)
+### Resultados corrigidos (48 trades reais)
 
-if not (_tier1 or _tier2 or _tier3):
-    _append_jsonl(log_path, {
-        "type": "entry_blocked",
-        "reason": "entry_quality_gate",
-        "exit_dist": _exit_dist,
-        "range15s": _range15s,
-        "entry_price": _entry_p,
-        "setup_variant": _variant,
-        ...
-    })
-    continue
-```
+| Tier | N | WR | PnL |
+|------|---|----|-----|
+| Tier 1 (exit_dist<0.02) | 20 | 90% | -88tk |
+| Tier 2 (controlled_late/resolved_pullback) | 4 | 100% | +10tk |
+| BLOCK | 24 | 83% | +5tk |
+
+**Por que Tier 1 tem PnL negativo mesmo com 90% WR:** dois outliers no Tier 1 pesam muito:
+- `-97.9tk` standard (BTC reverteu 30+ bps em 83s — não filtrável na entrada)
+- `-12.0tk` dual_rich_late_limit (secs=29 → book collapse → **filtrado pelo novo gate**)
+
+### 6 Perdas ≥ 5 ticks analisadas
+
+| PnL | Variant | Secs | Range15s | Dist_ptb | Entry | Causa | Filtrável? |
+|-----|---------|------|---------|---------|-------|-------|-----------|
+| -97.9tk | standard | 94 | 0.000 | 30.5 | 0.98 | BTC -30bps em 83s (extremo) | Não |
+| -17.0tk | standard | 27 | 0.020 | 5.3 | 0.96 | Book collapse secs<30 | **Sim — entry_too_late** |
+| -12.0tk | standard | 94 | 0.010 | 9.3 | 0.97 | dist_ptb baixo + stop GTC slippage | Não (custo > benefício) |
+| -12.0tk | dual_rich | 29 | 0.000 | 17.6 | 0.98 | Book collapse secs<30 | **Sim — entry_too_late** |
+| -12.0tk | standard | 95 | 0.000 | 20.1 | 0.96 | Reversão real, entry longe | Não (custo > benefício) |
+| -5.0tk | standard | 62 | 0.000 | 10.3 | 0.93 | Reversão real, entry longe | Não (custo > benefício) |
+
+### Análise de filtros candidatos
+
+| Filtro | blk_L | blk_W | Ticks salvos | Ticks perdidos | Net |
+|--------|-------|-------|-------------|----------------|-----|
+| secs<30 (standard+dual_rich) | 2 | 3 | +29.0tk | +2.1tk | **+26.9tk** |
+| dist_ptb_bps < 10 | 2 | 15 | +29.0tk | +31.1tk | -2.1tk |
+| entry_price ≤ 0.96 | 3 | 18 | +34.0tk | +49.9tk | -15.9tk |
+
+**Único filtro cirúrgico com retorno positivo:** `secs < 30` para `standard` e `dual_rich_late_limit`.
 
 ---
 
-## Contexto: Outros Gates Já Implementados
+## Gate Implementado: `entry_too_late`
 
-1. **Cooldown de re-entrada 25s** (commit `7e13a66`) — bloqueia re-entrada imediata após exit
-2. **passive_capture_too_late** (commit `2167209`) — bloqueia passive capture com <30s restantes
-3. **leader_velocity_too_high** — bloqueia se mercado moveu muito rápido (existia antes)
+**Commit:** `985db6e` | **Arquivo:** `market/live_current_almost_resolved_real_v1.py` (linha ~1311)
 
-O gate de qualidade de entrada seria o 4º gate, e potencialmente o mais impactante.
+```python
+if (
+    str(signal.get("setup_variant") or "") in ("standard", "dual_rich_late_limit")
+    and current_secs is not None
+    and current_secs < 30
+):
+    _append_jsonl(log_path, {
+        "type": "entry_blocked",
+        "ts": now,
+        "session_id": session_id,
+        "reason": f"entry_too_late:secs={current_secs}",
+        "signal": signal,
+    })
+    time.sleep(poll_secs)
+    continue
+```
+
+**Isentos por design:** `controlled_late_entry`, `resolved_pullback_limit`, `passive_extreme_liquidity_capture` (tem gate próprio).
+
+**Por que não implementar o filtro tri-nível (exit_dist)?**
+Após validação nos logs reais, a hipótese original (exit_dist<0.02 = zero losses) não se sustentou:
+- Tier 1 tem 90% WR, BLOCK tem 83% — diferença pequena
+- As perdas no Tier 1 têm causas específicas já tratadas (book collapse secs<30, BTC extremo)
+- Bloquear BLOCK custaria 20 wins por 4 losses evitadas — resultado negativo
+
+---
+
+## Notas: Gate `entry_too_late` não é o mesmo que `entry_quality_gate`
+
+O gate de qualidade de entrada tri-nível (exit_dist baseado) **não foi implementado** pois a
+análise real mostrou que o problema principal é o book collapse nos últimos 30s, não a distância
+ao target. O `entry_too_late` é mais cirúrgico e tem melhor custo-benefício documentado.
+
+---
+
+## Contexto: Gates Implementados (em ordem cronológica)
+
+1. **leader_velocity_too_high** — bloqueia se mercado moveu muito rápido (existia antes)
+2. **Cooldown de re-entrada 25s** (commit `7e13a66`) — bloqueia re-entrada imediata após exit
+3. **passive_capture_too_late** (commit `2167209`) — bloqueia passive_extreme secs<30
+4. **entry_too_late** (commit `985db6e`) — bloqueia standard + dual_rich secs<30
 
 ---
 
