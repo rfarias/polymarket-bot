@@ -1119,7 +1119,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
     last_leader_price_by_key: dict[str, float] = {}
     leader_velocity_history: dict[str, list[tuple[float, float]]] = {}
-    _bid_history: dict[str, deque] = {}  # keyed "slug:SIDE", tracks leader buy price per poll
+    _bid_history: dict[str, deque] = {}        # keyed "slug:SIDE", tracks leader buy price per poll
+    _loser_bid_history: dict[str, deque] = {}  # keyed "slug:LOSER_SIDE", tracks loser buy price for scalp
     started_at = time.time()
     _health_check_polls = max(1, int(60.0 / max(0.25, poll_secs)))
     _health_poll_counter = 0
@@ -1258,6 +1259,39 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 else None
             )
 
+            # Loser bid momentum — tracker para análise do reversal_scalp (Sinal E)
+            _loser_bid_info: Optional[dict] = None
+            if current_item:
+                _up_b = _safe_float(signal.get("up_buy"), 0.0)
+                _dn_b = _safe_float(signal.get("down_buy"), 0.0)
+                if _up_b > 0 and _dn_b > 0:
+                    _csid2 = str(current_item.get("slug") or "")
+                    _winner_s = "UP" if _up_b >= _dn_b else "DOWN"
+                    _loser_s = "DOWN" if _winner_s == "UP" else "UP"
+                    _loser_bid_now = _dn_b if _loser_s == "DOWN" else _up_b
+                    _lkey = f"{_csid2}:{_loser_s}"
+                    # Evict old slugs
+                    for _ldk in [k for k in _loser_bid_history if not k.startswith(_csid2 + ":")]:
+                        del _loser_bid_history[_ldk]
+                    if _lkey not in _loser_bid_history:
+                        _loser_bid_history[_lkey] = deque(maxlen=6)
+                    _loser_bid_history[_lkey].append(_loser_bid_now)
+                    _lhist = list(_loser_bid_history[_lkey])
+                    _loser_2ago = _lhist[-3] if len(_lhist) >= 3 else None
+                    _loser_vel = round(_loser_bid_now - _loser_2ago, 6) if _loser_2ago is not None else None
+                    _sinal_e_score = 0
+                    if _loser_vel is not None:
+                        if _loser_vel > 0.015:
+                            _sinal_e_score = 2
+                        elif _loser_vel > 0.005:
+                            _sinal_e_score = 1
+                    _loser_bid_info = {
+                        "loser_side": _loser_s,
+                        "loser_bid": round(_loser_bid_now, 4),
+                        "loser_momentum_2polls": _loser_vel,
+                        "sinal_e_score": _sinal_e_score,
+                    }
+
             # Chainlink oracle — query e rastreamento de preço de abertura por slug
             if oracle is not None:
                 _last_oracle_price, _, _last_oracle_staleness = oracle.get_price()
@@ -1302,6 +1336,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "platform_paused_until": round(_platform_paused_until, 1) if _platform_paused_until > now else None,
                 "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
                 "bid_decel_gate": {"up": _decel_gate_up, "down": _decel_gate_down},
+                "loser_bid_tracker": _loser_bid_info,
             }
             _append_jsonl(log_path, snapshot)
             print(

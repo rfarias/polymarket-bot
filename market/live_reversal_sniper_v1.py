@@ -66,6 +66,11 @@ SINAL_B_STRONG_VEL = -0.050 # peso 3
 # Sinal A threshold
 SINAL_A_BPS = 100.0         # divergência mínima oracle vs open (contra o vencedor)
 
+# Sinal E thresholds (loser momentum — para reversal_scalp)
+SINAL_E_WEAK_MOM = 0.005    # peso 1
+SINAL_E_STRONG_MOM = 0.015  # peso 2
+LOSER_HISTORY_POLLS = 2     # momentum = loser_bid_now - loser_bid_2_polls_ago
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,6 +97,38 @@ def _append_jsonl(path: Path, row: dict) -> None:
 # ---------------------------------------------------------------------------
 # Deceleration gate — igual ao live runner
 # ---------------------------------------------------------------------------
+
+class _LoserMomentumTracker:
+    """Rastreia bid do lado perdedor para detectar Sinal E (momentum do loser)."""
+
+    def __init__(self):
+        self._history: Dict[str, Deque[Tuple[float, float]]] = {}
+
+    def update(self, slug: str, loser_side: str, loser_bid: float, now: float) -> dict:
+        key = f"{slug}:{loser_side}"
+        hist = self._history.setdefault(key, deque(maxlen=6))
+        hist.append((now, loser_bid))
+
+        if len(hist) < LOSER_HISTORY_POLLS + 1:
+            return {"loser_bid": loser_bid, "loser_momentum": None, "score": 0}
+
+        loser_2ago = list(hist)[-LOSER_HISTORY_POLLS - 1][1]
+        momentum = round(loser_bid - loser_2ago, 6)
+
+        if momentum > SINAL_E_STRONG_MOM:
+            score = 2
+        elif momentum > SINAL_E_WEAK_MOM:
+            score = 1
+        else:
+            score = 0
+
+        return {"loser_bid": loser_bid, "loser_momentum": momentum, "score": score}
+
+    def evict_old_slugs(self, current_slug: str) -> None:
+        stale = [k for k in self._history if not k.startswith(current_slug + ":")]
+        for k in stale:
+            del self._history[k]
+
 
 class _DecelTracker:
     """Rastreia histórico de bid de um mercado (slug+side) para detectar desaceleração."""
@@ -166,6 +203,7 @@ def run_reversal_sniper_paper(
     btc_feed.start()
 
     decel = _DecelTracker()
+    loser_mom = _LoserMomentumTracker()
     oracle_open_prices: Dict[str, float] = {}   # slug → oracle_price ao início do slug
     cooldowns: Dict[str, float] = {}            # slug → ts fim do cooldown
 
@@ -236,6 +274,13 @@ def run_reversal_sniper_paper(
             decel_info = decel.update(slug, winner_side, winner_bid, now)
             sinal_b_score = decel_info["score"]
 
+            # ---- Sinal E: momentum do loser bid (para coleta de dados reversal_scalp) ----
+            loser_side = "DOWN" if winner_side == "UP" else "UP"
+            loser_bid = down_bid if loser_side == "DOWN" else up_bid
+            loser_mom.evict_old_slugs(slug)
+            sinal_e_info = loser_mom.update(slug, loser_side, loser_bid, now)
+            sinal_e_score = sinal_e_info["score"]
+
             total_score = sinal_a_score + sinal_b_score
             would_enter = total_score >= SCORE_THRESHOLD_PAPER
 
@@ -247,6 +292,8 @@ def run_reversal_sniper_paper(
                 "current_secs": current_secs,
                 "winner_side": winner_side,
                 "winner_bid": round(winner_bid, 4),
+                "loser_side": loser_side,
+                "loser_bid": round(loser_bid, 4),
                 "loser_price": loser_price,
                 "up_bid": round(up_bid, 4),
                 "down_bid": round(down_bid, 4),
@@ -255,6 +302,8 @@ def run_reversal_sniper_paper(
                 "btc_divergence_bps": btc_divergence_bps,
                 "sinal_a_score": sinal_a_score,
                 "sinal_b_score": sinal_b_score,
+                "sinal_e_score": sinal_e_score,
+                "sinal_e_loser_momentum": sinal_e_info["loser_momentum"],
                 "bid_velocity": decel_info["bid_velocity"],
                 "total_score": total_score,
                 "would_enter": would_enter,
@@ -282,6 +331,8 @@ def run_reversal_sniper_paper(
                     "total_score": total_score,
                     "sinal_a_score": sinal_a_score,
                     "sinal_b_score": sinal_b_score,
+                    "sinal_e_score": sinal_e_score,
+                    "sinal_e_loser_momentum": sinal_e_info["loser_momentum"],
                     "bid_velocity": decel_info["bid_velocity"],
                     "btc_divergence_bps": btc_divergence_bps,
                     "oracle_price": oracle_price,

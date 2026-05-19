@@ -79,6 +79,10 @@ class SlugRecord:
         self.session = session
         # Snapshot/signal data em momentos quase-resolvidos (active_bid >= MIN)
         self.snapshots: List[dict] = []      # {ts, active_bid, winner_side, loser_price, secs, decel, vel}
+        # Histórico de ambos os bids (sem filtro de active_bid) para análise de scalp
+        # loser_side é fixado no primeiro snapshot qualificado e não muda
+        self.bid_history: List[tuple] = []   # (ts, up_bid, down_bid) — todos os snapshots com secs na janela
+        self.loser_side_fixed: Optional[str] = None  # "UP" ou "DOWN" — fixado no primeiro snapshot qualificado
         # Entradas do runner (fill events)
         self.runner_side: Optional[str] = None
         self.runner_entry_price: Optional[float] = None
@@ -132,6 +136,12 @@ def _parse_session(path: Path) -> List[SlugRecord]:
 
                 active_bid = _sf(ev.get("active_bid"))
                 secs = _sf(ev.get("current_secs") or sig.get("secs_to_end"))
+
+                # Rastrear bid_history ANTES do filtro (para análise de scalp)
+                _up_raw = _sf(sig.get("up_buy"))
+                _down_raw = _sf(sig.get("down_buy"))
+                if _up_raw > 0 and _down_raw > 0 and MIN_SECS <= secs <= MAX_SECS:
+                    _rec(slug).bid_history.append((ts, _up_raw, _down_raw))
 
                 if active_bid < MIN_ACTIVE_BID or not (MIN_SECS <= secs <= MAX_SECS):
                     continue
@@ -309,6 +319,24 @@ def _classify(rec: SlugRecord) -> Optional[dict]:
             (winner_side == "DOWN" and btc_divergence > 100)
         )
 
+    # ---- Scalp metrics (Requisito 7 reversal_scalp) ----
+    # loser_side fixo = oposto do winner_side no primeiro snapshot qualificado
+    loser_side = "DOWN" if winner_side == "UP" else "UP"
+    first_ts = snap0["ts"] if snap0 else None
+    if first_ts is not None and rec.bid_history:
+        # Rastrear apenas o bid do LADO PERDEDOR fixado no sinal (não troca com a cotação)
+        loser_bids_after = [
+            (down_b if loser_side == "DOWN" else up_b)
+            for ts_h, up_b, down_b in rec.bid_history
+            if ts_h >= first_ts
+        ]
+    else:
+        loser_bids_after = []
+    loser_bid_max = max(loser_bids_after) if loser_bids_after else None
+    scalp_2x = loser_bid_max is not None and loser_price_at_signal > 0 and loser_bid_max >= loser_price_at_signal * 2.0
+    scalp_15x = loser_bid_max is not None and loser_price_at_signal > 0 and loser_bid_max >= loser_price_at_signal * 1.5
+    max_return_pct = ((loser_bid_max / loser_price_at_signal) - 1) * 100 if (loser_bid_max and loser_price_at_signal > 0) else None
+
     return {
         "slug": rec.slug,
         "session": rec.session,
@@ -332,6 +360,11 @@ def _classify(rec: SlugRecord) -> Optional[dict]:
         "sinal_a_btc_divergence": sinal_a_active,
         "range15s_at_signal": snap0["range15s"] if snap0 else None,
         "dist_ptb_bps": snap0["dist_ptb_bps"] if snap0 else None,
+        # scalp metrics
+        "loser_bid_max": round(loser_bid_max, 4) if loser_bid_max is not None else None,
+        "scalp_would_work_2x": scalp_2x,
+        "scalp_would_work_15x": scalp_15x,
+        "max_return_pct": round(max_return_pct, 1) if max_return_pct is not None else None,
     }
 
 
@@ -400,6 +433,41 @@ def _print_report(candidates: List[dict]) -> None:
         reason = (c["runner_exit_reason"] or "")[:30]
         pnl = f"+${c['sniper_pnl_simulated']:.2f}" if c["sniper_pnl_simulated"] else "?"
         print(f"  {c['slug'][:34]:<35} {c['loser_price_at_signal']:>6.3f}  {c['secs_at_signal'] or 0:>4.0f}  {pnl:>10}  {decel:>5}  {sA:>6}  {reason}")
+    print()
+
+    # ---- Análise de scalp (reversal_scalp) ----
+    all_with_max = [c for c in candidates if c.get("loser_bid_max") is not None]
+    n_2x = sum(1 for c in all_with_max if c.get("scalp_would_work_2x"))
+    n_15x = sum(1 for c in all_with_max if c.get("scalp_would_work_15x"))
+    returns = [c["max_return_pct"] for c in all_with_max if c.get("max_return_pct") is not None and c["max_return_pct"] > 0]
+    pct_2x = n_2x / len(all_with_max) if all_with_max else 0
+    pct_15x = n_15x / len(all_with_max) if all_with_max else 0
+    avg_return = sum(returns) / len(returns) if returns else 0
+
+    print("=" * 70)
+    print("ANÁLISE REVERSAL_SCALP — disponibilidade de scalp nos eventos")
+    print("=" * 70)
+    print(f"Eventos com loser_bid_max rastreável : {len(all_with_max)}/{len(candidates)}")
+    print(f"Scalps 2x  disponíveis : {n_2x:>3} / {len(all_with_max)}  = {pct_2x:.1%}  (meta: >= 20%)")
+    print(f"Scalps 1.5x disponíveis: {n_15x:>3} / {len(all_with_max)}  = {pct_15x:.1%}  (meta: >= 30%)")
+    print(f"Return médio disponível : {avg_return:.1f}%  (eventos com movimento positivo)")
+    if pct_2x >= 0.20:
+        print("  → target_multiplier=2.0 VALIDADO — prosseguir com implementação.")
+    elif pct_15x >= 0.20:
+        print("  → target_multiplier=2.0 abaixo da meta. Considerar 1.5x.")
+    else:
+        print("  → Scalps raros nos dados históricos. Revisar universo de entrada.")
+    print()
+
+    # Detalhe scalp por evento
+    print(f"  {'slug':<35} {'loser':>6}  {'max':>6}  {'ret%':>6}  2x   1.5x  reversal")
+    for c in sorted(all_with_max, key=lambda x: -(x.get("max_return_pct") or 0))[:20]:
+        s2 = "Y" if c.get("scalp_would_work_2x") else "n"
+        s15 = "Y" if c.get("scalp_would_work_15x") else "n"
+        rev = "Y" if c["reversal_occurred"] else ("n" if c["reversal_occurred"] is False else "?")
+        mx = f"{c['loser_bid_max']:.3f}" if c.get("loser_bid_max") else "  N/A"
+        rt = f"{c['max_return_pct']:.0f}%" if c.get("max_return_pct") is not None else "  N/A"
+        print(f"  {c['slug'][:34]:<35} {c['loser_price_at_signal']:>6.3f}  {mx:>6}  {rt:>6}  {s2:>3}  {s15:>4}  {rev}")
     print()
 
     # Bloqueios relacionados a reversões
