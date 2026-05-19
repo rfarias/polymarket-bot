@@ -1402,6 +1402,32 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                     time.sleep(poll_secs)
                     continue
+                # dual_rich_late_limit: bloquear quando oracle contradiz o lado entrado.
+                # Ambas as perdas em Fase 3 ocorreram com oracle_div > 0 entrando DOWN.
+                # Threshold conservador: 5 bps para evitar bloqueios em mercados planos.
+                if str(signal.get("setup_variant") or "") == "dual_rich_late_limit":
+                    _slug_for_oracle = current_item.get("slug") if current_item else None
+                    _oracle_open_ref = _oracle_open_prices.get(_slug_for_oracle)
+                    if _last_oracle_price is not None and _oracle_open_ref and _oracle_open_ref > 0:
+                        _oracle_div_bps = (_last_oracle_price - _oracle_open_ref) / _oracle_open_ref * 10_000
+                        _entered_side = str(signal.get("side") or "")
+                        _oracle_contradicts = (
+                            (_entered_side == "DOWN" and _oracle_div_bps > 5.0)
+                            or (_entered_side == "UP" and _oracle_div_bps < -5.0)
+                        )
+                        if _oracle_contradicts:
+                            _append_jsonl(
+                                log_path,
+                                {
+                                    "type": "entry_blocked",
+                                    "ts": now,
+                                    "session_id": session_id,
+                                    "reason": f"dual_rich_oracle_direction:div={round(_oracle_div_bps,1)}bps:side={_entered_side}",
+                                    "signal": signal,
+                                },
+                            )
+                            time.sleep(poll_secs)
+                            continue
                 if event_slug and event_slug in blocked_entry_events:
                     _append_jsonl(
                         log_path,
