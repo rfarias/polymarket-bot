@@ -4,6 +4,7 @@ import json
 import os
 import time
 import traceback
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
@@ -1118,6 +1119,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     current_open_reference: dict[str, object | None] = {"slug": None, "price": None, "event_start_time": None}
     last_leader_price_by_key: dict[str, float] = {}
     leader_velocity_history: dict[str, list[tuple[float, float]]] = {}
+    _bid_history: dict[str, deque] = {}  # keyed "slug:SIDE", tracks leader buy price per poll
     started_at = time.time()
     _health_check_polls = max(1, int(60.0 / max(0.25, poll_secs)))
     _health_poll_counter = 0
@@ -1217,6 +1219,45 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     active_bid = max(active_bid, exec_bid)
             counter_reversal_active = _state_file_active(_counter_reversal_state_path())
 
+            # Bid deceleration gate — tracking de preço líder por slug para detectar pico de momentum
+            _decel_gate_up: Optional[dict] = None
+            _decel_gate_down: Optional[dict] = None
+            if current_item:
+                _csid = str(current_item.get("slug") or "")
+                # Evict entries from previous slugs
+                for _dk in [k for k in _bid_history if not k.startswith(_csid + ":")]:
+                    del _bid_history[_dk]
+                for _ds, _dp in (
+                    ("UP", _safe_float(signal.get("up_buy"), 0.0)),
+                    ("DOWN", _safe_float(signal.get("down_buy"), 0.0)),
+                ):
+                    if _dp <= 0:
+                        continue
+                    _dkey = f"{_csid}:{_ds}"
+                    if _dkey not in _bid_history:
+                        _bid_history[_dkey] = deque(maxlen=6)
+                    _bid_history[_dkey].append(_dp)
+                    _dh = list(_bid_history[_dkey])
+                    _dp3 = _dh[-4] if len(_dh) >= 4 else None
+                    _vel = round(_dp - _dp3, 6) if _dp3 is not None else None
+                    _dgate = {
+                        "active_bid_now": round(_dp, 6),
+                        "active_bid_3polls_ago": round(_dp3, 6) if _dp3 is not None else None,
+                        "bid_velocity": _vel,
+                        "would_block": bool(_vel is not None and _vel < -0.005),
+                        "threshold": -0.005,
+                    }
+                    if _ds == "UP":
+                        _decel_gate_up = _dgate
+                    else:
+                        _decel_gate_down = _dgate
+            _sig_side_decel = str(signal.get("side") or "")
+            _decel_gate_for_entry = (
+                _decel_gate_up if _sig_side_decel == "UP"
+                else _decel_gate_down if _sig_side_decel == "DOWN"
+                else None
+            )
+
             # Chainlink oracle — query e rastreamento de preço de abertura por slug
             if oracle is not None:
                 _last_oracle_price, _, _last_oracle_staleness = oracle.get_price()
@@ -1260,6 +1301,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "oracle_staleness_secs": round(_last_oracle_staleness, 1) if _last_oracle_staleness < 1e6 else None,
                 "platform_paused_until": round(_platform_paused_until, 1) if _platform_paused_until > now else None,
                 "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
+                "bid_decel_gate": {"up": _decel_gate_up, "down": _decel_gate_down},
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -1504,6 +1546,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "planned_exit_risk": planned_exit_risk,
                         "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
                         "btc_chart_penalty": round(_last_chart_ctx.get_penalty_for_side(side), 3) if _last_chart_ctx and side else None,
+                        "bid_decel_gate": _decel_gate_for_entry,
                         "trade": _trade_summary(trade),
                     },
                 )
