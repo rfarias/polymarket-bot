@@ -63,8 +63,14 @@ def main():
     if not private_key:
         print("[ERROR] Nenhuma chave fornecida. Abortando.")
         sys.exit(1)
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
+    # Remove 0x prefix, strip all whitespace/invisible chars, restore prefix
+    hex_part = private_key.removeprefix("0x").removeprefix("0X")
+    hex_part = "".join(c for c in hex_part if c in "0123456789abcdefABCDEF")
+    if len(hex_part) != 64:
+        print(f"[ERROR] Chave inválida: esperado 64 caracteres hex, encontrado {len(hex_part)}.")
+        print("        Verifique se copiou a chave completa sem espaços extras.")
+        sys.exit(1)
+    private_key = "0x" + hex_part
 
     existing_funder = read_existing_funder()
     funder_input = input(f"Endereço proxy wallet/funder [{existing_funder}]: ").strip()

@@ -71,6 +71,11 @@ SINAL_E_WEAK_MOM = 0.005    # peso 1
 SINAL_E_STRONG_MOM = 0.015  # peso 2
 LOSER_HISTORY_POLLS = 2     # momentum = loser_bid_now - loser_bid_2_polls_ago
 
+# Saída antecipada inteligente — paper tracking (não altera entrada)
+EARLY_EXIT_PROFIT_MULT   = 1.80  # cond. a: bid >= entry × 1.80 (lucro ≥ 80%)
+EARLY_EXIT_PULLBACK_GATE = 1.30  # cond. c: max_bid >= entry × 1.30 para ativar dynamic_stop
+EARLY_EXIT_PULLBACK_FRAC = 0.60  # cond. c: bid atual < max_bid × 0.60 → saída
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -195,6 +200,9 @@ def run_reversal_sniper_paper(
             "sinal_a_bps": SINAL_A_BPS,
             "sinal_b_weak_vel": SINAL_B_WEAK_VEL,
             "sinal_b_strong_vel": SINAL_B_STRONG_VEL,
+            "early_exit_profit_mult": EARLY_EXIT_PROFIT_MULT,
+            "early_exit_pullback_gate": EARLY_EXIT_PULLBACK_GATE,
+            "early_exit_pullback_frac": EARLY_EXIT_PULLBACK_FRAC,
         },
     })
 
@@ -206,6 +214,7 @@ def run_reversal_sniper_paper(
     loser_mom = _LoserMomentumTracker()
     oracle_open_prices: Dict[str, float] = {}   # slug → oracle_price ao início do slug
     cooldowns: Dict[str, float] = {}            # slug → ts fim do cooldown
+    paper_positions: Dict[str, dict] = {}       # slug → paper position ativa
 
     started_at = time.time()
 
@@ -227,8 +236,27 @@ def run_reversal_sniper_paper(
             raw_secs = current_item.get("seconds_to_end")
             current_secs = int(raw_secs) if raw_secs is not None else None
 
-            # ---- fora da janela de monitoramento → skip sem log ----
-            if current_secs is None or not (MIN_SECS <= current_secs <= MAX_SECS):
+            # ---- fechar posições de slugs anteriores (mercado mudou) ----
+            for _stale in list(paper_positions.keys()):
+                if _stale != slug:
+                    _sp = paper_positions.pop(_stale)
+                    _append_jsonl(log_path, {
+                        "type": "position_expired",
+                        "ts": now,
+                        "slug": _stale,
+                        "reason": "market_changed",
+                        "max_loser_bid_seen": round(_sp["max_loser_bid_seen"], 4),
+                        "loser_bid_at_t20s": _sp["loser_bid_at_t20s"],
+                        "signal_btc_divergence_faded_at": _sp["signal_btc_divergence_faded_at"],
+                        "min_score_during_hold": _sp["min_score_during_hold"],
+                        "early_exit_triggered": _sp["early_exit_triggered"],
+                        "early_exit_reason": _sp["early_exit_reason"],
+                        "early_exit_bid": _sp.get("early_exit_bid"),
+                        "hold_time_secs": round(now - _sp["entered_at"], 1),
+                    })
+
+            # ---- fora da janela → skip (posição ativa: continuar tracking) ----
+            if current_secs is None or (not (MIN_SECS <= current_secs <= MAX_SECS) and slug not in paper_positions):
                 time.sleep(poll_secs)
                 continue
 
@@ -248,10 +276,11 @@ def run_reversal_sniper_paper(
             winner_bid = up_bid if winner_side == "UP" else down_bid
             loser_price = round(1.0 - winner_bid, 4)
 
-            # ---- fora da zona de monitoramento → skip ----
+            # ---- fora da zona de monitoramento → skip (posição ativa: tracking continua) ----
             if winner_bid < MIN_WINNER_BID or loser_price <= 0 or loser_price > MAX_LOSER_PRICE:
-                time.sleep(poll_secs)
-                continue
+                if slug not in paper_positions:
+                    time.sleep(poll_secs)
+                    continue
 
             # ---- oracle ----
             oracle_price, _oracle_updated_at, _oracle_staleness = oracle.get_price()
@@ -313,6 +342,100 @@ def run_reversal_sniper_paper(
             }
             _append_jsonl(log_path, snap_row)
 
+            # ---- Atualizar posição paper ativa ----
+            if slug in paper_positions:
+                _pos = paper_positions[slug]
+                _ps = _pos["entry_loser_side"]
+                _pb = round(up_bid if _ps == "UP" else down_bid, 4)
+                _entry = _pos["entry_loser_price"]
+
+                # Campos de contexto (spec §4)
+                _pos["max_loser_bid_seen"] = max(_pos["max_loser_bid_seen"], _pb)
+                _pos["min_score_during_hold"] = min(_pos["min_score_during_hold"], total_score)
+                if current_secs is not None and current_secs <= 20 and _pos["loser_bid_at_t20s"] is None:
+                    _pos["loser_bid_at_t20s"] = _pb
+                if (_pos["signal_btc_divergence_faded_at"] is None
+                        and _pos.get("entry_sinal_a_score", 0) > 0
+                        and sinal_a_score == 0):
+                    _pos["signal_btc_divergence_faded_at"] = now
+
+                # ---- should_exit_early() — spec §2 ----
+                if not _pos["early_exit_triggered"]:
+                    _max = _pos["max_loser_bid_seen"]
+                    _why: Optional[str] = None
+
+                    # a) lucro >= 80% E Sinal A não mais ativo
+                    if _pb >= _entry * EARLY_EXIT_PROFIT_MULT and sinal_a_score == 0:
+                        _why = "partial_profit_signal_faded"
+                    # b) score < 2 E bid acima da entrada
+                    elif total_score < 2 and _pb > _entry:
+                        _why = "score_collapsed_take_profit"
+                    # c) pico >= 1.30× entrada E bid recuou abaixo de 60% do pico
+                    elif _max >= _entry * EARLY_EXIT_PULLBACK_GATE and _pb < _max * EARLY_EXIT_PULLBACK_FRAC:
+                        _why = "dynamic_stop_pullback"
+
+                    if _why:
+                        _pos["early_exit_triggered"] = True
+                        _pos["early_exit_reason"] = _why
+                        _pos["early_exit_bid"] = _pb
+                        _pos["early_exit_ts"] = now
+                        _ret = round((_pb / _entry - 1) * 100, 1) if _entry > 0 else None
+                        _append_jsonl(log_path, {
+                            "type": "would_exit_early",
+                            "ts": now,
+                            "slug": slug,
+                            "current_secs": current_secs,
+                            "exit_reason": _why,
+                            "loser_bid": _pb,
+                            "entry_loser_price": _entry,
+                            "max_loser_bid_seen": round(_max, 4),
+                            "loser_bid_at_t20s": _pos["loser_bid_at_t20s"],
+                            "signal_btc_divergence_faded_at": _pos["signal_btc_divergence_faded_at"],
+                            "min_score_during_hold": _pos["min_score_during_hold"],
+                            "pnl_per_share": round(_pb - _entry, 4),
+                            "return_pct": _ret,
+                            "sinal_a_score": sinal_a_score,
+                            "total_score": total_score,
+                        })
+                        print(
+                            f"[SNIPER] would_exit_early slug={slug} reason={_why} "
+                            f"bid={_pb:.4f} entry={_entry:.4f} ret={_ret}% secs={current_secs}",
+                            flush=True,
+                        )
+
+                # ---- Resolução da posição ----
+                if current_secs is not None and current_secs <= 2:
+                    _pb_final = round(up_bid if _ps == "UP" else down_bid, 4)
+                    _reversal = _pb_final > 0.5
+                    _pnl_hold = round((1.0 - _entry) if _reversal else -_entry, 4)
+                    _pnl_early = (
+                        round(_pos["early_exit_bid"] - _entry, 4)
+                        if _pos["early_exit_triggered"] else None
+                    )
+                    _append_jsonl(log_path, {
+                        "type": "position_resolved",
+                        "ts": now,
+                        "slug": slug,
+                        "current_secs": current_secs,
+                        "reversal_happened": _reversal,
+                        "entry_winner_side": _pos["entry_winner_side"],
+                        "entry_loser_side": _ps,
+                        "entry_loser_price": _entry,
+                        "loser_bid_at_resolution": _pb_final,
+                        "max_loser_bid_seen": round(_pos["max_loser_bid_seen"], 4),
+                        "loser_bid_at_t20s": _pos["loser_bid_at_t20s"],
+                        "signal_btc_divergence_faded_at": _pos["signal_btc_divergence_faded_at"],
+                        "min_score_during_hold": _pos["min_score_during_hold"],
+                        "early_exit_triggered": _pos["early_exit_triggered"],
+                        "early_exit_reason": _pos["early_exit_reason"],
+                        "early_exit_bid": _pos.get("early_exit_bid"),
+                        "hold_time_secs": round(now - _pos["entered_at"], 1),
+                        "pnl_hold": _pnl_hold,
+                        "pnl_early_exit": _pnl_early,
+                        "ev_delta": round(_pnl_early - _pnl_hold, 4) if _pnl_early is not None else None,
+                    })
+                    paper_positions.pop(slug, None)
+
             # ---- would_enter sem cooldown → registrar evento ----
             if would_enter and cooldowns.get(slug, 0) <= now:
                 shares = PAPER_BET_SIZE / loser_price
@@ -342,6 +465,26 @@ def run_reversal_sniper_paper(
                 }
                 _append_jsonl(log_path, would_enter_row)
                 cooldowns[slug] = now + COOLDOWN_SECS
+
+                if slug not in paper_positions:
+                    paper_positions[slug] = {
+                        "slug": slug,
+                        "entered_at": now,
+                        "entry_loser_price": loser_price,
+                        "entry_secs": current_secs,
+                        "entry_score": total_score,
+                        "entry_sinal_a_score": sinal_a_score,
+                        "entry_winner_side": winner_side,
+                        "entry_loser_side": "DOWN" if winner_side == "UP" else "UP",
+                        "max_loser_bid_seen": loser_price,
+                        "loser_bid_at_t20s": None,
+                        "signal_btc_divergence_faded_at": None,
+                        "min_score_during_hold": total_score,
+                        "early_exit_triggered": False,
+                        "early_exit_reason": None,
+                        "early_exit_bid": None,
+                        "early_exit_ts": None,
+                    }
 
                 print(
                     f"[SNIPER] would_enter slug={slug} side={'DOWN' if winner_side == 'UP' else 'UP'} "
