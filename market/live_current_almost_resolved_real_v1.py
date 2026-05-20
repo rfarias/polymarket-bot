@@ -1625,7 +1625,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     },
                 )
 
-            if trade.mode in ("pending_entry", "open_position", "pending_exit", "exit_pending_confirm"):
+            if trade.mode in ("pending_entry", "open_position", "exit_pending_confirm"):
                 trade = _sync_entry_order(broker, trade)
                 trade.updated_at = now
                 _save_state(state_path, trade)
