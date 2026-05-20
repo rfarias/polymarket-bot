@@ -5,6 +5,46 @@ Rodar após `git pull` no PC com os logs reais.
 
 ---
 
+## 0. Análise de impacto do hedge (Fase 1 obrigatória)
+
+**Script:** `analyze_hedge_impact_on_logs.py`
+
+**O que faz:** Para cada trade perdedor nos logs, encontra o primeiro sinal de
+invalidade APÓS a entrada (book_gap, bid_decel_gate, winner caindo) e calcula
+quanto o hedge teria travado a perda. Emite veredicto final.
+
+```powershell
+# Análise básica — inclui paper logs locais automaticamente
+python analyze_hedge_impact_on_logs.py --logs-dir logs/
+
+# Com saída CSV para análise detalhada
+python analyze_hedge_impact_on_logs.py --logs-dir logs/ --output hedge_resultado.csv
+
+# Diretório específico
+python analyze_hedge_impact_on_logs.py --logs-dir logs/current_almost_resolved_real_20260601_120000
+```
+
+**O que olhar:**
+
+| Campo | Significado |
+|-------|-------------|
+| `Hedge viável` | Trades onde loser_bid <= 0.40 no momento do trigger |
+| `Perda média SEM hedge` | Baseline das perdas |
+| `Perda média COM hedge` | Perda travada pelo hedge (`max_loss_locked`) |
+| `Redução média` | Ganho médio do hedge por trade |
+| `Hedge ajudou em X%` | Frequência de melhoria |
+
+**Critério do veredicto automático:**
+- ✅ `RECOMENDADO`: redução média >= $10 em >= 60% dos eventos viáveis
+- ❌ `NÃO RECOMENDADO`: abaixo disso — não implementar no runner
+
+**Nota sobre paper logs:** nos logs paper o veredicto será "NÃO RECOMENDADO"
+porque o stop executa perfeitamente (sem book gap). O valor real do hedge
+aparece apenas nos logs do runner real, onde `active_bid` pode cair a 0
+e o stop não preenche — posição vai a zero sem proteção.
+
+---
+
 ## 1. Análise de variantes do almost_resolved
 
 **Script:** `analyze_real_variants.py`
