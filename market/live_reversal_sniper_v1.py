@@ -32,6 +32,15 @@ from datetime import date
 from pathlib import Path
 from typing import Deque, Dict, Optional, Tuple
 
+CONFIG_PATH = Path(__file__).parent.parent / "agent" / "config.json"
+
+def _load_sniper_config() -> dict:
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f).get("reversal_sniper", {})
+    except Exception:
+        return {}
+
 # ---- market modules ----
 from market.binance_ws_v1 import BinanceTickFeed
 from market.chainlink_oracle import ChainlinkBTCOracle
@@ -311,7 +320,9 @@ def run_reversal_sniper_paper(
             sinal_e_score = sinal_e_info["score"]
 
             total_score = sinal_a_score + sinal_b_score
-            would_enter = total_score >= SCORE_THRESHOLD_PAPER
+            cfg = _load_sniper_config()
+            score_threshold = int(cfg.get("entry_score_threshold", SCORE_THRESHOLD_PAPER))
+            would_enter = total_score >= score_threshold
 
             # ---- log snapshot ----
             snap_row = {
@@ -335,6 +346,7 @@ def run_reversal_sniper_paper(
                 "sinal_e_loser_momentum": sinal_e_info["loser_momentum"],
                 "bid_velocity": decel_info["bid_velocity"],
                 "total_score": total_score,
+                "score_threshold": score_threshold,
                 "would_enter": would_enter,
                 "in_cooldown": cooldowns.get(slug, 0) > now,
                 "btc_price": btc_feed.current_price() or None,

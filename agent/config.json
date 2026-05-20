@@ -1,0 +1,26 @@
+{
+  "reversal_sniper": {
+    "active": true,
+    "mode": "paper",
+    "entry_score_threshold": 2,
+    "hold_score_minimum": 1,
+    "partial_profit_pct": 0.8,
+    "paper_bet_size": 20,
+    "_notes": "threshold=2 para gerar dados; Sinal B fraco (score=2) suficiente para entrada paper"
+  },
+  "almost_resolved": {
+    "active": false,
+    "mode": "real",
+    "bid_decel_threshold": -0.005,
+    "vel_range_block": 0.04,
+    "stop_confirmation_polls": 2,
+    "min_active_bid_entry": 0.90
+  },
+  "reversal_scalp": {
+    "active": false,
+    "mode": "paper",
+    "target_multiplier": 2.0,
+    "entry_timeout_secs": 12,
+    "entry_score_threshold": 3
+  }
+}
