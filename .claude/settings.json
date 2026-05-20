@@ -1,11 +1,15 @@
 {
   "permissions": {
-    "defaultMode": "default",
+    "defaultMode": "dontAsk",
     "allow": [
       "Bash(*)",
+      "PowerShell(*)",
       "Read",
       "Glob",
-      "Grep"
+      "Grep",
+      "Write",
+      "Edit",
+      "MultiEdit"
     ],
     "deny": [
       "Bash(python run_live_*)",
