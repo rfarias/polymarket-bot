@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
+
+_TZ = timezone(timedelta(hours=-3))
 
 CONFIG_PATH = Path("agent") / "config.json"
 PARAM_HISTORY_PATH = Path("logs") / "param_history.jsonl"
@@ -107,13 +110,7 @@ def _can_adjust(setup: str, param: str) -> bool:
 
 
 def _record_history(setup: str, param: str, old_val, new_val, reason: str) -> None:
-    from datetime import datetime
-    import pytz
-    try:
-        tz = pytz.timezone("America/Fortaleza")
-        ts_human = datetime.now(tz).strftime("%Y-%m-%d %H:%M BRT")
-    except Exception:
-        ts_human = time.strftime("%Y-%m-%d %H:%M UTC")
+    ts_human = datetime.now(_TZ).strftime("%Y-%m-%d %H:%M BRT")
 
     row = {
         "ts": time.time(),

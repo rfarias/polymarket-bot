@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -25,15 +25,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.analyzer import run as run_analysis
 from agent.adjuster import apply_adjustment, no_action_record, propose_adjustments
 
-try:
-    import pytz
-    _TZ = pytz.timezone("America/Fortaleza")
-    def _now_local() -> datetime:
-        return datetime.now(_TZ)
-except ImportError:
-    _TZ = None
-    def _now_local() -> datetime:
-        return datetime.utcnow()
+# Fortaleza = UTC-3, sem horário de verão
+_TZ = timezone(timedelta(hours=-3))
+
+def _now_local() -> datetime:
+    return datetime.now(_TZ)
 
 DECISIONS_LOG = Path("logs") / "agent_decisions.jsonl"
 ERRORS_LOG    = Path("logs") / "agent_errors.jsonl"
@@ -140,7 +136,7 @@ def _generate_report(cycle: int, all_metrics: dict, decisions_this_cycle: list[d
         for d in adjusts:
             ts = d.get("ts_human", _ts_human())
             lines.append(f"### {ts} — {d.get('setup')}")
-            lines.append(f"**Parâmetro:** `{d.get('parameter')}` {d.get('old_value')} → {d.get('new_value')}")
+            lines.append(f"**Parâmetro:** `{d.get('parameter')}` {d.get('old_value')} -> {d.get('new_value')}")
             lines.append(f"**Motivo:** {d.get('reasoning')}")
             lines.append(f"**Efeito esperado:** {d.get('expected_effect')}")
             lines.append("")
@@ -218,7 +214,7 @@ def run_optimizer(cycle_secs: float = DEFAULT_CYCLE_SECS, dry_run: bool = False)
             decisions_this_cycle: list[dict] = []
             proposed = propose_adjustments(all_metrics)
 
-            # Setups sem proposta → no_action
+            # Setups sem proposta -> no_action
             for setup, metrics in all_metrics.items():
                 has_proposal = any(d.get("setup") == setup for d in proposed)
                 if not has_proposal:
@@ -243,11 +239,11 @@ def run_optimizer(cycle_secs: float = DEFAULT_CYCLE_SECS, dry_run: bool = False)
                 if not dry_run:
                     apply_adjustment(d)
                     print(f"  AJUSTE {setup}.{d['parameter']}: "
-                          f"{d['old_value']} → {d['new_value']}", flush=True)
+                          f"{d['old_value']} -> {d['new_value']}", flush=True)
                     print(f"  Motivo: {d['reasoning'][:80]}...", flush=True)
                 else:
                     print(f"  [DRY-RUN] Proposta: {setup}.{d['parameter']}: "
-                          f"{d['old_value']} → {d['new_value']}", flush=True)
+                          f"{d['old_value']} -> {d['new_value']}", flush=True)
 
             # 3. Relatório se estiver no horário certo
             if _should_report(last_report_hour):

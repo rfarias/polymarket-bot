@@ -14,7 +14,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -54,13 +54,10 @@ def _save_config(cfg: dict) -> None:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
+_TZ = timezone(timedelta(hours=-3))
+
 def _ts_human() -> str:
-    try:
-        import pytz
-        tz = pytz.timezone("America/Fortaleza")
-        return datetime.now(tz).strftime("%Y-%m-%d %H:%M BRT")
-    except Exception:
-        return time.strftime("%Y-%m-%d %H:%M UTC")
+    return datetime.now(_TZ).strftime("%Y-%m-%d %H:%M BRT")
 
 
 def cmd_list_all(history: list[dict]) -> None:
@@ -81,7 +78,7 @@ def cmd_list_all(history: list[dict]) -> None:
             ts = ev.get("ts_human") or time.strftime("%Y-%m-%d %H:%M", time.localtime(ev.get("ts", 0)))
             old = ev.get("old_value", "?")
             val = ev.get("value", "?")
-            print(f"  [{ts}]  {old} → {val}  |  {ev.get('reason', '')[:60]}")
+            print(f"  [{ts}]  {old} -> {val}  |  {ev.get('reason', '')[:60]}")
 
 
 def cmd_list_setup(setup: str, history: list[dict]) -> None:
@@ -102,7 +99,7 @@ def cmd_list_setup(setup: str, history: list[dict]) -> None:
             ts = ev.get("ts_human") or time.strftime("%Y-%m-%d %H:%M", time.localtime(ev.get("ts", 0)))
             old = ev.get("old_value", "?")
             val = ev.get("value", "?")
-            print(f"  [{i}] [{ts}]  {old} → {val}  |  {ev.get('reason', '')[:60]}")
+            print(f"  [{i}] [{ts}]  {old} -> {val}  |  {ev.get('reason', '')[:60]}")
 
 
 def cmd_revert(setup: str, param: str, history: list[dict]) -> None:
@@ -117,7 +114,7 @@ def cmd_revert(setup: str, param: str, history: list[dict]) -> None:
         ts = ev.get("ts_human") or time.strftime("%Y-%m-%d %H:%M", time.localtime(ev.get("ts", 0)))
         old = ev.get("old_value", "?")
         val = ev.get("value", "?")
-        print(f"  [{i}] [{ts}]  {old} → {val}")
+        print(f"  [{i}] [{ts}]  {old} -> {val}")
         if ev.get("reason"):
             print(f"       Motivo: {ev['reason'][:80]}")
 
@@ -187,7 +184,7 @@ def cmd_revert(setup: str, param: str, history: list[dict]) -> None:
     with open(DECISIONS_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(audit, ensure_ascii=False) + "\n")
 
-    print(f"\nRevertido: {setup}.{param} = {current} → {revert_val}")
+    print(f"\nRevertido: {setup}.{param} = {current} -> {revert_val}")
     print("Config.json atualizado. Registrado no audit log.")
 
 
