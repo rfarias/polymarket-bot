@@ -22,5 +22,30 @@
     "target_multiplier": 2.0,
     "entry_timeout_secs": 12,
     "entry_score_threshold": 3
+  },
+  "market_maker": {
+    "active": false,
+    "mode": "paper",
+    "mid_price_min": 0.38,
+    "mid_price_max": 0.62,
+    "spread_capture_bps": 100,
+    "max_hold_secs": 90,
+    "exit_before_secs": 60,
+    "max_inventory_usd": 20,
+    "paper_bet_size": 20,
+    "_notes": "Posta nos dois lados do book na faixa 0.38-0.62, captura spread, sai antes dos 60s finais"
+  },
+  "spot_scalp": {
+    "active": false,
+    "mode": "paper",
+    "oracle_source": "chainlink",
+    "min_spot_momentum_bps": 5.0,
+    "momentum_window_secs": 15,
+    "min_secs_to_end": 45,
+    "max_secs_to_end": 240,
+    "token_lag_threshold_bps": 3.0,
+    "max_hold_secs": 30,
+    "paper_bet_size": 20,
+    "_notes": "Entra quando spot Chainlink move >= 5bps em 15s mas token ainda nao acompanhou (lag >= 3bps)"
   }
 }
