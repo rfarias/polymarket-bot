@@ -1,0 +1,214 @@
+Simplificar o agente optimizer_loop.py.
+
+REMOVER por enquanto:
+- Notificação por e-mail (implementar depois)
+- Comandos via Telegram
+
+MANTER E PRIORIZAR:
+- Documentação completa de tudo que o agente faz
+- Ciclo de análise e ajuste autônomo
+- Relatórios parciais em arquivo local
+
+FILOSOFIA DO AGENTE NESTA FASE:
+  Capital mínimo em conta para testes com cotas mínimas.
+  Agente pode ajustar parâmetros com mais liberdade.
+  O que importa agora é velocidade de aprendizado e
+  documentação clara para revisão humana posterior.
+
+AMPLITUDE DE AJUSTES AUTÔNOMOS (expandida):
+
+  reversal_sniper:
+    entry_score_threshold:     range [2, 7],    step 1
+    hold_score_minimum:        range [1, 4],    step 1
+    partial_profit_pct:        range [0.3, 2.0], step 0.1
+    paper_bet_size:            range [10, 50],  step 5
+
+  current_almost_resolved:
+    bid_decel_threshold:       range [-0.015, -0.001], step 0.001
+    vel_range_block:           range [0.02, 0.10],     step 0.005
+    stop_confirmation_polls:   range [1, 5],           step 1
+    min_active_bid_entry:      range [0.85, 0.96],     step 0.01
+
+  reversal_scalp:
+    target_multiplier:         range [1.2, 4.0], step 0.1
+    entry_timeout_secs:        range [3, 20],    step 1
+    entry_score_threshold:     range [2, 6],     step 1
+
+  Regra geral: máximo 3 parâmetros ajustados por ciclo
+  Aguardar mínimo 2 horas antes de reajustar o mesmo parâmetro
+
+DOCUMENTAÇÃO — o mais importante desta fase:
+
+1. AUDIT LOG DETALHADO
+   Arquivo: logs/agent_decisions.jsonl
+   Um registro por decisão, incluindo decisões de NÃO agir:
+
+   {
+     "ts": float,
+     "ts_human": "2026-05-20 14:00 BRT",
+     "cycle": int,
+     "setup": str,
+     "trades_analyzed": int,
+     "metrics": {
+       "win_rate": float,
+       "ev_per_trade": float,
+       "entry_missed_pct": float,
+       "consecutive_losses": int,
+       "pnl_last_24h": float
+     },
+     "decision": "adjust" | "pause" | "resume" | "no_action",
+     "parameter": str | null,
+     "old_value": float | null,
+     "new_value": float | null,
+     "reasoning": str,   // explicação em português, 1-2 frases claras
+     "expected_effect": str  // o que se espera melhorar
+   }
+
+2. RELATÓRIO PARCIAL EM MARKDOWN
+   Arquivo: logs/reports/report_YYYYMMDD_HH.md
+   Gerado nos horários: 06h, 12h, 18h, 23h (America/Fortaleza)
+
+   Formato:
+
+   # Polymarket Bot — Relatório 12h | 20/05/2026
+
+   ## Resumo do período (06h → 12h)
+
+   | Setup | Trades | WR | EV/trade | PnL | Status |
+   |---|---|---|---|---|---|
+   | reversal_sniper | 23 | 13.0% | +$31 | +$47 | ativo |
+   | almost_resolved | 8  | 75.0% | -$12 | -$18 | ativo |
+   | reversal_scalp  | 0  | —     | —    | —    | pausado |
+
+   ## Ajustes realizados neste período
+
+   ### 09:14 — reversal_sniper
+   **Parâmetro:** entry_score_threshold 4 → 3
+   **Motivo:** entry_missed estava em 41% nas últimas 3h.
+   Com threshold mais baixo, mais entradas serão tentadas.
+   **Efeito esperado:** reduzir entry_missed para abaixo de 25%.
+
+   ### 10:52 — almost_resolved
+   **Parâmetro:** bid_decel_threshold -0.005 → -0.004
+   **Motivo:** 3 trades bloqueados por decel gate nos últimos
+   60 min sem sinal de reversão real. Gate pode estar muito
+   sensível nas condições atuais de mercado.
+   **Efeito esperado:** menos bloqueios falsos, mais entradas.
+
+   ## Decisões de não agir
+
+   ### 11:30 — reversal_scalp
+   **Decisão:** manter pausado
+   **Motivo:** apenas 31 trades desde a pausa, insuficiente
+   para determinar se o novo parâmetro melhorou o win rate.
+   Aguardando 50+ trades antes de reavaliar.
+
+   ## Parâmetros atuais de todos os setups
+
+   ### reversal_sniper
+     entry_score_threshold: 3  (padrão: 4, alterado 09:14)
+     hold_score_minimum: 2
+     partial_profit_pct: 0.8
+     paper_bet_size: $20
+
+   ### almost_resolved
+     bid_decel_threshold: -0.004  (padrão: -0.005, alterado 10:52)
+     vel_range_block: 0.04
+     stop_confirmation_polls: 2
+     min_active_bid_entry: 0.90
+
+   ### reversal_scalp
+     target_multiplier: 2.0
+     entry_timeout_secs: 12
+     entry_score_threshold: 3
+     STATUS: PAUSADO desde 18/05 14:32
+
+   ## Próximo ciclo de análise: 14h00
+
+3. HISTÓRICO DE PARÂMETROS
+   Arquivo: logs/param_history.jsonl
+   Registro cronológico de todo valor que cada parâmetro já teve:
+
+   {
+     "ts": float,
+     "ts_human": str,
+     "setup": str,
+     "parameter": str,
+     "value": float,
+     "reason": str
+   }
+
+   Permite ver a evolução de cada parâmetro ao longo do tempo
+   e reverter manualmente para qualquer valor anterior.
+
+4. ARQUIVO DE REVERSÃO RÁPIDA
+   Arquivo: agent/revert.py
+
+   Script simples que o usuário pode rodar para reverter
+   qualquer parâmetro para o valor anterior:
+
+   python agent/revert.py --setup reversal_sniper \
+                          --param entry_score_threshold
+
+   → lê param_history.jsonl
+   → mostra histórico do parâmetro
+   → pergunta qual valor restaurar
+   → aplica e registra no audit log como "manual_revert"
+
+ESTRUTURA DE ARQUIVOS:
+
+  agent/
+    optimizer_loop.py     # loop principal
+    analyzer.py           # cálculo de métricas por setup
+    adjuster.py           # lógica de ajuste de parâmetros
+    revert.py             # script de reversão manual
+    config.json           # parâmetros atuais (fonte de verdade)
+
+  logs/
+    agent_decisions.jsonl
+    param_history.jsonl
+    agent_errors.jsonl
+    reports/
+      report_20260520_06.md
+      report_20260520_12.md
+      ...
+
+CONFIG.JSON (fonte de verdade dos parâmetros):
+  O agente lê e escreve apenas este arquivo para alterar
+  parâmetros. Os runners leem deste arquivo ao iniciar
+  cada ciclo. Nunca hardcodar parâmetros nos runners.
+
+  {
+    "reversal_sniper": {
+      "active": true,
+      "mode": "paper",
+      "entry_score_threshold": 4,
+      "hold_score_minimum": 2,
+      "partial_profit_pct": 0.8,
+      "paper_bet_size": 20
+    },
+    "almost_resolved": {
+      "active": true,
+      "mode": "real",
+      "bid_decel_threshold": -0.005,
+      "vel_range_block": 0.04,
+      "stop_confirmation_polls": 2,
+      "min_active_bid_entry": 0.90
+    },
+    "reversal_scalp": {
+      "active": false,
+      "mode": "paper",
+      "target_multiplier": 2.0,
+      "entry_timeout_secs": 12,
+      "entry_score_threshold": 3
+    }
+  }
+
+ORDEM DE IMPLEMENTAÇÃO:
+  1. config.json com parâmetros atuais de todos os setups
+  2. Adaptar runners para ler de config.json em vez de hardcode
+  3. analyzer.py — cálculo de métricas por setup
+  4. adjuster.py — lógica de ajuste com limites e reasoning
+  5. optimizer_loop.py — loop principal com schedule
+  6. Geração dos relatórios markdown em logs/reports/
+  7. revert.py — script de reversão manual
