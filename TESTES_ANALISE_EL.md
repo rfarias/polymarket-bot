@@ -324,7 +324,20 @@ ainda há reversões sem sinal detectável: **mercado de difícil cobertura pelo
 **Status EE (acumulado):**  
 Ainda 8 trades (7 WIN + 1 WIN_HEDGE, PnL=+$2,13) — sem novas entradas desde ~11:13.
 
-### 9.3 Próximos relatórios
+### 9.3 Relatório 3 — 2026-05-21 (14:15 → 14:35)
+
+| # | Slug | Lado | Entry | el_vel | F3 | Outcome | PnL |
+|---|---|---|---|---|---|---|---|
+| 9 | `…1384300` | UP | 0.82 | 0.159 | ok | WIN | +$0,54 |
+
+**Acumulado: 9 trades | 8 WIN | 1 WIN_HEDGE | WR 88,9% | PnL = +$2,67**
+
+Notas:
+- Trade 9: EL forte (el_vel=0.159, acima do threshold 0.08), F3 ok, entry 0.82. Resolveu em secs=19.
+- avg/trade acumulada: +$0,30/trade (qty=3 shares).
+- Série invicta em LOSS: 9 trades sem nenhum LOSS puro (único custo foi hedge no trade 3).
+
+### 9.4 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades para validação estatística.
 
