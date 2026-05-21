@@ -597,7 +597,7 @@ def run_reversal_sniper_paper(
             in_zone = (winner_bid >= MIN_WINNER_BID
                        and 0 < loser_price <= MAX_LOSER_PRICE
                        and current_secs is not None
-                       and MIN_SECS <= current_secs <= MAX_SECS)
+                       and current_secs >= MIN_SECS)
 
             if in_zone and slug not in paper_positions:
                 paper_positions[slug] = {
