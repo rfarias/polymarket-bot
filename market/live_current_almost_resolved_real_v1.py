@@ -2040,6 +2040,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 _ext_balance = _token_balance_qty(broker, trade.token_id)
                 _secs_since_entry = now - _safe_float(trade.created_at, now)
                 if _is_flat_qty(_ext_balance) and _secs_since_entry >= 20.0:
+                    _ext_ep = _safe_float(trade.entry_price, 0.0)
+                    _ext_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                    _ext_pnl = round((0.0 - _ext_ep) * _ext_qty, 4) if _ext_ep > 0 and _ext_qty > 0 else None
                     _append_jsonl(
                         log_path,
                         {
@@ -2048,6 +2051,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             "session_id": session_id,
                             "token_balance_qty": _ext_balance,
                             "secs_since_entry": round(_secs_since_entry, 1),
+                            "exit_price": 0.0,
+                            "pnl_usd": _ext_pnl,
                             "trade": _trade_summary(trade),
                         },
                     )
@@ -2185,7 +2190,16 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     if known_filled and secs_since_resolution < 15.0:
                         _append_jsonl(log_path, {"type": "awaiting_redeem_balance_lag", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "entry_qty_filled": trade.entry_qty_filled, "secs_since_resolution": round(secs_since_resolution, 2), "trade": _trade_summary(trade)})
                     else:
-                        _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "collateral_balance_usd": collateral_balance, "trade": _trade_summary(trade)})
+                        _rdm_ep = _safe_float(trade.entry_price, 0.0)
+                        _rdm_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                        _rdm_reason = str(trade.last_reason or "")
+                        _rdm_exit_price: Optional[float] = None
+                        if "resolution_win" in _rdm_reason:
+                            _rdm_exit_price = 1.0
+                        elif "resolution_loss" in _rdm_reason or (collateral_balance == 0 and _rdm_qty > 0):
+                            _rdm_exit_price = 0.0
+                        _rdm_pnl = round((_rdm_exit_price - _rdm_ep) * _rdm_qty, 4) if _rdm_exit_price is not None and _rdm_ep > 0 and _rdm_qty > 0 else None
+                        _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "collateral_balance_usd": collateral_balance, "exit_price": _rdm_exit_price, "pnl_usd": _rdm_pnl, "trade": _trade_summary(trade)})
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
