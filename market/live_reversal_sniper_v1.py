@@ -60,7 +60,7 @@ MAX_LOSER_PRICE = 0.15      # loser muito caro → edge sumiu
 MIN_SECS = 15               # muito perto da resolução → skip
 MAX_SECS = 120              # muito cedo → skip
 
-SCORE_THRESHOLD_PAPER = 4   # score mínimo para registrar would_enter
+SCORE_THRESHOLD_PAPER = 3   # score mínimo para registrar would_enter
 COOLDOWN_SECS = 60.0        # cooldown por mercado após qualquer would_enter
 
 BID_HISTORY_SIZE = 6        # polls mantidos para cálculo de velocidade
@@ -182,10 +182,11 @@ class _EarlyLeaderTracker:
         }
 
     def gate_score(self, slug: str, winner_side: str) -> int:
-        """Retorna penalidade de score (-3 a 0) baseada no EL.
+        """Retorna ajuste de score (-3 a +2) baseado no EL.
 
         Negativo = EL prediz que o winner continua → sniper não deve entrar.
-        Zero = sem informação EL suficiente → sinais A/B/E valem face value.
+        Positivo = EL prediz que o loser vai vencer → boost para o sniper.
+        Zero     = sem informação EL suficiente → sinais A/B/E valem face value.
         """
         d = self._by_slug.get(slug) or {}
         el_side = d.get("early_side")
@@ -196,13 +197,14 @@ class _EarlyLeaderTracker:
         inverted = bool(d.get("inverted"))
 
         if not inverted:
-            # EL estável e confirma winner → 89.6% winner mantém
             if el_side == winner_side:
+                # EL estável confirma winner → 94% winner mantém → bloquear sniper
                 return -3
-            # EL estável mas aponta pro loser → mercado divergiu do EL → incerto
-            return 0
+            else:
+                # EL estável aponta pro loser → 94% chance de reversão → boost
+                return +2
 
-        # EL inverteu — o winner agora é o novo líder
+        # EL inverteu e o winner agora é o novo líder
         if inv_bid >= self._strong_min:
             return -3   # inversão forte: novo líder ganha 100% (19/19)
         if inv_bid >= 0.60:
@@ -433,7 +435,7 @@ def run_reversal_sniper_paper(
             sinal_e_score = sinal_e_info["score"]
 
             el_gate = el_tracker.gate_score(slug, winner_side)
-            total_score = sinal_a_score + sinal_b_score + el_gate
+            total_score = sinal_a_score + sinal_b_score + sinal_e_score + el_gate
             cfg = _load_sniper_config()
             score_threshold = int(cfg.get("entry_score_threshold", SCORE_THRESHOLD_PAPER))
             would_enter = total_score >= score_threshold
