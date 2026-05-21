@@ -173,18 +173,17 @@ def run_market_maker_paper(run_for: float = float("inf"), poll_secs: float = 1.0
                 continue
 
             # Lê preços
-            slot = _fetch_slot_state(slug)
-            if not slot:
+            slot_state = _fetch_slot_state(slot_bundle)
+            snap = _slot_snapshot(slot_state, "current")
+            metrics, _status = _compute_executable_metrics(snap)
+            if metrics is None:
                 time.sleep(poll_secs)
                 continue
 
-            snap = _slot_snapshot(slot)
-            metrics = _compute_executable_metrics(snap)
-
-            up_bid   = float(metrics.get("up_buy", 0) or 0)
-            down_bid = float(metrics.get("down_buy", 0) or 0)
-            up_ask   = float(metrics.get("up_sell", 0) or 0)
-            down_ask = float(metrics.get("down_sell", 0) or 0)
+            up_bid   = float(metrics.get("up_bid", 0) or 0)
+            down_bid = float(metrics.get("down_bid", 0) or 0)
+            up_ask   = float(metrics.get("up_ask", 0) or 0)
+            down_ask = float(metrics.get("down_ask", 0) or 0)
 
             # Apenas mercados genuinamente incertos
             up_mid   = (up_bid + up_ask) / 2 if up_ask else up_bid
