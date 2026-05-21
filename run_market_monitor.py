@@ -254,6 +254,7 @@ class _EEPosition:
         self.outcome:     str            = ""
         self.pnl:         float          = 0.0
         self.qty:         float          = 3.0   # metade do qty padrão
+        self._just_closed: bool          = False
 
     def open_entry(self, side: str, ep: float, ts: float, secs: int) -> None:
         self.state       = "entry"
@@ -269,8 +270,9 @@ class _EEPosition:
         self.hedge_secs = secs
 
     def close(self, outcome: str, exit_ep: float, hedge_exit_ep: float = 0.0) -> None:
-        self.state   = "closed"
-        self.outcome = outcome
+        self.state        = "closed"
+        self.outcome      = outcome
+        self._just_closed = True
         pnl_entry = (exit_ep - self.entry_ep) * self.qty
         pnl_hedge = (hedge_exit_ep - self.hedge_ep) * self.qty if self.hedge_ep > 0 else 0.0
         self.pnl  = round(pnl_entry + pnl_hedge, 4)
@@ -773,10 +775,12 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
                     "ee_side":     ee.entry_side,
                     "ee_entry_ep": round(ee.entry_ep, 4),
                     "ee_hedge_ep": round(ee.hedge_ep, 4),
-                    "ee_outcome":  ee.outcome,
-                    "ee_pnl":      round(ee.pnl, 4),
+                    "ee_outcome":  ee.outcome if ee._just_closed else "",
+                    "ee_pnl":      round(ee.pnl, 4) if ee._just_closed else 0.0,
                 }
                 _append_log(log_path, log_row)
+                if ee._just_closed:
+                    ee._just_closed = False
 
                 # eventos recentes
                 if sig_ar:
