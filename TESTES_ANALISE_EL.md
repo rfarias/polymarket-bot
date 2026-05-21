@@ -272,17 +272,35 @@ ee_pnl         — PnL do trade — só no snap de fechamento
 
 ## 9. Resultados ao Vivo (runner de teste)
 
-Log: `market_monitor_20260521_085611.jsonl` (08:56–10:30)  
-Obs: bug de logging ainda presente nesse arquivo (corrigido no log seguinte).
+### 9.1 Relatório 1 — 2026-05-21 (~08:56 → 13:30)
 
-| # | Slug | Lado | Entry | Outcome | PnL (qty=3) |
+Logs: `market_monitor_20260521_085611.jsonl` + `market_monitor_20260521_103036.jsonl`  
+Obs: bug de duplicate logging presente no primeiro arquivo (corrigido às 10:30 com flag `_just_closed`).  
+Parâmetros: EL estável (F3) + el_vel >= 0.08 + hedge em 0.50 + qty=3 + sem stop.
+
+| # | Slug | Lado | Entry | Outcome | PnL |
 |---|---|---|---|---|---|
 | 1 | `…1368400` | UP | 0.86 | WIN | +$0,42 |
 | 2 | `…1369000` | DOWN | 0.83 | WIN | +$0,51 |
+| 3 | `…1369900` | DOWN | 0.82 | WIN_HEDGE | -$1,23 |
+| 4 | `…1372000` | UP | 0.83 | WIN | +$0,51 |
+| 5 | `…1374100` | UP | 0.84 | WIN | +$0,48 |
+| 6 | `…1376200` | UP | 0.83 | WIN | +$0,51 |
+| 7 | `…1376500` | UP | 0.86 | WIN | +$0,42 |
+| 8 | `…1376800` | UP | 0.83 | WIN | +$0,51 |
 
-**Total: 2 trades, 2 WIN, PnL = +$0,93**
+**Total: 8 trades | 7 WIN | 1 WIN_HEDGE | WR 87,5% | PnL = +$2,13**
 
-Log atual (bug corrigido): `market_monitor_20260521_103036.jsonl` (10:30+)
+Notas:
+- WIN_HEDGE (trade 3): EL bid cruzou 0.50, hedge ativou comprando DOWN. DOWN venceu. Perda
+  parcial de -$1,23 em vez de ~-$2,46 sem hedge — **hedge funcionou como projetado**.
+- Entry prices: 0.82–0.86, todos dentro da faixa EE.
+- Nenhum REVERSAL puro (sem hedge) — o único caso de EL errado foi capturado pelo hedge.
+- avg/trade: +$0,27 (vs simulação: +$0,61 com el_vel >= 0.08; amostra ainda pequena).
+
+### 9.2 Próximos relatórios
+
+Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades para validação estatística.
 
 ---
 
