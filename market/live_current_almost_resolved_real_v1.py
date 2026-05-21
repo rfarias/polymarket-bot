@@ -237,6 +237,28 @@ def _cancel_if_live(broker, order_id: Optional[str]) -> Optional[dict]:
     return broker.cancel_order(order_id)
 
 
+def _cancel_open_orders_for_token(broker, token_id: str) -> list:
+    """Cancela qualquer ordem GTC aberta no CLOB para este token_id.
+
+    Evita preenchimentos duplos quando uma ordem anterior (de outra iteração ou
+    restart do watchdog) ainda está ativa no livro no momento de uma nova entrada.
+    Retorna lista de order_ids cancelados.
+    """
+    cancelled = []
+    try:
+        for order in broker.get_open_orders()[:50]:
+            order_asset = str(getattr(order, "token_id", None) or "")
+            if order_asset and order_asset == token_id:
+                try:
+                    broker.cancel_order(order.order_id)
+                    cancelled.append(order.order_id)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return cancelled
+
+
 def _token_balance_qty(broker, token_id: Optional[str]) -> float:
     if not token_id:
         return 0.0
@@ -1676,6 +1698,38 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     qty=float(qty),
                     tick_size=tick_size,
                 )
+
+                # Guarda contra ordens GTC obsoletas: cancela qualquer ordem aberta
+                # para o token_id desta entrada antes de postar a nova.
+                # Sem isso, uma ordem de iteração anterior ainda ativa no CLOB pode
+                # preencher junto com a nova, dobrando a exposição sem log de entrada.
+                _pre_entry_token_id = _token_id_for_side(current_snap, side)
+                _stale_cancelled = _cancel_open_orders_for_token(broker, _pre_entry_token_id)
+                if _stale_cancelled:
+                    _append_jsonl(log_path, {
+                        "type": "pre_entry_stale_cancel",
+                        "ts": now,
+                        "session_id": session_id,
+                        "token_id": _pre_entry_token_id,
+                        "cancelled_order_ids": _stale_cancelled,
+                        "signal": signal,
+                    })
+
+                # Guarda contra posição residual: se já há tokens na conta para este
+                # token_id, não entrar — significa que uma entrada anterior não foi
+                # registrada corretamente e ainda há exposição aberta.
+                _pre_entry_balance = _token_balance_qty(broker, _pre_entry_token_id)
+                if _pre_entry_balance > 0:
+                    _append_jsonl(log_path, {
+                        "type": "entry_blocked",
+                        "ts": now,
+                        "session_id": session_id,
+                        "reason": f"pre_entry_balance_nonzero:{round(_pre_entry_balance, 4)}",
+                        "token_id": _pre_entry_token_id,
+                        "signal": signal,
+                    })
+                    time.sleep(poll_secs)
+                    continue
 
                 try:
                     trade = _post_entry_order(
