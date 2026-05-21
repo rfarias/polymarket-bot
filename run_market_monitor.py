@@ -78,6 +78,15 @@ RS_MIN_WINNER   = 0.88
 RS_MAX_LOSER    = 0.15
 RS_VELOCITY_MIN = 0.005  # queda mínima do winner em unidades absolutas/s (≈50 bps/s, ~1 cent em 2s)
 
+# Early Entry (EE) — entrada antecipada com EL estável
+EE_EL_MIN    = 0.55   # bid mínimo para detectar early leader em 240-181s
+EE_CONT_MIN  = 0.70   # bid mínimo de continuidade do EL em 180-121s
+EE_VEL_MIN   = 0.08   # crescimento mínimo do EL bid (bid_180 - bid_240)
+EE_ENTRY_LO  = 0.82   # faixa de entrada: baixo
+EE_ENTRY_HI  = 0.86   # faixa de entrada: alto
+EE_HEDGE_THR = 0.50   # cruzamento para ativar hedge (compra lado oposto)
+EE_MAX_SECS  = 180    # secs máximo para entrada EE
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -150,6 +159,124 @@ class _BidHistory:
         if elapsed < 0.5:
             return 0.0
         return round((now_bid - ref_bid) / elapsed, 6)
+
+
+# ---------------------------------------------------------------------------
+# Early Leader Tracker — acumula snaps por janela e computa EL + F3 + vel
+# ---------------------------------------------------------------------------
+
+class _EarlyLeaderTracker:
+    def __init__(self):
+        self._slug: Optional[str] = None
+        self._s240: list = []  # snaps secs 181-240
+        self._s180: list = []  # snaps secs 121-180
+        self.early_leader:  Optional[str] = None
+        self.el_bid_240:    float = 0.0
+        self.el_bid_180:    float = 0.0
+        self.el_vel:        float = 0.0   # bid_180 - bid_240
+        self.cont_ok:       bool  = False
+
+    def update(self, slug: str, secs: Optional[int],
+               up_bid: float, down_bid: float) -> None:
+        if secs is None:
+            return
+        if self._slug != slug:
+            self._reset(slug)
+
+        snap = {"secs": secs, "up_bid": up_bid, "down_bid": down_bid}
+        if 181 <= secs <= 240:
+            self._s240.append(snap)
+            self._compute_el()
+        elif 121 <= secs <= 180:
+            self._s180.append(snap)
+            self._compute_f3()
+
+    def _compute_el(self) -> None:
+        if not self._s240:
+            return
+        avg_up = sum(s["up_bid"]   for s in self._s240) / len(self._s240)
+        avg_dn = sum(s["down_bid"] for s in self._s240) / len(self._s240)
+        if avg_up >= EE_EL_MIN:
+            self.early_leader = "UP";   self.el_bid_240 = avg_up
+        elif avg_dn >= EE_EL_MIN:
+            self.early_leader = "DOWN"; self.el_bid_240 = avg_dn
+
+    def _compute_f3(self) -> None:
+        if not (self.early_leader and self._s180):
+            return
+        bids = [s["up_bid"] if self.early_leader == "UP" else s["down_bid"]
+                for s in self._s180]
+        self.el_bid_180 = sum(bids) / len(bids)
+        self.el_vel     = round(self.el_bid_180 - self.el_bid_240, 4)
+        self.cont_ok    = min(bids) >= EE_CONT_MIN
+
+    def _reset(self, slug: str) -> None:
+        self._slug         = slug
+        self._s240         = []
+        self._s180         = []
+        self.early_leader  = None
+        self.el_bid_240    = 0.0
+        self.el_bid_180    = 0.0
+        self.el_vel        = 0.0
+        self.cont_ok       = False
+
+    @property
+    def signal_ok(self) -> bool:
+        """True quando EL estável (F3) e velocidade suficiente."""
+        return bool(
+            self.early_leader
+            and self.cont_ok
+            and self.el_vel >= EE_VEL_MIN
+        )
+
+
+# ---------------------------------------------------------------------------
+# Early Entry Position — máquina de estado da posição paper EE
+# ---------------------------------------------------------------------------
+
+class _EEPosition:
+    """
+    Estados:
+      none    — sem posição
+      entry   — comprado no EL side entre 0.82-0.86
+      hedged  — cruzou 0.50; comprado também no lado oposto
+      closed  — mercado resolvido ou saída
+    """
+    def __init__(self):
+        self.state:       str            = "none"
+        self.entry_side:  Optional[str]  = None
+        self.entry_ep:    float          = 0.0
+        self.entry_ts:    float          = 0.0
+        self.entry_secs:  int            = 0
+        self.hedge_ep:    float          = 0.0
+        self.hedge_ts:    float          = 0.0
+        self.hedge_secs:  int            = 0
+        self.outcome:     str            = ""
+        self.pnl:         float          = 0.0
+        self.qty:         float          = 3.0   # metade do qty padrão
+
+    def open_entry(self, side: str, ep: float, ts: float, secs: int) -> None:
+        self.state       = "entry"
+        self.entry_side  = side
+        self.entry_ep    = ep
+        self.entry_ts    = ts
+        self.entry_secs  = secs
+
+    def open_hedge(self, ep: float, ts: float, secs: int) -> None:
+        self.state      = "hedged"
+        self.hedge_ep   = ep
+        self.hedge_ts   = ts
+        self.hedge_secs = secs
+
+    def close(self, outcome: str, exit_ep: float, hedge_exit_ep: float = 0.0) -> None:
+        self.state   = "closed"
+        self.outcome = outcome
+        pnl_entry = (exit_ep - self.entry_ep) * self.qty
+        pnl_hedge = (hedge_exit_ep - self.hedge_ep) * self.qty if self.hedge_ep > 0 else 0.0
+        self.pnl  = round(pnl_entry + pnl_hedge, 4)
+
+    def reset(self) -> None:
+        self.__init__()
 
 
 # ---------------------------------------------------------------------------
@@ -256,11 +383,15 @@ def _print_panel(
             print(f"    DOWN bid={_bid_colored(down_bid)}  ask={down_ask:.3f}  "
                   f"spread={down_ask-down_bid:.3f}")
 
+            sig_ee_disp = sd.get("sig_ee", False)
+            ee_pos_disp = sd.get("ee_pos")
+            ee_active   = ee_pos_disp and ee_pos_disp.state in ("entry", "hedged")
             flags = " ".join([
                 _flag(sig_ar, "AR"),
                 _flag(sig_mm, "MM"),
                 _flag(sig_sc, "SC"),
                 _flag(sig_rs, "RS"),
+                _flag(sig_ee_disp or ee_active, "EE"),
             ])
             print(f"    Sinais: {flags}")
 
@@ -285,6 +416,29 @@ def _print_panel(
                 d15 = sd.get("sc_d15", 0); lag = sd.get("sc_lag", 0)
                 side = sd.get("sc_side", "?")
                 print(_c(f"    → [SC] {side} spot15s={d15:+.1f}bps lag={lag:.1f}bps", _G))
+
+            # EE — early entry
+            ee_pos = ee_pos_disp
+            if sig_ee_disp or (ee_pos and ee_pos.state not in ("none", "closed")):
+                el  = sd.get("el_leader", "?")
+                vel = sd.get("el_vel", 0)
+                b180 = sd.get("el_bid_180", 0)
+                print(_c(f"    → [EE] EL={el} bid180={b180:.3f} vel={vel:+.3f}", _C))
+            if ee_pos and ee_pos.state == "entry":
+                wb = sd.get("ee_el_bid", 0)
+                print(_c(f"    → [EE] POSIÇÃO ABERTA  {ee_pos.entry_side} "
+                          f"ep={ee_pos.entry_ep:.3f}  bid_atual={wb:.3f}  "
+                          f"qty={ee_pos.qty}", _G))
+            if ee_pos and ee_pos.state == "hedged":
+                wb  = sd.get("ee_el_bid", 0)
+                wbh = sd.get("ee_hedge_bid", 0)
+                print(_c(f"    → [EE] HEDGE ATIVO  orig={ee_pos.entry_side} "
+                          f"ep={ee_pos.entry_ep:.3f}→{wb:.3f}  "
+                          f"hedge_ep={ee_pos.hedge_ep:.3f}→{wbh:.3f}", _Y))
+            if ee_pos and ee_pos.state == "closed":
+                col = _G if ee_pos.pnl >= 0 else _RE
+                print(_c(f"    → [EE] FECHADO  {ee_pos.outcome}  "
+                          f"PnL=${ee_pos.pnl:+.4f}", col))
 
             # métricas de scalp sempre visíveis
             if sc_ev:
@@ -317,9 +471,11 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
     oracle   = ChainlinkBTCOracle()
 
     # estado persistente
-    bid_hists:      Dict[str, _BidHistory]          = {}
-    scalp_research: Dict[str, CurrentScalpResearchV1] = {}
-    opening_ref:    Dict[str, float]                = {}  # slug → spot na abertura
+    bid_hists:      Dict[str, _BidHistory]             = {}
+    scalp_research: Dict[str, CurrentScalpResearchV1]  = {}
+    opening_ref:    Dict[str, float]                   = {}  # slug → spot na abertura
+    el_trackers:    Dict[str, _EarlyLeaderTracker]     = {}  # slug → EL tracker
+    ee_positions:   Dict[str, _EEPosition]             = {}  # slug → posição EE paper
     recent: Deque[str] = deque(maxlen=10)
 
     # cache de refresh
@@ -459,6 +615,83 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
                     except Exception as e:
                         recent.appendleft(f"[WARN] scalp_eval {slug[-16:]}: {e}")
 
+                # --- Early Leader Tracker ---
+                elt = el_trackers.setdefault(slug, _EarlyLeaderTracker())
+                elt.update(slug, secs, up_bid, down_bid)
+
+                # bid do lado do EL (para lógica EE)
+                el_bid = (up_bid   if elt.early_leader == "UP"   else
+                          down_bid if elt.early_leader == "DOWN" else 0.0)
+                # bid do lado oposto (para hedge)
+                opp_bid = (down_bid if elt.early_leader == "UP"   else
+                           up_bid   if elt.early_leader == "DOWN" else 0.0)
+
+                # --- Early Entry Position ---
+                ee = ee_positions.setdefault(slug, _EEPosition())
+
+                # Reset se o mercado terminou e já está em closed há algum tempo
+                if ee.state == "closed" and secs is not None and secs > 200:
+                    ee.reset()
+
+                # Sinal EE: EL estável + el_vel >= 0.08 + bid EL na faixa
+                sig_ee = bool(
+                    elt.signal_ok
+                    and secs is not None and 30 <= secs <= EE_MAX_SECS
+                    and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
+                    and ee.state == "none"
+                )
+
+                # Abrir posição
+                if sig_ee:
+                    ee.open_entry(elt.early_leader, el_bid, now, secs or 0)
+                    recent.appendleft(
+                        _c(f"[EE] ENTRADA {elt.early_leader} ep={el_bid:.3f} "
+                           f"vel={elt.el_vel:+.3f} secs={secs}", _C)
+                    )
+
+                # Monitorar posição aberta
+                if ee.state == "entry" and secs is not None:
+                    # Cruzou 0.50 → hedge
+                    if el_bid < EE_HEDGE_THR and opp_bid > 0:
+                        ee.open_hedge(opp_bid, now, secs)
+                        recent.appendleft(
+                            _c(f"[EE] HEDGE {elt.early_leader} cruzou 0.50  "
+                               f"opp_ep={opp_bid:.3f} secs={secs}", _Y)
+                        )
+                    # Resolveu
+                    elif secs <= 35:
+                        if el_bid >= 0.85:
+                            ee.close("WIN", 1.0)
+                            recent.appendleft(
+                                _c(f"[EE] WIN  PnL=${ee.pnl:+.4f}  "
+                                   f"ep={ee.entry_ep:.3f}", _G)
+                            )
+                        elif el_bid <= 0.05:
+                            ee.close("REVERSAL", el_bid)
+                            recent.appendleft(
+                                _c(f"[EE] REVERSAL  PnL=${ee.pnl:+.4f}  "
+                                   f"ep={ee.entry_ep:.3f}", _RE)
+                            )
+
+                # Monitorar posição hedgeada
+                if ee.state == "hedged" and secs is not None and secs <= 35:
+                    # Descobre quem venceu
+                    if up_bid >= 0.85:
+                        win_side = "UP"
+                    elif down_bid >= 0.85:
+                        win_side = "DOWN"
+                    else:
+                        win_side = None
+                    if win_side:
+                        if win_side == ee.entry_side:
+                            ee.close("WIN_BOUNCE", 1.0, 0.0)
+                        else:
+                            ee.close("WIN_HEDGE", 0.0, 1.0)
+                        recent.appendleft(
+                            _c(f"[EE] {ee.outcome}  PnL=${ee.pnl:+.4f}  "
+                               f"ep={ee.entry_ep:.3f} hedge_ep={ee.hedge_ep:.3f}", _G)
+                        )
+
                 # --- Sinais ---
                 winner_side: Optional[str] = None
                 if up_bid >= down_bid and up_bid >= AR_MIN_WINNER:
@@ -529,6 +762,19 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
                     "sc_mkt_d5": _sf(sc_ev.get("market_delta_5s"), 0),
                     "sc_rng15": _sf(sc_ev.get("market_range_15s"), 0),
                     "sc_dist_bps": _sf(sc_ev.get("distance_from_open_bps"), 0),
+                    # Early Entry (EE)
+                    "el_leader":   elt.early_leader,
+                    "el_bid_240":  round(elt.el_bid_240, 4),
+                    "el_bid_180":  round(elt.el_bid_180, 4),
+                    "el_vel":      round(elt.el_vel, 4),
+                    "el_cont_ok":  elt.cont_ok,
+                    "sig_ee":      sig_ee,
+                    "ee_state":    ee.state,
+                    "ee_side":     ee.entry_side,
+                    "ee_entry_ep": round(ee.entry_ep, 4),
+                    "ee_hedge_ep": round(ee.hedge_ep, 4),
+                    "ee_outcome":  ee.outcome,
+                    "ee_pnl":      round(ee.pnl, 4),
                 }
                 _append_log(log_path, log_row)
 
@@ -561,6 +807,11 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
                     "mm_mid_up": mid_up, "mm_mid_down": mid_down,
                     "sc_d15": d15, "sc_lag": lag, "sc_side": sc_side,
                     "sc_ev": sc_ev,
+                    # EE
+                    "sig_ee": sig_ee, "ee_pos": ee,
+                    "el_leader": elt.early_leader,
+                    "el_vel": elt.el_vel, "el_bid_180": elt.el_bid_180,
+                    "ee_el_bid": el_bid, "ee_hedge_bid": opp_bid,
                 })
 
             # --- Display ---
