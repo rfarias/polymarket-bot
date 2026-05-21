@@ -1379,8 +1379,9 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
             # Early leader tracking — atualiza estado EL do slug atual
             _el_slug = str(current_item.get("slug") or "") if current_item else ""
             if _el_slug and current_secs is not None:
-                _el_up = _safe_float(signal.get("up_buy"), 0.0)
-                _el_dn = _safe_float(signal.get("down_buy"), 0.0)
+                # Usar current_exec (livro ao vivo) em vez do sinal AR — disponível em todos os secs
+                _el_up = _safe_float((current_exec or {}).get("up_bid"), 0.0)
+                _el_dn = _safe_float((current_exec or {}).get("down_bid"), 0.0)
                 _el_tracker.update(_el_slug, current_secs, _el_up, _el_dn)
                 _el_tracker.evict_old(_el_slug)
             _el_state = _el_tracker.state(_el_slug) if _el_slug else {}
@@ -1514,7 +1515,16 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 # Nos dados simulados (outra máquina): remove 25 trades ruins, +$2.76 PnL.
                 _el_side_now = _el_state.get("early_side")
                 _ar_side_now = str(signal.get("side") or "")
-                if _el_side_now and _ar_side_now and _el_side_now != _ar_side_now:
+                _el_inverted = _el_state.get("inverted", False)
+                _el_inversion_side = _el_state.get("inversion_side")
+                # Exceção: se EL inverteu e AR segue o novo líder, NÃO bloquear.
+                # Dados: novo líder após inversão EL >= 0.60 vence 71-100%.
+                _exc_oposto_active = (
+                    _el_side_now and _ar_side_now
+                    and _el_side_now != _ar_side_now
+                    and not (_el_inverted and _el_inversion_side == _ar_side_now)
+                )
+                if _exc_oposto_active:
                     _append_jsonl(log_path, {
                         "type": "entry_blocked",
                         "ts": now,
