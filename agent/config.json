@@ -2,11 +2,11 @@
   "reversal_sniper": {
     "active": true,
     "mode": "paper",
-    "entry_score_threshold": 5,
+    "entry_score_threshold": 3,
     "hold_score_minimum": 1,
     "partial_profit_pct": 0.8,
     "paper_bet_size": 20,
-    "_notes": "threshold=2 para gerar dados; Sinal B fraco (score=2) suficiente para entrada paper"
+    "_notes": "threshold=3 (Sinal B forte=3, ou B fraco+E=2+2=4, ou EL aponta loser+B=2+2=4)"
   },
   "almost_resolved": {
     "active": false,

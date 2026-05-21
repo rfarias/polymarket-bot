@@ -304,7 +304,7 @@ def run_reversal_sniper_paper(
     print(f"[REVERSAL_SNIPER] Iniciando — modo PAPER ONLY", flush=True)
     print(f"[REVERSAL_SNIPER] Log: {log_path}", flush=True)
     print(f"[REVERSAL_SNIPER] Parâmetros: min_bid={MIN_WINNER_BID} max_loser={MAX_LOSER_PRICE} "
-          f"secs=[{MIN_SECS},{MAX_SECS}] score>={SCORE_THRESHOLD_PAPER}", flush=True)
+          f"secs>={MIN_SECS} score>={SCORE_THRESHOLD_PAPER}", flush=True)
 
     _append_jsonl(log_path, {
         "type": "session_start",
@@ -313,7 +313,7 @@ def run_reversal_sniper_paper(
             "min_winner_bid": MIN_WINNER_BID,
             "max_loser_price": MAX_LOSER_PRICE,
             "min_secs": MIN_SECS,
-            "max_secs": MAX_SECS,
+            "max_secs": None,
             "score_threshold": SCORE_THRESHOLD_PAPER,
             "cooldown_secs": COOLDOWN_SECS,
             "paper_bet_size": PAPER_BET_SIZE,
