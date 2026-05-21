@@ -112,6 +112,108 @@ def _append_jsonl(path: Path, row: dict) -> None:
 # Deceleration gate — igual ao live runner
 # ---------------------------------------------------------------------------
 
+class _EarlyLeaderTracker:
+    """Rastreia o early leader (EL) por slug ao longo de todos os polls.
+
+    Janelas:
+      secs 181-240: detecta o lado dominante com bid >= early_min (EL)
+      secs 121-180: verifica continuidade — EL nunca caiu abaixo de cont_min (F3)
+      secs < 180:   detecta inversão quando o líder troca de lado
+
+    Gate para o sniper:
+      EL confirma winner → penaliza score (winner provavelmente mantém)
+      EL inverte forte (>= strong_min) → bloqueia sniper (novo líder ganha 100%)
+      EL inverte médio (0.60–0.72) → penaliza score moderadamente
+      Sem EL / inversão fraca → neutro (sinais A/B/E valem face value)
+    """
+
+    def __init__(self, early_min: float = 0.55, cont_min: float = 0.70, strong_min: float = 0.72):
+        self._early_min = early_min
+        self._cont_min = cont_min
+        self._strong_min = strong_min
+        self._by_slug: dict = {}
+
+    def update(self, slug: str, secs: int, up_bid: float, down_bid: float) -> None:
+        if up_bid <= 0 or down_bid <= 0:
+            return
+        d = self._by_slug.setdefault(slug, {
+            "early_side": None, "early_bid": 0.0, "early_secs": None,
+            "f3_ok": None, "f3_started": False,
+            "inverted": False, "inversion_side": None,
+            "inversion_bid": 0.0, "inversion_secs": None,
+        })
+        leader_bid = max(up_bid, down_bid)
+        leader_side = "UP" if up_bid >= down_bid else "DOWN"
+
+        if 181 <= secs <= 240 and d["early_side"] is None:
+            if leader_bid >= self._early_min:
+                d["early_side"] = leader_side
+                d["early_bid"] = round(leader_bid, 4)
+                d["early_secs"] = secs
+
+        if 121 <= secs <= 180 and d["early_side"] is not None:
+            el_bid_now = up_bid if d["early_side"] == "UP" else down_bid
+            if not d["f3_started"]:
+                d["f3_started"] = True
+                d["f3_ok"] = True
+            if el_bid_now < self._cont_min:
+                d["f3_ok"] = False
+
+        if secs < 180 and d["early_side"] is not None and not d["inverted"]:
+            if leader_side != d["early_side"] and leader_bid >= self._early_min:
+                d["inverted"] = True
+                d["inversion_side"] = leader_side
+                d["inversion_bid"] = round(leader_bid, 4)
+                d["inversion_secs"] = secs
+
+    def state(self, slug: str) -> dict:
+        d = self._by_slug.get(slug) or {}
+        inv_bid = d.get("inversion_bid", 0.0)
+        return {
+            "early_side": d.get("early_side"),
+            "early_bid": d.get("early_bid", 0.0),
+            "early_secs": d.get("early_secs"),
+            "f3_ok": d.get("f3_ok"),
+            "inverted": bool(d.get("inverted")),
+            "inversion_side": d.get("inversion_side"),
+            "inversion_bid": inv_bid,
+            "inversion_secs": d.get("inversion_secs"),
+            "inversion_strong": bool(d.get("inverted") and inv_bid >= self._strong_min),
+        }
+
+    def gate_score(self, slug: str, winner_side: str) -> int:
+        """Retorna penalidade de score (-3 a 0) baseada no EL.
+
+        Negativo = EL prediz que o winner continua → sniper não deve entrar.
+        Zero = sem informação EL suficiente → sinais A/B/E valem face value.
+        """
+        d = self._by_slug.get(slug) or {}
+        el_side = d.get("early_side")
+        if not el_side:
+            return 0  # sem EL detectado — neutro
+
+        inv_bid = d.get("inversion_bid", 0.0)
+        inverted = bool(d.get("inverted"))
+
+        if not inverted:
+            # EL estável e confirma winner → 89.6% winner mantém
+            if el_side == winner_side:
+                return -3
+            # EL estável mas aponta pro loser → mercado divergiu do EL → incerto
+            return 0
+
+        # EL inverteu — o winner agora é o novo líder
+        if inv_bid >= self._strong_min:
+            return -3   # inversão forte: novo líder ganha 100% (19/19)
+        if inv_bid >= 0.60:
+            return -1   # inversão média: novo líder ganha 87% (26/30)
+        return 0        # inversão fraca: só 54% (17/37) — neutro para o sniper
+
+    def evict_old(self, current_slug: str) -> None:
+        for slug in [k for k in self._by_slug if k != current_slug]:
+            del self._by_slug[slug]
+
+
 class _LoserMomentumTracker:
     """Rastreia bid do lado perdedor para detectar Sinal E (momentum do loser)."""
 
@@ -221,6 +323,7 @@ def run_reversal_sniper_paper(
 
     decel = _DecelTracker()
     loser_mom = _LoserMomentumTracker()
+    el_tracker = _EarlyLeaderTracker(early_min=0.55, cont_min=0.70, strong_min=0.72)
     oracle_open_prices: Dict[str, float] = {}   # slug → oracle_price ao início do slug
     cooldowns: Dict[str, float] = {}            # slug → ts fim do cooldown
     paper_positions: Dict[str, dict] = {}       # slug → paper position ativa
@@ -268,12 +371,7 @@ def run_reversal_sniper_paper(
                         "hold_time_secs": round(now - _sp["entered_at"], 1),
                     })
 
-            # ---- fora da janela → skip (posição ativa: continuar tracking) ----
-            if current_secs is None or (not (MIN_SECS <= current_secs <= MAX_SECS) and slug not in paper_positions):
-                time.sleep(poll_secs)
-                continue
-
-            # ---- bid data ----
+            # ---- bid data (buscar sempre — EL precisa de dados fora da janela do sniper) ----
             slot_state = _fetch_slot_state(slot_bundle)
             snap = _slot_snapshot(slot_state, "current")
             exec_metrics, exec_reason = _compute_executable_metrics(snap)
@@ -284,6 +382,17 @@ def run_reversal_sniper_paper(
 
             up_bid = _sf(exec_metrics.get("up_bid"))
             down_bid = _sf(exec_metrics.get("down_bid"))
+
+            # Atualiza EL tracker para todos os polls (inclusive secs 181-240, fora da janela)
+            if current_secs is not None and up_bid > 0 and down_bid > 0:
+                el_tracker.update(slug, current_secs, up_bid, down_bid)
+            el_tracker.evict_old(slug)
+            el_state = el_tracker.state(slug)
+
+            # ---- fora da janela → skip (posição ativa: continuar tracking) ----
+            if current_secs is None or (not (MIN_SECS <= current_secs <= MAX_SECS) and slug not in paper_positions):
+                time.sleep(poll_secs)
+                continue
 
             winner_side = "UP" if up_bid >= down_bid else "DOWN"
             winner_bid = up_bid if winner_side == "UP" else down_bid
@@ -323,7 +432,8 @@ def run_reversal_sniper_paper(
             sinal_e_info = loser_mom.update(slug, loser_side, loser_bid, now)
             sinal_e_score = sinal_e_info["score"]
 
-            total_score = sinal_a_score + sinal_b_score
+            el_gate = el_tracker.gate_score(slug, winner_side)
+            total_score = sinal_a_score + sinal_b_score + el_gate
             cfg = _load_sniper_config()
             score_threshold = int(cfg.get("entry_score_threshold", SCORE_THRESHOLD_PAPER))
             would_enter = total_score >= score_threshold
@@ -350,11 +460,13 @@ def run_reversal_sniper_paper(
                 "sinal_e_loser_momentum": sinal_e_info["loser_momentum"],
                 "bid_velocity": decel_info["bid_velocity"],
                 "total_score": total_score,
+                "el_gate_score": el_gate,
                 "score_threshold": score_threshold,
                 "would_enter": would_enter,
                 "in_cooldown": cooldowns.get(slug, 0) > now,
                 "btc_price": btc_feed.current_price() or None,
                 "btc_tick_direction": btc_feed.tick_direction_score(8.0),
+                "early_leader": el_state,
             }
             _append_jsonl(log_path, snap_row)
 
@@ -525,6 +637,7 @@ def run_reversal_sniper_paper(
                     "sinal_a_score": sinal_a_score,
                     "sinal_b_score": sinal_b_score,
                     "sinal_e_score": sinal_e_score,
+                    "el_gate_score": el_gate,
                     "sinal_e_loser_momentum": sinal_e_info["loser_momentum"],
                     "bid_velocity": decel_info["bid_velocity"],
                     "btc_divergence_bps": btc_divergence_bps,
@@ -532,6 +645,7 @@ def run_reversal_sniper_paper(
                     "oracle_open": oracle_open,
                     "btc_price": btc_feed.current_price() or None,
                     "btc_tick_direction": btc_feed.tick_direction_score(8.0),
+                    "early_leader": el_state,
                 })
                 cooldowns[slug] = now + COOLDOWN_SECS
                 print(
