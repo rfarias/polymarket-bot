@@ -15,6 +15,7 @@ Filtros híbridos (derivados da análise dos logs de 13.8h):
 Uso:
   python analyze_monitor_pnl.py
   python analyze_monitor_pnl.py --log logs/market_monitor_20260520_171127.jsonl
+  python analyze_monitor_pnl.py --all-logs          # combina todos os arquivos logs/
   python analyze_monitor_pnl.py --qty 6 --stop-ticks 2 --show-trades
   python analyze_monitor_pnl.py --early-min 0.55 --cont-min 0.70
 """
@@ -94,6 +95,50 @@ class Trade:
 # ─── loader ─────────────────────────────────────────────────────────────────
 
 def load_slugs(log_path: Path) -> List[SlugInfo]:
+    return load_slugs_multi([log_path])
+
+
+def load_slugs_multi(log_paths: List[Path]) -> List[SlugInfo]:
+    # key = (log_path.name, slug) so same slug across sessions is kept separate
+    rows: Dict[tuple, list] = defaultdict(list)
+    for log_path in log_paths:
+        with open(log_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                    if d.get("type") == "monitor_snap" and d.get("slot") == "current":
+                        rows[(log_path.name, d["slug"])].append(d)
+                except Exception:
+                    pass
+
+    slugs = []
+    for (log_name, slug), cur in rows.items():
+        cur.sort(key=lambda x: x["ts"])
+        last = cur[-1]
+        secs_last = last.get("secs") or 999
+        up_f, dn_f = last["up_bid"], last["down_bid"]
+        if secs_last > 40:
+            resolution = "UNKNOWN"
+        elif up_f >= 0.85:
+            resolution = "UP"
+        elif dn_f >= 0.85:
+            resolution = "DOWN"
+        else:
+            resolution = "UNKNOWN"
+
+        def bucket(lo, hi, c=cur):
+            return [s for s in c if s.get("secs") and lo <= s["secs"] <= hi]
+
+        si = SlugInfo(
+            slug=f"{log_name[:8]}:{slug}", resolution=resolution, all_cur=cur,
+            s240=bucket(181, 240), s180=bucket(121, 180),
+            s120=bucket(61, 120),  s60=bucket(31, 60),
+        )
+        slugs.append(si)
+    return slugs
+
+
+def _load_slugs_single(log_path: Path) -> List[SlugInfo]:
     rows: Dict[str, list] = defaultdict(list)
     with open(log_path, encoding="utf-8") as f:
         for line in f:
@@ -292,6 +337,50 @@ def _ep_table(trades: List[Trade]):
         print(f"  {th:>7.2f} {len(ts):>5} {wr:>4.1f}% ${pnl:>+8.2f}")
 
 
+def _early_leader_predictivity(slugs: List[SlugInfo]):
+    """Mostra com que frequência o early_leader prediz a resolução final."""
+    resolved = [si for si in slugs if si.resolution != "UNKNOWN"]
+    if not resolved:
+        return
+
+    has_early = [si for si in resolved if si.early_leader]
+    no_early  = [si for si in resolved if not si.early_leader]
+
+    correct = [si for si in has_early if si.early_leader == si.resolution]
+    wrong   = [si for si in has_early if si.early_leader != si.resolution]
+
+    # por threshold de bid do early_leader
+    print(f"\n  {'early_bid>=':>12} {'n':>5} {'acerto%':>8} {'PnL implicito':>14}")
+    print(f"  {'─'*12} {'─'*5} {'─'*8} {'─'*14}")
+    for thr in [0.52, 0.55, 0.58, 0.60, 0.63, 0.65, 0.70]:
+        sub = [si for si in has_early if si.early_bid >= thr]
+        if not sub:
+            continue
+        ok = sum(1 for si in sub if si.early_leader == si.resolution)
+        pct = 100 * ok / len(sub)
+        # implied PnL: compra líder a early_bid, resolve a 1.0 se correto, 0 se errado
+        # simplificado sem stop
+        implied = sum((1.0 - si.early_bid) if si.early_leader == si.resolution
+                      else -si.early_bid for si in sub) * 6.0
+        print(f"  {thr:>12.2f} {len(sub):>5} {pct:>7.1f}% ${implied:>+13.2f}")
+
+    print(f"\n  Total com early_leader: {len(has_early)}/{len(resolved)} "
+          f"({100*len(has_early)/len(resolved):.0f}%)")
+    print(f"  Acerto direto (sem stop): "
+          f"{len(correct)}/{len(has_early)} = {100*len(correct)/len(has_early):.1f}%")
+    print(f"  Erro de direção:          "
+          f"{len(wrong)}/{len(has_early)} = {100*len(wrong)/len(has_early):.1f}%")
+    print(f"  Sem early_leader:         {len(no_early)}/{len(resolved)}")
+
+    # com F3 (continuidade)
+    cont_ok = [si for si in has_early if si.cont_ok]
+    if cont_ok:
+        ok_cont = sum(1 for si in cont_ok if si.early_leader == si.resolution)
+        print(f"\n  Com F3 (continuidade >=0.70 em 180-121s):")
+        print(f"    {len(cont_ok)} slugs  acerto={ok_cont}/{len(cont_ok)} "
+              f"({100*ok_cont/len(cont_ok):.1f}%)")
+
+
 # ─── main ───────────────────────────────────────────────────────────────────
 
 def main():
@@ -299,6 +388,8 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--log",          type=Path,  default=None)
+    ap.add_argument("--all-logs",     action="store_true",
+                    help="combina todos os arquivos market_monitor_*.jsonl em logs/")
     ap.add_argument("--qty",          type=float, default=6.0)
     ap.add_argument("--stop-ticks",   type=float, default=2.0)
     ap.add_argument("--entry-min",    type=float, default=0.88)
@@ -312,21 +403,27 @@ def main():
     ap.add_argument("--show-matrix",  action="store_true", default=True)
     args = ap.parse_args()
 
-    if args.log:
-        log_path = args.log
-    else:
-        logs = sorted(Path("logs").glob("market_monitor_*.jsonl"), reverse=True)
-        if not logs:
-            print("Nenhum log market_monitor encontrado em logs/")
-            sys.exit(1)
-        log_path = logs[0]
+    all_logs = sorted(Path("logs").glob("market_monitor_*.jsonl"), reverse=True)
+    if not all_logs:
+        print("Nenhum log market_monitor encontrado em logs/")
+        sys.exit(1)
 
-    print(f"\nLog: {log_path.name}  ({log_path.stat().st_size/1024:.0f} KB)")
+    if args.all_logs:
+        log_paths = all_logs
+        total_kb = sum(p.stat().st_size for p in log_paths) / 1024
+        print(f"\nLogs combinados: {len(log_paths)} arquivos  ({total_kb:.0f} KB total)")
+        for p in log_paths:
+            print(f"  {p.name}  ({p.stat().st_size/1024:.0f} KB)")
+    else:
+        log_path = args.log or all_logs[0]
+        log_paths = [log_path]
+        print(f"\nLog: {log_path.name}  ({log_path.stat().st_size/1024:.0f} KB)")
+
     print(f"Params: qty={args.qty}  stop={args.stop_ticks}T  "
           f"entry_min={args.entry_min}  entry_secs<={args.entry_secs}")
     print(f"Filtros: early_min={args.early_min}  cont_min={args.cont_min}")
 
-    slugs = load_slugs(log_path)
+    slugs = load_slugs_multi(log_paths)
     for si in slugs:
         si.compute_filters(args.early_min, args.cont_min)
 
@@ -341,6 +438,12 @@ def main():
     confirms  = sum(1 for si in resolved if si.early_leader and si.cont_ok)
     print(f"Slugs c/ early_leader: {has_early}/{len(resolved)}  "
           f"| c/ continuidade: {confirms}/{has_early}")
+
+    print()
+    print(SEP)
+    print("  EARLY LEADER — PODER PREDITIVO (sem trade, só direção)")
+    print(SEP)
+    _early_leader_predictivity(slugs)
 
     # simular todos os trades
     all_trades: List[Trade] = []
