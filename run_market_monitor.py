@@ -253,7 +253,7 @@ class _EEPosition:
         self.hedge_secs:  int            = 0
         self.outcome:     str            = ""
         self.pnl:         float          = 0.0
-        self.qty:         float          = 3.0   # metade do qty padrão
+        self.qty:         float          = 6.0   # equiparado ao runner real
         self._just_closed: bool          = False
 
     def open_entry(self, side: str, ep: float, ts: float, secs: int) -> None:

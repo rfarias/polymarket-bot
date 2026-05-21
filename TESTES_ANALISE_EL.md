@@ -448,7 +448,7 @@ FASE 4 — Validação e produção (futuro):
 | `EE_ENTRY_HI` | 0.86 | Faixa de entrada: máximo |
 | `EE_HEDGE_THR` | 0.50 | Crossing que ativa hedge |
 | `EE_MAX_SECS` | 180 | Janela máxima de entrada |
-| `qty EE` | 3 shares | Metade do padrão; ajustar após validação |
+| `qty EE` | 6 shares | Equiparado ao runner real (2026-05-21) |
 | `qty AR normal` | 6 shares | Não alterar sem validação |
 | `entry_min AR` | 0.88 | Não alterar sem validação |
 | `stop AR` | 2T | Para EE, sem stop (hold to resolution) |
