@@ -324,18 +324,26 @@ ainda há reversões sem sinal detectável: **mercado de difícil cobertura pelo
 **Status EE (acumulado):**  
 Ainda 8 trades (7 WIN + 1 WIN_HEDGE, PnL=+$2,13) — sem novas entradas desde ~11:13.
 
-### 9.3 Relatório 3 — 2026-05-21 (14:15 → 14:35)
+### 9.3 Relatório 3 — 2026-05-21 (14:15 → 15:39)
 
 | # | Slug | Lado | Entry | el_vel | F3 | Outcome | PnL |
 |---|---|---|---|---|---|---|---|
-| 9 | `…1384300` | UP | 0.82 | 0.159 | ok | WIN | +$0,54 |
+| 9  | `…1384300` | UP   | 0.82 | 0.159 | ok   | WIN | +$0,54 |
+| 10 | `…1384900` | UP   | 0.83 | 0.205 | ok   | WIN | +$0,51 |
+| 11 | `…1386400` | DOWN | 0.85 | 0.232 | ok   | WIN | +$0,45 |
 
-**Acumulado: 9 trades | 8 WIN | 1 WIN_HEDGE | WR 88,9% | PnL = +$2,67**
+**Acumulado: 11 trades | 10 WIN | 1 WIN_HEDGE | WR 90,9% | PnL = +$3,63**
 
 Notas:
-- Trade 9: EL forte (el_vel=0.159, acima do threshold 0.08), F3 ok, entry 0.82. Resolveu em secs=19.
-- avg/trade acumulada: +$0,30/trade (qty=3 shares).
-- Série invicta em LOSS: 9 trades sem nenhum LOSS puro (único custo foi hedge no trade 3).
+- Trades 10 e 11: el_vel alto (0.205 e 0.232), ambos WIN rápidos (secs=21).
+- Trade 7 (`…376500`): F3 marcado FAIL no snap de fechamento, mas entry foi feita com F3 ok
+  — o EL bid dip ocorreu durante o hold, não bloqueou a entrada.
+- avg/trade: +$0,33/trade (qty=3). Série sem LOSS puro mantida.
+
+**Bug sniper corrigido (commit 82d5dbe):**  
+`in_zone` check ainda usava `current_secs <= MAX_SECS` — gerou 184 eventos `error` no log
+(NameError capturado pelo try/except, sem quebrar o processo). Corrigido e sniper reiniciado
+(PID 2656).
 
 ### 9.4 Próximos relatórios
 
