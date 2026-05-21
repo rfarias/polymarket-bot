@@ -345,9 +345,36 @@ Notas:
 (NameError capturado pelo try/except, sem quebrar o processo). Corrigido e sniper reiniciado
 (PID 2656).
 
-### 9.4 Próximos relatórios
+### 9.4 Relatório 4 — 2026-05-21 (15:39 → 16:36)
 
-Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades para validação estatística.
+**Monitor EE**: sem novos trades. Acumulado mantido em 11 trades / +$3,63.
+
+**Sniper paper — primeiros `would_enter` disparados (3 eventos):**
+
+| Slug | secs | score | loser_entry | peak | early_exit_bid | pnl/share_hold | pnl/share_early | ev_delta |
+|---|---|---|---|---|---|---|---|---|
+| `…390600` | 12 | 5 (B3+E2+EL0) | 0.37 | **0.67** | 0.09 | reversão! | -0.28 | negativo |
+| `…390900` | 64 | 4 (B3+E2+EL-1) | 0.17 | 0.34 | 0.11 | -0.17 | -0.06 | **+0.11** |
+| `…391500` | 16 | 4 (B3+E2+EL-1) | 0.06* | 0.13 | 0.07 | -0.06 | +0.01 | **+0.07** |
+
+_*entry_loser_price = preço quando tracking iniciou (secs=36), não quando would_enter disparou (secs=16)._
+
+**Análise:**
+- Padrão comum: B=3 (strong decel) + E=2 (loser subindo) + ELgate=0/-1 (inversão fraca ou média)
+- 0/3 reversões completas ao hold — mas slug `…390600` tinha loser@t20=0.67 (reversão em curso!)
+- `…390600`: dynamic_stop triggou em 0.09 após pico 0.67 — bid caiu de 0.67→0.09 **entre dois polls** (gap de ~8s). Saída prematura numa reversão real. Custo do slippage por iliquidez.
+- `…390900`: dynamic_stop funcionou corretamente — salvou -0.11/share vs hold -0.17/share.
+- `…391500`: score_collapsed_take_profit, saída em 0.07 vs entry 0.06 = +0.01/share (ligeiramente lucrativo).
+
+**Problemas identificados:**
+1. **Dynamic stop vulnerável a gaps de liquidez**: pullback frac (0.65×peak) pode ser cruzado em um único poll quando o bid colapsa. Slug `…390600` é o caso crítico — a reversão era real (loser chegou a 0.67 ao t=20s) mas fomos ejetados em 0.09.
+2. **ELgate 0/-1 insuficiente para diferenciar** reversões reais de head fakes: todos os 3 casos tinham EL invertido fraco/médio, sem discriminação clara de outcome.
+
+**Próximos passos sugeridos:** aumentar o intervalo mínimo de polls no dynamic stop, ou adicionar confirmação de 2 polls consecutivos abaixo do pullback antes de sair.
+
+### 9.5 Próximos relatórios
+
+Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
 
 ---
 
