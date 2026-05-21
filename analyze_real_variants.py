@@ -71,10 +71,18 @@ def _find_real_jsonl(log_dir: Optional[str]) -> list[Path]:
         if p.is_file() and p.suffix == ".jsonl":
             return [p]
         if p.is_dir():
-            # tenta nome canônico
+            # tenta nome canônico direto
             candidate = p / "current_almost_resolved_real.jsonl"
             if candidate.exists():
                 return [candidate]
+            # tenta subdirs com prefixo real (caso logs/ seja passado)
+            for entry in sorted(p.iterdir()):
+                if entry.is_dir() and entry.name.startswith(REAL_PREFIX):
+                    c = entry / "current_almost_resolved_real.jsonl"
+                    if c.exists():
+                        results.append(c)
+            if results:
+                return results
             # fallback: qualquer jsonl na dir
             results = sorted(p.glob("*.jsonl"))
             return results
@@ -200,22 +208,25 @@ def _reconstruct_trade(slug: str, session: str, evs: list[dict]) -> Optional[Rea
         # ----------------------------------------------------------------
         # Entrada confirmada
         # ----------------------------------------------------------------
-        if ev_type in ("entry_filled", "entry_confirmed", "position_opened"):
-            has_entry = True
-            t.entry_price = _sf(
+        if ev_type in ("entry_filled", "entry_confirmed", "position_opened", "fill"):
+            ep = _sf(
                 ev.get("entry_price") or ev.get("fill_price") or ev.get("price")
                 or trade_state.get("entry_price"), 0.0
             )
-            t.entry_qty = _sf(
+            qty = _sf(
                 ev.get("qty_filled") or ev.get("qty") or ev.get("entry_qty_filled")
                 or trade_state.get("entry_qty_filled"), 0.0
             )
-            t.side = str(ev.get("side") or trade_state.get("side") or signal.get("side") or "?")
-            t.entry_ts = _sf(ev.get("ts") or ev.get("timestamp"), 0.0)
-            t.setup_variant = str(
-                ev.get("setup_variant") or trade_state.get("setup_variant")
-                or signal.get("setup_variant") or "standard"
-            )
+            if ep > 0 and qty > 0 and not has_entry:
+                has_entry = True
+                t.entry_price = ep
+                t.entry_qty = qty
+                t.side = str(ev.get("side") or trade_state.get("side") or signal.get("side") or "?")
+                t.entry_ts = _sf(ev.get("ts") or ev.get("timestamp"), 0.0)
+                t.setup_variant = str(
+                    ev.get("setup_variant") or trade_state.get("setup_variant")
+                    or signal.get("setup_variant") or "standard"
+                )
 
             # usa o snapshot pré-entrada para pegar contexto de mercado
             if last_entry_snap:

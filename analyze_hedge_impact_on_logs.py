@@ -170,7 +170,14 @@ def _parse_file(path: Path, source: str) -> list[LossTrade]:
 
     all_types = {ev.get("type", "") for ev in events}
 
-    if "fill" in all_types or "enter" in all_types:
+    # Real runner: fill events have trade.entry_qty_filled; paper fills don't
+    has_real_fill = any(
+        ev.get("type") == "fill" and isinstance(ev.get("trade"), dict)
+        for ev in events
+    )
+    if has_real_fill or "entry_filled" in all_types or "trade_summary" in all_types:
+        return _parse_real(events, path.stem, source)
+    elif "fill" in all_types or "enter" in all_types:
         return _parse_paper(events, path.stem, source)
     else:
         return _parse_real(events, path.stem, source)
@@ -360,14 +367,24 @@ def _reconstruct_real_loss(slug: str, session: str, source: str, evs: list[dict]
                         loser_tracker_price=ltp,
                     ))
 
-        elif t in ("entry_filled", "entry_confirmed", "position_opened"):
+        elif t in ("entry_filled", "entry_confirmed", "position_opened", "fill"):
             ep = _sf(ev.get("entry_price") or ev.get("fill_price") or tr.get("entry_price"), 0.0)
-            if ep > 0 and not has_entry:
+            qty = _sf(ev.get("qty_filled") or ev.get("qty") or tr.get("entry_qty_filled"), 0.0)
+            if ep > 0 and qty > 0 and not has_entry:
                 has_entry = True
                 entry_price = ep
-                entry_qty = _sf(ev.get("qty_filled") or ev.get("qty") or tr.get("entry_qty_filled"), 0.0)
+                entry_qty = qty
                 side = str(ev.get("side") or tr.get("side") or sig.get("side") or "?")
                 sv = str(tr.get("setup_variant") or sig.get("setup_variant") or "standard")
+
+        elif t in ("flat", "redeem_flat"):
+            exit_ord = ev.get("exit_order") or {}
+            xp = _sf(exit_ord.get("price") or tr.get("target_price"), 0.0)
+            xq = _sf(exit_ord.get("size_matched") or tr.get("exit_qty_filled"), 0.0)
+            exit_reason = str(tr.get("last_reason") or "")
+            if xp > 0 and xq > 0 and entry_price > 0:
+                pnl_quote = round((xp - entry_price) * xq, 4)
+            exit_price = xp
 
         elif t == "trade_summary":
             state = ev.get("state") or tr or {}
