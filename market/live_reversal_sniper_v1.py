@@ -58,7 +58,10 @@ from market.rest_5m_shadow_public_v4 import (
 MIN_WINNER_BID = 0.88       # active_bid mínimo para entrar na zona de monitoramento
 MAX_LOSER_PRICE = 0.15      # loser muito caro → edge sumiu
 MIN_SECS = 15               # muito perto da resolução → skip
-MAX_SECS = 120              # muito cedo → skip
+# MAX_SECS removido: janela de tempo não é mais restrição de entrada.
+# O sinal (score >= threshold + EL gate) determina quando entrar,
+# independente de quantos segundos faltam. Mercados com secs > 120
+# ainda são monitorados para EL tracking e podem disparar entry.
 
 SCORE_THRESHOLD_PAPER = 3   # score mínimo para registrar would_enter
 COOLDOWN_SECS = 60.0        # cooldown por mercado após qualquer would_enter
@@ -80,10 +83,14 @@ SINAL_E_WEAK_MOM = 0.005    # peso 1
 SINAL_E_STRONG_MOM = 0.015  # peso 2
 LOSER_HISTORY_POLLS = 2     # momentum = loser_bid_now - loser_bid_2_polls_ago
 
-# Saída antecipada inteligente — paper tracking (não altera entrada)
-EARLY_EXIT_PROFIT_MULT   = 1.80  # cond. a: bid >= entry × 1.80 (lucro ≥ 80%)
-EARLY_EXIT_PULLBACK_GATE = 1.30  # cond. c: max_bid >= entry × 1.30 para ativar dynamic_stop
-EARLY_EXIT_PULLBACK_FRAC = 0.60  # cond. c: bid atual < max_bid × 0.60 → saída
+# Saída antecipada — paper tracking
+# a) bid >= entry × PROFIT_MULT (lucro ≥ 80%) → sai no alvo
+# b) score colapsou E bid acima da entrada → sai parcial
+# c) pico >= entry × PULLBACK_GATE E bid recuou < PULLBACK_FRAC × pico → dynamic stop
+#    captura quando a inversão vai mas volta antes de resolver
+EARLY_EXIT_PROFIT_MULT   = 1.80
+EARLY_EXIT_PULLBACK_GATE = 1.20  # era 1.30 — ativado mais cedo
+EARLY_EXIT_PULLBACK_FRAC = 0.65  # era 0.60 — stop mais apertado (captura pullbacks)
 
 
 # ---------------------------------------------------------------------------
@@ -391,8 +398,9 @@ def run_reversal_sniper_paper(
             el_tracker.evict_old(slug)
             el_state = el_tracker.state(slug)
 
-            # ---- fora da janela → skip (posição ativa: continuar tracking) ----
-            if current_secs is None or (not (MIN_SECS <= current_secs <= MAX_SECS) and slug not in paper_positions):
+            # ---- secs inválido ou abaixo do mínimo → skip ----
+            # Não há MAX_SECS: o sinal determina a entrada, não o relógio.
+            if current_secs is None or (current_secs < MIN_SECS and slug not in paper_positions):
                 time.sleep(poll_secs)
                 continue
 
@@ -435,6 +443,11 @@ def run_reversal_sniper_paper(
             sinal_e_score = sinal_e_info["score"]
 
             el_gate = el_tracker.gate_score(slug, winner_side)
+            el_st   = el_tracker.state(slug)
+            # Precursor de inversão: F3 falhou (bid EL deu dip < 0.70 na janela 181-121s).
+            # Quando f3_ok=False, 84% das inversões fortes já foram precedidas por esse sinal.
+            # Logado para análise retroativa — não altera o score diretamente (o gate já trata).
+            el_precursor = el_st.get("f3_ok") is False and el_st.get("early_side") is not None
             total_score = sinal_a_score + sinal_b_score + sinal_e_score + el_gate
             cfg = _load_sniper_config()
             score_threshold = int(cfg.get("entry_score_threshold", SCORE_THRESHOLD_PAPER))
@@ -463,6 +476,7 @@ def run_reversal_sniper_paper(
                 "bid_velocity": decel_info["bid_velocity"],
                 "total_score": total_score,
                 "el_gate_score": el_gate,
+                "el_precursor": el_precursor,
                 "score_threshold": score_threshold,
                 "would_enter": would_enter,
                 "in_cooldown": cooldowns.get(slug, 0) > now,
@@ -640,6 +654,7 @@ def run_reversal_sniper_paper(
                     "sinal_b_score": sinal_b_score,
                     "sinal_e_score": sinal_e_score,
                     "el_gate_score": el_gate,
+                    "el_precursor": el_precursor,
                     "sinal_e_loser_momentum": sinal_e_info["loser_momentum"],
                     "bid_velocity": decel_info["bid_velocity"],
                     "btc_divergence_bps": btc_divergence_bps,
