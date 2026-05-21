@@ -272,7 +272,12 @@ def _reconstruct_trade(slug: str, session: str, evs: list[dict]) -> Optional[Rea
         # ----------------------------------------------------------------
         if ev_type == "awaiting_redeem":
             state = ev.get("state") or trade_state or {}
+            # campo pode ser side_won ou won dependendo da versão do runner
             side_won = ev.get("side_won")
+            if side_won is None:
+                side_won = ev.get("won")
+            if side_won is None:
+                side_won = trade_state.get("side_won") or trade_state.get("won")
             ep = _sf(state.get("entry_price") or t.entry_price, 0.0)
             qty = _sf(state.get("entry_qty_filled") or t.entry_qty, 0.0)
             if ep > 0 and qty > 0:
@@ -282,26 +287,38 @@ def _reconstruct_trade(slug: str, session: str, evs: list[dict]) -> Optional[Rea
                     t.entry_qty = qty
                     t.side = str(state.get("side") or "?")
                     t.setup_variant = str(state.get("setup_variant") or "standard")
-                if side_won is True:
-                    t.pnl_usd = round((1.0 - ep) * qty, 4)
-                    t.exit_price = 1.0
-                    t.exit_reason = "redeem_win"
-                elif side_won is False:
-                    t.pnl_usd = round(-ep * qty, 4)
-                    t.exit_price = 0.0
-                    t.exit_reason = "redeem_loss"
+                # só sobrescreve PnL se não houver saída anterior (flat)
+                # o runner já saiu pelo flat — redeem é apenas informativo
+                if not t.exit_reason:
+                    if side_won is True:
+                        t.pnl_usd = round((1.0 - ep) * qty, 4)
+                        t.exit_price = 1.0
+                        t.exit_reason = "redeem_win"
+                    elif side_won is False:
+                        t.pnl_usd = round(-ep * qty, 4)
+                        t.exit_price = 0.0
+                        t.exit_reason = "redeem_loss"
 
         # ----------------------------------------------------------------
         # flat (saída de mercado secundário)
         # ----------------------------------------------------------------
         if ev_type in ("flat", "redeem_flat"):
+            trade_data = ev.get("trade") or {}
             xord = ev.get("exit_order") or {}
-            xp = _sf(xord.get("price") or ev.get("exit_price") or ev.get("price"), 0.0)
-            xq = _sf(xord.get("size_matched") or ev.get("qty_filled") or t.entry_qty, 0.0)
+            # formato real: trade.best_bid + trade.exit_qty_filled
+            xp = _sf(
+                trade_data.get("best_bid")
+                or xord.get("price") or ev.get("exit_price") or ev.get("price"), 0.0
+            )
+            xq = _sf(
+                trade_data.get("exit_qty_filled")
+                or xord.get("size_matched") or ev.get("qty_filled") or t.entry_qty, 0.0
+            )
             if xp > 0 and t.entry_price > 0:
                 t.pnl_usd = round((xp - t.entry_price) * xq, 4)
                 t.exit_price = xp
-                t.exit_reason = ev_type
+                # preserva last_reason para classificação correta
+                t.exit_reason = trade_data.get("last_reason") or ev_type
 
     if not has_entry or t.entry_price <= 0:
         return None
@@ -342,7 +359,11 @@ def _fill_entry_context(t: RealTrade, snap: dict) -> None:
 
     # loser bid e counter price
     loser_tracker = snap.get("loser_bid_tracker") or {}
-    t.loser_bid_at_entry = _sf(loser_tracker.get("current_price") or loser_tracker.get("price"), 0.0)
+    t.loser_bid_at_entry = _sf(
+        loser_tracker.get("loser_bid")
+        or loser_tracker.get("current_price")
+        or loser_tracker.get("price"), 0.0
+    )
 
     # preço do lado contrário (counter)
     side = (t.side or "").upper()

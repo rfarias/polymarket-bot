@@ -1363,30 +1363,30 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                     time.sleep(poll_secs)
                     continue
-                if (
-                    str(signal.get("setup_variant") or "") == "passive_extreme_liquidity_capture"
-                    and current_secs is not None
-                    and current_secs < 30
-                ):
+                # passive_extreme_liquidity_capture: bloqueado sempre.
+                # Único trade histórico registrou perda total de -$9.80;
+                # sem evidência de edge positivo em nenhuma faixa de secs.
+                if str(signal.get("setup_variant") or "") == "passive_extreme_liquidity_capture":
                     _append_jsonl(
                         log_path,
                         {
                             "type": "entry_blocked",
                             "ts": now,
                             "session_id": session_id,
-                            "reason": f"passive_capture_too_late:secs={current_secs}",
+                            "reason": f"passive_extreme_blocked:secs={current_secs}",
                             "signal": signal,
                         },
                     )
                     time.sleep(poll_secs)
                     continue
-                # standard e dual_rich_late_limit com <30s restantes: o book fica
-                # thin demais para o stop preencher no preço correto (mesmo padrão
-                # do passive_extreme_liquidity_capture, já validado em logs reais).
-                # controlled_late_entry e resolved_pullback_limit são isentos por
-                # design — entram propositalmente nos segundos finais.
+                # Setups com <30s restantes: book fino, stop não preenche no preço
+                # correto. Validado em logs reais — evita slippage e entradas erráticas.
+                # Isentos: controlled_late_entry (edge confirmado em secs < 30 nos logs)
+                #          resolved_pullback_limit (entra propositalmente nos segundos finais)
                 if (
-                    str(signal.get("setup_variant") or "") in ("standard", "dual_rich_late_limit")
+                    str(signal.get("setup_variant") or "") not in (
+                        "controlled_late_entry", "resolved_pullback_limit"
+                    )
                     and current_secs is not None
                     and current_secs < 30
                 ):
