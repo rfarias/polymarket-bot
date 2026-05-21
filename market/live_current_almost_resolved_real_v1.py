@@ -261,6 +261,85 @@ def _is_flat_qty(qty: float, epsilon: float = 0.000001) -> bool:
     return abs(float(qty)) <= float(epsilon)
 
 
+class _EarlyLeaderTracker:
+    """Rastreia o early leader (EL) por slug ao longo dos polls.
+
+    Janelas:
+      - secs 181-240: detecta qual lado lidera com bid >= early_min (EL)
+      - secs 121-180: verifica se EL nunca caiu abaixo de cont_min (F3)
+      - secs < 180:   detecta inversão (quando o líder troca de lado)
+
+    Achados nos logs reais:
+      EL baseline 78.6%  |  EL+F3 93.4%  |  EL>=0.72 inverte → novo lado 100% (19/19)
+    """
+
+    def __init__(self, early_min: float = 0.55, cont_min: float = 0.70, strong_min: float = 0.72):
+        self._early_min = early_min
+        self._cont_min = cont_min
+        self._strong_min = strong_min
+        self._by_slug: dict = {}
+
+    def update(self, slug: str, secs: Optional[int], up_bid: float, down_bid: float) -> None:
+        if secs is None or up_bid <= 0 or down_bid <= 0:
+            return
+        d = self._by_slug.setdefault(slug, {
+            "early_side": None, "early_bid": 0.0, "early_secs": None,
+            "f3_ok": None, "f3_started": False,
+            "inverted": False, "inversion_side": None,
+            "inversion_bid": 0.0, "inversion_secs": None,
+            "_inversion_logged": False,
+        })
+        leader_bid = max(up_bid, down_bid)
+        leader_side = "UP" if up_bid >= down_bid else "DOWN"
+
+        if 181 <= secs <= 240 and d["early_side"] is None:
+            if leader_bid >= self._early_min:
+                d["early_side"] = leader_side
+                d["early_bid"] = round(leader_bid, 4)
+                d["early_secs"] = secs
+
+        if 121 <= secs <= 180 and d["early_side"] is not None:
+            el_bid_now = up_bid if d["early_side"] == "UP" else down_bid
+            if not d["f3_started"]:
+                d["f3_started"] = True
+                d["f3_ok"] = True
+            if el_bid_now < self._cont_min:
+                d["f3_ok"] = False
+
+        if secs < 180 and d["early_side"] is not None and not d["inverted"]:
+            if leader_side != d["early_side"] and leader_bid >= self._early_min:
+                d["inverted"] = True
+                d["inversion_side"] = leader_side
+                d["inversion_bid"] = round(leader_bid, 4)
+                d["inversion_secs"] = secs
+
+    def state(self, slug: str) -> dict:
+        d = self._by_slug.get(slug) or {}
+        inv_bid = d.get("inversion_bid", 0.0)
+        return {
+            "early_side": d.get("early_side"),
+            "early_bid": d.get("early_bid", 0.0),
+            "early_secs": d.get("early_secs"),
+            "f3_ok": d.get("f3_ok"),
+            "inverted": bool(d.get("inverted")),
+            "inversion_side": d.get("inversion_side"),
+            "inversion_bid": inv_bid,
+            "inversion_secs": d.get("inversion_secs"),
+            "inversion_strong": bool(d.get("inverted") and inv_bid >= self._strong_min),
+        }
+
+    def inversion_logged(self, slug: str) -> bool:
+        return bool((self._by_slug.get(slug) or {}).get("_inversion_logged"))
+
+    def mark_inversion_logged(self, slug: str) -> None:
+        if slug in self._by_slug:
+            self._by_slug[slug]["_inversion_logged"] = True
+
+    def evict_old(self, current_slug: str) -> None:
+        for slug in [k for k in self._by_slug if k != current_slug]:
+            del self._by_slug[slug]
+
+
 def _is_match_status(status: Optional[str]) -> bool:
     return str(status or "").lower() in ("matched", "filled", "closed", "resolved")
 
@@ -543,6 +622,10 @@ def _exit_reason(
 ) -> Optional[str]:
     if bid_now <= 0 or trade.entry_price is None:
         return None
+    # Mid-book reversal: winner bid cruzou o ponto de equilíbrio (0.50).
+    # Tese AR invalida — mercado virou 50/50. Saída imediata independente do stop padrão.
+    if bid_now <= 0.50:
+        return "mid_book_reversal"
     side = trade.side or "UP"
     trade.best_bid = max(_safe_float(trade.best_bid), bid_now)
     pnl_ticks_now = (bid_now - float(trade.entry_price)) / tick_size if tick_size > 0 else 0.0
@@ -730,7 +813,7 @@ def _post_exit_order(
     # Urgent exits (stop-type) use FAK to guarantee immediate fill rather than leaving
     # a GTC resting in the book while the market continues to move against the position.
     # Non-urgent exits (profit targets) use GTC so the order can rest at the desired price.
-    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid", "near_win", "oracle_margin"))
+    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid", "near_win", "oracle_margin", "mid_book"))
     req = BrokerOrderRequest(
         token_id=trade.token_id or "",
         side="SELL",
@@ -1121,6 +1204,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     leader_velocity_history: dict[str, list[tuple[float, float]]] = {}
     _bid_history: dict[str, deque] = {}        # keyed "slug:SIDE", tracks leader buy price per poll
     _loser_bid_history: dict[str, deque] = {}  # keyed "slug:LOSER_SIDE", tracks loser buy price for scalp
+    _el_tracker = _EarlyLeaderTracker(early_min=0.55, cont_min=0.70, strong_min=0.72)
     started_at = time.time()
     _health_check_polls = max(1, int(60.0 / max(0.25, poll_secs)))
     _health_poll_counter = 0
@@ -1292,6 +1376,29 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "sinal_e_score": _sinal_e_score,
                     }
 
+            # Early leader tracking — atualiza estado EL do slug atual
+            _el_slug = str(current_item.get("slug") or "") if current_item else ""
+            if _el_slug and current_secs is not None:
+                # Usar current_exec (livro ao vivo) em vez do sinal AR — disponível em todos os secs
+                _el_up = _safe_float((current_exec or {}).get("up_bid"), 0.0)
+                _el_dn = _safe_float((current_exec or {}).get("down_bid"), 0.0)
+                _el_tracker.update(_el_slug, current_secs, _el_up, _el_dn)
+                _el_tracker.evict_old(_el_slug)
+            _el_state = _el_tracker.state(_el_slug) if _el_slug else {}
+
+            # Logar inversão forte ao detectar (uma vez por slug)
+            if _el_state.get("inverted") and not _el_tracker.inversion_logged(_el_slug):
+                _append_jsonl(log_path, {
+                    "type": "el_inversion",
+                    "ts": now,
+                    "session_id": session_id,
+                    "slug": _el_slug,
+                    "early_leader": _el_state,
+                    "strong": _el_state.get("inversion_strong"),
+                    "current_secs": current_secs,
+                })
+                _el_tracker.mark_inversion_logged(_el_slug)
+
             # Chainlink oracle — query e rastreamento de preço de abertura por slug
             if oracle is not None:
                 _last_oracle_price, _, _last_oracle_staleness = oracle.get_price()
@@ -1337,6 +1444,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "btc_chart_context": _last_chart_ctx.summary() if _last_chart_ctx else None,
                 "bid_decel_gate": {"up": _decel_gate_up, "down": _decel_gate_down},
                 "loser_bid_tracker": _loser_bid_info,
+                "early_leader": _el_state,
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -1402,6 +1510,32 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     )
                     time.sleep(poll_secs)
                     continue
+                # EXC.OPOSTO — bloquear quando Early Leader contradiz o sinal AR.
+                # EL baseline 78.6%; quando EL ≠ AR side, probabilidade de AR errar aumenta.
+                # Nos dados simulados (outra máquina): remove 25 trades ruins, +$2.76 PnL.
+                _el_side_now = _el_state.get("early_side")
+                _ar_side_now = str(signal.get("side") or "")
+                _el_inverted = _el_state.get("inverted", False)
+                _el_inversion_side = _el_state.get("inversion_side")
+                # Exceção: se EL inverteu e AR segue o novo líder, NÃO bloquear.
+                # Dados: novo líder após inversão EL >= 0.60 vence 71-100%.
+                _exc_oposto_active = (
+                    _el_side_now and _ar_side_now
+                    and _el_side_now != _ar_side_now
+                    and not (_el_inverted and _el_inversion_side == _ar_side_now)
+                )
+                if _exc_oposto_active:
+                    _append_jsonl(log_path, {
+                        "type": "entry_blocked",
+                        "ts": now,
+                        "session_id": session_id,
+                        "reason": f"exc_oposto:el={_el_side_now}:ar={_ar_side_now}",
+                        "early_leader": _el_state,
+                        "signal": signal,
+                    })
+                    time.sleep(poll_secs)
+                    continue
+
                 # dual_rich_late_limit: bloquear quando oracle contradiz o lado entrado.
                 # Ambas as perdas em Fase 3 ocorreram com oracle_div > 0 entrando DOWN.
                 # Threshold conservador: 5 bps para evitar bloqueios em mercados planos.
