@@ -813,7 +813,7 @@ def _post_exit_order(
     # Urgent exits (stop-type) use FAK to guarantee immediate fill rather than leaving
     # a GTC resting in the book while the market continues to move against the position.
     # Non-urgent exits (profit targets) use GTC so the order can rest at the desired price.
-    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid", "near_win", "oracle_margin"))
+    _urgent = any(k in reason for k in ("stop", "deadline_flatten", "resolved_pullback", "controlled_late_profit", "fill_signal_invalid", "near_win", "oracle_margin", "mid_book"))
     req = BrokerOrderRequest(
         token_id=trade.token_id or "",
         side="SELL",
