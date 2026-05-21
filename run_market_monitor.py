@@ -76,7 +76,7 @@ SC_MIN_SECS     = 45
 SC_MAX_SECS     = 240
 RS_MIN_WINNER   = 0.88
 RS_MAX_LOSER    = 0.15
-RS_DROP_BPS     = 2.0    # queda mínima do winner desde entrada para RS
+RS_VELOCITY_MIN = 0.005  # queda mínima do winner em unidades absolutas/s (≈50 bps/s, ~1 cent em 2s)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -497,7 +497,7 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
                     winner_side
                     and winner_bid >= RS_MIN_WINNER
                     and loser_bid <= RS_MAX_LOSER
-                    and winner_vel <= -(RS_DROP_BPS / 100)
+                    and winner_vel <= -RS_VELOCITY_MIN
                 )
 
                 # log
@@ -520,6 +520,8 @@ def run_monitor(poll_secs: float = 1.0, log: bool = True) -> None:
                     "sig_sc": sig_sc, "sig_rs": sig_rs,
                     "winner_side": winner_side,
                     "winner_vel": winner_vel,
+                    "mm_mid_up": mid_up, "mm_mid_down": mid_down,
+                    "sc_side": sc_side,
                     "sc_d5": _sf(sc_ev.get("spot_delta_5s_bps"), 0),
                     "sc_d15": d15,
                     "sc_d30": _sf(sc_ev.get("spot_delta_30s_bps"), 0),
