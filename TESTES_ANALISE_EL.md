@@ -298,7 +298,33 @@ Notas:
 - Nenhum REVERSAL puro (sem hedge) — o único caso de EL errado foi capturado pelo hedge.
 - avg/trade: +$0,27 (vs simulação: +$0,61 com el_vel >= 0.08; amostra ainda pequena).
 
-### 9.2 Próximos relatórios
+### 9.2 Relatório 2 — 2026-05-21 (13:30 → 14:15)
+
+Nenhum trade novo capturado nesta janela (1h45). O monitor continuou rodando
+e o sniper foi reiniciado após dois bugs críticos descobertos às 14:09:
+
+**Bugs do sniper corrigidos (commit a59feaf):**
+1. `config.json: entry_score_threshold=5` (deveria ser 3) — nenhum `would_enter` disparava. Slug
+   `…382200` chegou a `score=3` em secs=82 com threshold=5 no config: não capturado.
+2. `NameError: MAX_SECS` (constante removida mas ainda referenciada) — sniper crashava no boot;
+   ficou off por ~9 minutos sem que ficasse aparente.
+
+**Eventos sniper observados (paper) desde restart às ~08:56:**
+| Slug | Score máx | Obs |
+|---|---|---|
+| `…381600` | -3 | EL block ativo; sem oportunidade |
+| `…381900` | +2 | Loser subiu 0.12→0.51 (325%!); score=0 na entrada; would_exit_early ativou com bid=0.51 |
+| `…382200` | +3 | Seria would_enter com threshold=3; sem reversal (loss -0.10/share) |
+| `…382500` | -3 | EL block ativo; sem oportunidade |
+
+Obs slug `…381900`: o loser saiu de 0.12 (secs=28) para 0.51 (secs=13) sem o score atingir
+threshold — nenhum sinal ativo (el_gate=0, sinal_a=0, sinal_b=0, sinal_e=0). Mostra que
+ainda há reversões sem sinal detectável: **mercado de difícil cobertura pelo score atual**.
+
+**Status EE (acumulado):**  
+Ainda 8 trades (7 WIN + 1 WIN_HEDGE, PnL=+$2,13) — sem novas entradas desde ~11:13.
+
+### 9.3 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades para validação estatística.
 
