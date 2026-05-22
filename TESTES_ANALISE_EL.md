@@ -518,7 +518,77 @@ Novos eventos: `ee_paper_profit_protect`, `ee_paper_stop_loss`
 **Expectativa simulada:** WR 93,3% | PnL ~+$10,00 para amostra de 15 trades (vs +$5,82 atual).  
 Próximo relatório validará se a combinação funciona na prática.
 
-### 9.7 Próximos relatórios
+### 9.7 Análise: Trailing Stop vs Fixed Stop (2026-05-22)
+
+**Script:** `analyze_ee_trailing_stop.py` | **Amostra:** 18 trades (16 WIN + 2 WIN_HEDGE)  
+**Base:** WR 88,9% | PnL +$9,00
+
+#### Por que o trailing stop não funciona neste mercado
+
+**Achado crítico:** trailing stop em qualquer pullback (1T a 15T) é **pior que o base** em condições realistas:
+
+| Estratégia | WR | PnL real | vs base |
+|---|---|---|---|
+| **Base (v1, com hedge)** | 88,9% | +$9,00 | — |
+| PP bid>=0.88 secs<=70 | 94,4% | +$9,90 | +$0,90 |
+| **Stop fixo 0.67** | **88,9%** | **+$13,62** | **+$4,62** |
+| Trail 2T ideal | 88,9% | +$3,66 | -$5,34 |
+| Trail 2T **real** | 83,3% | +$1,68 | **-$7,32** |
+| Trail 5T real | 83,3% | +$1,26 | -$7,74 |
+| Breakeven stop real | 66,7% | +$4,14 | -$4,86 |
+| BE + Trail 2T real | 83,3% | +$1,68 | -$7,32 |
+
+**Causa dupla do fracasso do trailing:**
+
+**Problema 1 — Dispara incorretamente nos WIN trades:**  
+Perto da resolução (secs 70→35), os bids oscilam com gaps de 0.03–0.08 entre polls. Isso aciona o trailing antes da resolução final. 10 de 16 WIN trades teriam o stop disparado com trailing 2T.
+
+| Exemplo WIN | Peak | Stop | Exit real | Gap | PnL real | PnL resolução | Perdido |
+|---|---|---|---|---|---|---|---|
+| …467100 | 0.92 | 0.90 | 0.82 | 0.08 | -$0,18 | +$0,90 | $1,08 |
+| …447000 | 0.89 | 0.87 | 0.85 | 0.02 | +$0,06 | +$0,96 | $0,90 |
+| …473400 | 0.90 | 0.88 | 0.84 | 0.04 | +$0,12 | +$1,08 | $0,96 |
+
+**Total profit deixado na mesa em WIN trades com trailing 2T: $7,32**
+
+**Problema 2 — Não captura os WIN_HEDGE (crash pós-pico):**  
+No trade 8 (455700), o crash de 0.92→0.21 acontece em 1 poll (5s). O primeiro snap que vemos o bid abaixo do trailing stop (0.90) já tem estado="hedged" — o hedge foi colocado antes do trailing ser verificado neste poll. O trailing nunca chegou a ser avaliado no momento do crash.
+
+```
+secs=56: bid=0.92  estado=entry   <- trailing stop = 0.90 (correto)
+secs=51: bid=0.21  estado=hedged  <- crash JÁ ACONTECEU, hedge JÁ FOI ATIVADO
+                                     trailing nunca foi avaliado no momento da queda
+```
+
+Resultado: trailing 2T = -$4,14 (idêntico ao base) no trade 8.
+
+#### Por que o stop fixo 0.67 funciona
+
+O stop fixo não depende de trailing — ele verifica apenas "bid < 0.67" a cada poll.
+
+- **16 WIN trades**: todos têm `min_bid >= 0.68` → stop 0.67 **nunca dispara** em WIN
+- **2 WIN_HEDGE trades**: `min_bid < 0.65` → stop dispara antes do colapso total
+
+| Trade | EP | min_bid | Stop 0.67? | PnL com stop | PnL sem stop |
+|---|---|---|---|---|---|
+| Trade 8 (455700) | 0.84 | 0.67 | secs=153, bid=0.67 | -$1,02 | -$4,14 |
+| Trade 15 (468000) | 0.86 | 0.55 | secs=106, bid=0.55 | -$1,14 | -$2,64 |
+
+O stop 0.67 captura os dois casos de declínio na oscilação natural, sem cortar nenhum WIN.
+
+#### Liquidez — viabilidade de execução
+
+Stop fixo (0.65–0.67): dispara durante oscilação gradual (bids ainda com liquidez). Fill possível.  
+Trailing stop: dispara perto de resolução (secs 70→35) onde os bids caem bruscamente. 8 de 10 ativações em WIN trades tiveram `gap > 0.02` → fill improvável ao preço alvo.
+
+**Conclusão:** o trailing stop é duplamente prejudicial — não protege onde mais importa (WIN_HEDGE) e corta onde não deve (WIN). O **stop fixo em 0.67** é mais robusto, não precisa de liquidez high-end e supera todas as variantes de trailing/breakeven nessa amostra.
+
+#### Estratégia recomendada (validar em mais trades)
+
+Stop fixo 0.67 único (+$4,62 vs base) supera PP+stop atual (+$4,20 com 15 trades).  
+Com 18 trades, o stop fixo ainda domina — mas n ainda é pequeno para confirmar que nenhum WIN futuro terá min_bid < 0.67.
+
+### 9.8 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
 
