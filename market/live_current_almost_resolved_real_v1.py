@@ -1134,6 +1134,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     resolution_settle_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_RESOLUTION_SETTLE_SECS", 1)
     auto_redeem_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED", False)
     dust_archive_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY", 0.01)
+    loss_writeoff_timeout_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_LOSS_WRITEOFF_TIMEOUT_SECS", 3600.0)
     exit_repost_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_EXIT_REPOST_SECS", 1.0)
     flatten_deadline_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_FLATTEN_DEADLINE_SECS", 2)
     min_limit_exit_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_MIN_LIMIT_EXIT_QTY", 5.0)
@@ -1172,6 +1173,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
             "resolution_settle_secs": resolution_settle_secs,
             "auto_redeem_enabled": auto_redeem_enabled,
             "dust_archive_qty": dust_archive_qty,
+            "loss_writeoff_timeout_secs": loss_writeoff_timeout_secs,
             "exit_repost_secs": exit_repost_secs,
             "flatten_deadline_secs": flatten_deadline_secs,
             "min_limit_exit_qty": min_limit_exit_qty,
@@ -2274,6 +2276,32 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                     trade = LiveCurrentAlmostResolvedTradeState()
                     _clear_state(state_path)
+                else:
+                    _secs_since_res = now - _safe_float(trade.resolution_detected_at, now)
+                    _loss_reason = "resolution_loss" in str(trade.last_reason or "")
+                    if _loss_reason and _secs_since_res >= loss_writeoff_timeout_secs:
+                        _wo_ep = _safe_float(trade.entry_price, 0.0)
+                        _wo_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                        _wo_pnl = round((0.0 - _wo_ep) * _wo_qty, 4) if _wo_ep > 0 and _wo_qty > 0 else None
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "type": "resolution_loss_writeoff",
+                                "ts": now,
+                                "session_id": session_id,
+                                "token_balance_qty": token_balance_qty,
+                                "collateral_balance_usd": collateral_balance,
+                                "secs_since_resolution": round(_secs_since_res, 1),
+                                "loss_writeoff_timeout_secs": loss_writeoff_timeout_secs,
+                                "exit_price": 0.0,
+                                "pnl_usd": _wo_pnl,
+                                "trade": _trade_summary(trade),
+                            },
+                        )
+                        if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                            _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
+                        trade = LiveCurrentAlmostResolvedTradeState()
+                        _clear_state(state_path)
 
             if trade.mode == "pending_exit":
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
