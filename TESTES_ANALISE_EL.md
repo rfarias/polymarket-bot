@@ -390,46 +390,135 @@ _*entry_loser_price = preço quando tracking iniciou (secs=36), não quando woul
 
 **Sessão 1: 5 WIN | 0 HEDGE | WR 100% | PnL = +$4,86**
 
-**Sessão 2 — 09:32→em andamento:**
+**Sessão 2 — 09:32→11:32:**
 
 | # | Slug | Lado | Entry | secs | el_vel | Outcome | PnL |
 |---|---|---|---|---|---|---|---|
-| 6 | `…453900` | UP  | 0.84 | 176 | 0.119 | WIN | +$0,96 |
-| 7 | `…454200` | UP  | 0.82 | 180 | 0.216 | WIN | +$1,08 |
-| 8 | `…455700` | UP  | 0.84 | 166 | 0.106 | WIN_HEDGE | -$4,14 |
-| 9 | `…458700` | DOWN | 0.82 | 169 | 0.122 | WIN | +$1,08 |
+| 6  | `…453900` | UP   | 0.84 | 176 | 0.119 | WIN | +$0,96 |
+| 7  | `…454200` | UP   | 0.82 | 180 | 0.216 | WIN | +$1,08 |
+| **8**  | **`…455700`** | **UP** | **0.84** | **166** | **0.106** | **WIN_HEDGE** | **-$4,14** |
+| 9  | `…458700` | DOWN | 0.82 | 169 | 0.122 | WIN | +$1,08 |
+| 10 | `…459900` | UP   | 0.85 |  91 | 0.185 | WIN | +$0,90 |
 
-**Sessão 2: 3 WIN | 1 WIN_HEDGE | WR 75% | PnL = -$1,02**
+**Sessão 2: 4 WIN | 1 WIN_HEDGE | WR 80% | PnL = -$0,12**
 
-**Acumulado EE standalone: 9 trades | 8 WIN | 1 WIN_HEDGE | WR 88,9% | PnL = +$3,84 | avg +$0,43/trade**
+**Sessão 3 — 11:32→13:32:**
 
-**Análise WIN_HEDGE (trade 8):**
-- Slug `…455700`: UP entry 0.84 (secs=166), el_vel=0.106
-- EL (UP) colapsou para 0.21 em secs=51 → hedge ativou: comprou DOWN a 0.85
-- DOWN venceu: pnl_entrada = (0–0.84)×6 = –$5,04; pnl_hedge = (1,0–0,85)×6 = +$0,90
-- Total = **–$4,14** — evento único eliminou toda a sessão 2 e $0,72 do ganho da sessão 1
+| # | Slug | Lado | Entry | secs | el_vel | Outcome | PnL |
+|---|---|---|---|---|---|---|---|
+| 11 | `…462600` | DOWN | 0.85 | 145 | 0.086 | WIN | +$0,90 |
+| 12 | `…465000` | UP   | 0.83 | 169 | 0.143 | WIN | +$1,02 |
+| 13 | `…465900` | DOWN | 0.85 | 164 | 0.134 | WIN | +$0,90 |
+| 14 | `…467100` | UP   | 0.85 | 171 | 0.133 | WIN | +$0,90 |
 
-**Custo do WIN_HEDGE com qty=6 vs qty=3:**
-- Com qty=3: saving vs REVERSAL puro ≈ +$4,43/evento; custo WIN_HEDGE ≈ –$2,07
-- Com qty=6: saving dobra; custo WIN_HEDGE também dobra → **–$4,14/evento**
-- WIN_HEDGE com qty=6 é 2× mais doloroso mas ainda melhor que REVERSAL puro (–$5,04)
-- Uma ocorrência elimina ~4 trades WIN completos
+**Sessão 3: 4 WIN | WR 100% | PnL = +$3,72**
 
-**Comparativo monitor EE (qty=3) vs standalone (qty=6):**
+**Sessão 4 — 13:32→em andamento (parcial):**
 
-| Métrica | Monitor EE (qty=3) | Standalone (qty=6) |
-|---|---|---|
-| Trades | 11 | 9 |
-| WR | 90,9% | 88,9% |
-| PnL total | +$3,63 | +$3,84 |
-| avg/trade | +$0,33 | +$0,43 |
-| WIN_HEDGE count | 1 | 1 |
-| WIN_HEDGE impact | –$1,23 | –$4,14 |
+| # | Slug | Lado | Entry | secs | el_vel | Outcome | PnL |
+|---|---|---|---|---|---|---|---|
+| **15** | **`…468000`** | **UP** | **0.86** | **154** | **0.082** | **WIN_HEDGE** | **-$2,64** |
 
-Nota: qty=6 tem avg/trade maior nos WIN, mas o impacto de um WIN_HEDGE é 3,4× maior.  
-Com base nessa coleta inicial, o risco de qty=6 requer atenção especial ao custo do hedge.
+**Sessão 4: 0 WIN | 1 WIN_HEDGE | PnL = -$2,64 (parcial)**
 
-### 9.6 Próximos relatórios
+**Acumulado EE standalone (v1, com hedge): 15 trades | 13 WIN | 2 WIN_HEDGE | WR 86,7% | PnL = +$5,82 | avg +$0,39/trade**
+
+**Análise dos dois WIN_HEDGE — modos de falha distintos:**
+
+| Caso | Slug | Trajectória | Causa | pnl_hedge |
+|---|---|---|---|---|
+| A | `…455700` | 0.84→0.92 (pico) →0.21 em 1 poll | Gap brusco após pico alto | -$4,14 |
+| B | `…468000` | 0.86→0.72→0.55 (gap -0.23) sem recuperação | Declínio gradual, sem pico | -$2,64 |
+
+- **Caso A**: UP estava **subindo** (0.92 em secs=56) quando crash ocorreu. Nenhum stop teria ajudado (min_bid=0.67 durante oscilação, que recuperou). Só Profit Protect salva.
+- **Caso B**: UP declinou gradualmente de 0.86 para 0.55, nunca recuperou a 0.85. Profit Protect não ativa. Só Stop salva.
+
+**Conclusão:** os dois WIN_HEDGE têm causas opostas — uma solução única não cobre os dois. É necessário um mecanismo duplo.
+
+### 9.6 Análise: Stop vs Hedge vs Profit Protect (2026-05-22)
+
+**Script:** `analyze_ee_stop_vs_hedge.py` | **Amostra:** 15 trades | **Base:** WR 86,7% | PnL +$5,82
+
+#### Trajectória tick a tick — Caso A (455700, crash após pico)
+
+```
+secs=166  UP=0.84  (ENTRADA)
+secs=153  UP=0.67  oscilação normal
+secs=128  UP=0.68  oscilação normal
+secs=56   UP=0.92  <- PICO (subindo!)
+secs=51   UP=0.21  <- GAP -0.71 em UM poll (5s)
+           DOWN=0.85 -> hedge ativou caro: pnl=-$4,14
+```
+
+#### Trajectória tick a tick — Caso B (468000, declínio gradual)
+
+```
+secs=154  UP=0.86  (ENTRADA)
+secs=136  UP=0.72  caindo
+secs=106  UP=0.55  <- GAP -0.23 em um poll
+secs=100  UP=0.43  -> hedge ativou a DOWN=0.58: pnl=-$2,64
+(UP nunca recuperou a 0.85 durante o hold)
+```
+
+#### Simulação de saídas alternativas — impacto no portfólio completo
+
+**Stop isolado:**
+
+| Stop | Ativas | WR | PnL total | vs base |
+|---|---|---|---|---|
+| 0.60 | 1 | 86,7% | +$6,90 | +$1,08 |
+| 0.65 | 1 | 86,7% | +$7,20 | +$1,38 |
+| **0.67** | **2** | **86,7%** | **+$10,44** | **+$4,62** |
+| 0.70 | 3 | 80,0% | +$9,00 | +$3,18 |
+| 0.75 | 4 | 73,3% | +$8,40 | +$2,58 |
+
+Stop 0.67 salva os 2 WIN_HEDGE sem cortar nenhum WIN (todos os WIN tiveram min_bid >= 0.68).  
+Stop 0.65 salva apenas Caso B (Caso A: min_bid=0.67, fora do alcance de stop 0.65).
+
+**Profit Protect isolado (sair quando bid >= PP_bid em 36 <= secs <= PP_secs):**
+
+| PP bid | PP secs | Ativas | WR | PnL total | vs base |
+|---|---|---|---|---|---|
+| 0.85 | 60 | 14 | 93,3% | +$8,04 | +$2,22 |
+| **0.88** | **60** | **14** | **93,3%** | **+$8,46** | **+$2,64** |
+| 0.92 | 70 | 14 | 93,3% | +$8,64 | +$2,82 |
+
+PP ajuda Caso A (captura pico 0.92 → pnl +$0,48 em vez de -$4,14).  
+PP **não ajuda** Caso B (UP nunca chegou a 0.85 enquanto em posição entry).
+
+**Combinação Stop + PP (melhores candidatos):**
+
+| Stop | PP bid | PP secs | WR | PnL total | vs base |
+|---|---|---|---|---|---|
+| 0.65 | 0.88 | 60 | 93,3% | +$9,84 | +$4,02 |
+| **0.65** | **0.92** | **70** | **93,3%** | **+$10,02** | **+$4,20** |
+| 0.65 | 0.92 | 60 | 93,3% | +$9,84 | +$4,02 |
+
+**Stop 0.65 cobre Caso B. PP bid>=0.92, secs<=70 cobre Caso A. Juntos: +$4,20 vs base.**
+
+#### Implementação adotada — v2 do runner
+
+Implementado em `market/live_early_entry_paper_v1.py` com prioridade de saída:
+
+```
+1. secs <= 35 → WIN/REVERSAL (resolução normal — maior prioridade)
+2. 36 <= secs <= 70 e bid EL >= 0.88 → PROFIT_PROTECT (saída ao preço atual)
+3. bid EL < 0.65 → STOP_LOSS (saída ao preço atual — stop market)
+4. bid EL < 0.50 → HEDGE (fallback, raramente atingido com stop em 0.65)
+```
+
+Parâmetros adicionados:
+- `EE_STOP_LEVEL = 0.65`
+- `EE_PROFIT_PROTECT_BID = 0.88`
+- `EE_PROFIT_PROTECT_SECS = 70`
+
+Novos outcomes nos logs: `PROFIT_PROTECT`, `STOP_LOSS`  
+Novos eventos: `ee_paper_profit_protect`, `ee_paper_stop_loss`
+
+**Expectativa simulada:** WR 93,3% | PnL ~+$10,00 para amostra de 15 trades (vs +$5,82 atual).  
+Próximo relatório validará se a combinação funciona na prática.
+
+### 9.7 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
 

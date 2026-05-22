@@ -38,8 +38,11 @@ EE_CONT_MIN  = 0.70   # bid mínimo de continuidade em secs 121-180
 EE_VEL_MIN   = 0.08   # crescimento mínimo do bid EL (bid_180 - bid_240)
 EE_ENTRY_LO  = 0.82   # faixa de entrada: mínimo
 EE_ENTRY_HI  = 0.86   # faixa de entrada: máximo
-EE_HEDGE_THR = 0.50   # cruzamento que ativa hedge
-EE_MAX_SECS  = 180    # secs máximo para entrada EE
+EE_HEDGE_THR           = 0.50   # fallback de hedge (raramente atingido com stop ativo)
+EE_MAX_SECS            = 180    # secs máximo para entrada EE
+EE_STOP_LEVEL          = 0.65   # stop loss: saída se bid EL cair abaixo deste nível
+EE_PROFIT_PROTECT_BID  = 0.88   # profit protect: saída antecipada quando bid EL >= este valor
+EE_PROFIT_PROTECT_SECS = 70     # profit protect: só ativa quando 36 <= secs <= este valor
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +240,8 @@ def run_early_entry_paper_v1(
     print(f"[EE_PAPER] log={log_path}")
     print(
         f"[EE_PAPER] params: EL_MIN={EE_EL_MIN}  CONT>={EE_CONT_MIN}  "
-        f"VEL>={EE_VEL_MIN}  entry=[{EE_ENTRY_LO},{EE_ENTRY_HI}]  hedge<{EE_HEDGE_THR}"
+        f"VEL>={EE_VEL_MIN}  entry=[{EE_ENTRY_LO},{EE_ENTRY_HI}]  "
+        f"stop<{EE_STOP_LEVEL}  pp>={EE_PROFIT_PROTECT_BID}@secs<={EE_PROFIT_PROTECT_SECS}"
     )
 
     _append_jsonl(log_path, {
@@ -248,6 +252,9 @@ def run_early_entry_paper_v1(
             "EE_VEL_MIN": EE_VEL_MIN, "EE_ENTRY_LO": EE_ENTRY_LO,
             "EE_ENTRY_HI": EE_ENTRY_HI, "EE_HEDGE_THR": EE_HEDGE_THR,
             "EE_MAX_SECS": EE_MAX_SECS,
+            "EE_STOP_LEVEL": EE_STOP_LEVEL,
+            "EE_PROFIT_PROTECT_BID": EE_PROFIT_PROTECT_BID,
+            "EE_PROFIT_PROTECT_SECS": EE_PROFIT_PROTECT_SECS,
         },
     })
 
@@ -328,7 +335,36 @@ def run_early_entry_paper_v1(
 
             # --- Monitorar posição em entry ---
             if ee.state == "entry" and secs is not None:
-                if el_bid < EE_HEDGE_THR and opp_bid > 0:
+                if secs <= 35:
+                    # Resolução normal — prioridade máxima perto do fim
+                    if el_bid >= 0.85:
+                        ee.close("WIN", 1.0)
+                    elif opp_bid >= 0.85:
+                        ee.close("REVERSAL", 0.0)
+                elif 36 <= secs <= EE_PROFIT_PROTECT_SECS and el_bid >= EE_PROFIT_PROTECT_BID:
+                    # Profit protect: captura ganho antes de possível crash brusco
+                    ee.close("PROFIT_PROTECT", el_bid)
+                    _append_jsonl(log_path, {
+                        "type": "ee_paper_profit_protect", "ts": now,
+                        "session_id": session_id, "slug": slug,
+                        "el_bid": round(el_bid, 4), "secs": secs,
+                    })
+                    print(
+                        f"[EE_PAPER] PROFIT_PROTECT  el_bid={el_bid:.3f}  secs={secs}"
+                    )
+                elif el_bid < EE_STOP_LEVEL:
+                    # Stop loss: limita perda máxima (saída ao preço atual)
+                    ee.close("STOP_LOSS", el_bid)
+                    _append_jsonl(log_path, {
+                        "type": "ee_paper_stop_loss", "ts": now,
+                        "session_id": session_id, "slug": slug,
+                        "el_bid": round(el_bid, 4), "secs": secs,
+                    })
+                    print(
+                        f"[EE_PAPER] STOP_LOSS  el_bid={el_bid:.3f}  secs={secs}"
+                    )
+                elif el_bid < EE_HEDGE_THR and opp_bid > 0:
+                    # Hedge: fallback (bid saltou acima do stop e caiu abaixo de 0.50 em um poll)
                     ee.open_hedge(opp_bid, now, secs)
                     _append_jsonl(log_path, {
                         "type": "ee_paper_hedge", "ts": now,
@@ -340,11 +376,6 @@ def run_early_entry_paper_v1(
                         f"[EE_PAPER] HEDGE  el_bid={el_bid:.3f}  "
                         f"opp_ep={opp_bid:.3f}  secs={secs}"
                     )
-                elif secs <= 35:
-                    if el_bid >= 0.85:
-                        ee.close("WIN", 1.0)
-                    elif opp_bid >= 0.85:
-                        ee.close("REVERSAL", 0.0)
 
             # --- Monitorar posição hedgeada ---
             if ee.state == "hedged" and secs is not None and secs <= 35:
