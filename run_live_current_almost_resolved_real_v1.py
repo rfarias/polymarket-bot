@@ -81,13 +81,10 @@ def _validate_preflight() -> tuple[bool, str]:
         pprint(state_payload)
         dust_archive_qty = _safe_float(os.getenv("POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY", "0.01"), 0.01)
         residual_qty = _state_residual_qty(state_payload)
-        if 0 < residual_qty <= dust_archive_qty:
-            print(
-                "[STARTUP_GUARD] Allowing awaiting_redeem dust state",
-                {"residual_qty": residual_qty, "dust_archive_qty": dust_archive_qty},
-            )
-        else:
-            return False, "Startup guard blocked execution: previous position is awaiting claim/redeem."
+        print(
+            "[STARTUP_GUARD] Resuming awaiting_redeem state — main loop will handle redemption/archive",
+            {"residual_qty": residual_qty, "dust_archive_qty": dust_archive_qty},
+        )
 
     qty = int(os.getenv("POLY_CURRENT_ALMOST_RESOLVED_QTY", "6"))
     if qty < 5:
