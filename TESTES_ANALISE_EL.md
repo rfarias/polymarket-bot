@@ -372,7 +372,64 @@ _*entry_loser_price = preço quando tracking iniciou (secs=36), não quando woul
 
 **Próximos passos sugeridos:** aumentar o intervalo mínimo de polls no dynamic stop, ou adicionar confirmação de 2 polls consecutivos abaixo do pullback antes de sair.
 
-### 9.5 Próximos relatórios
+### 9.5 Runner EE Standalone — Primeiros resultados (2026-05-22)
+
+**Runner:** `market/live_early_entry_paper_v1.py` (standalone, sem monitor AR)  
+**Watchdog:** `scripts/watch_early_entry_paper.ps1 -Continuous -RunSeconds 7200 -Qty 6`  
+**Parâmetros:** F3 + el_vel >= 0.08 + entry 0.82–0.86 + hedge em 0.50 + qty=6 + sem stop
+
+**Sessão 1 — 07:32→09:32 (2h):**
+
+| # | Slug | Lado | Entry | secs | el_vel | Outcome | PnL |
+|---|---|---|---|---|---|---|---|
+| 1 | `…446100` | DOWN | 0.82 | 142 | 0.157 | WIN | +$1,08 |
+| 2 | `…447000` | DOWN | 0.84 | 134 | 0.085 | WIN | +$0,96 |
+| 3 | `…448800` | UP  | 0.84 | 110 | 0.100 | WIN | +$0,96 |
+| 4 | `…452400` | DOWN | 0.86 | 168 | 0.179 | WIN | +$0,84 |
+| 5 | `…452700` | DOWN | 0.83 | 177 | 0.114 | WIN | +$1,02 |
+
+**Sessão 1: 5 WIN | 0 HEDGE | WR 100% | PnL = +$4,86**
+
+**Sessão 2 — 09:32→em andamento:**
+
+| # | Slug | Lado | Entry | secs | el_vel | Outcome | PnL |
+|---|---|---|---|---|---|---|---|
+| 6 | `…453900` | UP  | 0.84 | 176 | 0.119 | WIN | +$0,96 |
+| 7 | `…454200` | UP  | 0.82 | 180 | 0.216 | WIN | +$1,08 |
+| 8 | `…455700` | UP  | 0.84 | 166 | 0.106 | WIN_HEDGE | -$4,14 |
+| 9 | `…458700` | DOWN | 0.82 | 169 | 0.122 | WIN | +$1,08 |
+
+**Sessão 2: 3 WIN | 1 WIN_HEDGE | WR 75% | PnL = -$1,02**
+
+**Acumulado EE standalone: 9 trades | 8 WIN | 1 WIN_HEDGE | WR 88,9% | PnL = +$3,84 | avg +$0,43/trade**
+
+**Análise WIN_HEDGE (trade 8):**
+- Slug `…455700`: UP entry 0.84 (secs=166), el_vel=0.106
+- EL (UP) colapsou para 0.21 em secs=51 → hedge ativou: comprou DOWN a 0.85
+- DOWN venceu: pnl_entrada = (0–0.84)×6 = –$5,04; pnl_hedge = (1,0–0,85)×6 = +$0,90
+- Total = **–$4,14** — evento único eliminou toda a sessão 2 e $0,72 do ganho da sessão 1
+
+**Custo do WIN_HEDGE com qty=6 vs qty=3:**
+- Com qty=3: saving vs REVERSAL puro ≈ +$4,43/evento; custo WIN_HEDGE ≈ –$2,07
+- Com qty=6: saving dobra; custo WIN_HEDGE também dobra → **–$4,14/evento**
+- WIN_HEDGE com qty=6 é 2× mais doloroso mas ainda melhor que REVERSAL puro (–$5,04)
+- Uma ocorrência elimina ~4 trades WIN completos
+
+**Comparativo monitor EE (qty=3) vs standalone (qty=6):**
+
+| Métrica | Monitor EE (qty=3) | Standalone (qty=6) |
+|---|---|---|
+| Trades | 11 | 9 |
+| WR | 90,9% | 88,9% |
+| PnL total | +$3,63 | +$3,84 |
+| avg/trade | +$0,33 | +$0,43 |
+| WIN_HEDGE count | 1 | 1 |
+| WIN_HEDGE impact | –$1,23 | –$4,14 |
+
+Nota: qty=6 tem avg/trade maior nos WIN, mas o impacto de um WIN_HEDGE é 3,4× maior.  
+Com base nessa coleta inicial, o risco de qty=6 requer atenção especial ao custo do hedge.
+
+### 9.6 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
 
