@@ -662,7 +662,77 @@ O critério `cont_ok` exige que o bid EL **nunca** caia abaixo de 0.70 em secs=1
 
 **Status:** manter stop em 0.65 + PP 0.88 conforme v2 implementado. Aguardar mais 30-50 trades do runner standalone para validar se o floor WIN permanece ≥ 0.68.
 
-### 9.9 Próximos relatórios
+### 9.9 Análise: faixa de entrada (floor/ceiling) — otimização ou risco? (2026-05-22)
+
+**Scripts:** `_sim_entry_any_price.py`, `_sim_no_stop_direction.py`, `_sim_stop_strategies.py`, `_sim_ceiling.py`  
+**Amostra:** 18 trades reais + logs de snapshot de 39 slugs com signal_ok  
+**Questão:** vale entrar em preços menores que 0.82 (ganhar mais ticks) ou maiores que 0.86 (mais oportunidades)?
+
+#### 9.9.1 Janela de tempo das entradas
+
+83% das entradas ocorrem em `secs 160–180` — entre **2:00 e 2:40** do início do candle de 5 minutos.  
+A detecção do EL (janela 181–240) + cont_ok (121–180) completa exatamente nessa janela.
+
+| Janela secs | n | % | Equivalente no candle |
+|---|---|---|---|
+| 160–180 | 11 | 61% | 2:00–2:20 do início |
+| 140–159 | 4 | 22% | 2:21–2:40 |
+| 120–139 | 1 | 6% | 2:41–3:00 |
+| < 120 | 2 | 11% | após 3:00 |
+
+#### 9.9.2 Entrar em qualquer preço com signal_ok (remover floor 0.82)
+
+Simulação: entrar no 1º snap com signal_ok, qualquer bid. Resultado com stop 0.65 + PP 0.88:
+
+| Estratégia | Trades | WR | PnL | avg/trade |
+|---|---|---|---|---|
+| **Atual (0.82–0.86)** | **18** | **94.4%** | **+$11.28** | **+$0.627** |
+| Qualquer bid + stop 0.65 | 39 | 71.8% | +$8.88 | +$0.228 |
+| Qualquer bid + stop 0.60 | 39 | 79.5% | +$11.82 | +$0.303 |
+| Qualquer bid + stop dyn. entry−0.18 | 39 | 79.5% | +$11.94 | +$0.306 |
+
+**Acurácia direcional dos 21 trades novos (sem stop, apenas direção):** 18/21 = **86% WR** — mesmo nível da estratégia atual. O problema não é o sinal direcional, é a **trajetória durante o hold**:
+
+| Faixa EP | WR direcional | Problema |
+|---|---|---|
+| 0.60–0.75 | 33% | trades revertem completamente |
+| 0.75–0.80 | 83% | min_bid cai abaixo de 0.65 mesmo nos vencedores |
+| 0.80–0.82 | 100% | ok |
+| **0.82–0.86** | **100%** | **← faixa atual** |
+
+Nos trades vencedores com EP em 0.75–0.80, o bid frequentemente cai para 0.45–0.61 antes de resolver — disparando o stop incorretamente em trades que terminariam como WIN. Nenhum nível de stop elimina esse problema sem também cortar os perdedores (que caem até 0.01).
+
+**Conclusão:** o floor 0.82 não é filtro direcional (acerto é 86% em qualquer faixa). É um **filtro de trajetória** — garante que o bid já está consolidado o suficiente para as oscilações normais de hold não dispararem o stop.
+
+#### 9.9.3 Subir o teto de 0.86 para 0.90 ou 0.92
+
+| Teto | Trades | Novos | WR | PnL | avg/trade |
+|---|---|---|---|---|---|
+| **0.86 (atual)** | **18** | **—** | **94.4%** | **+$11.28** | **+$0.627** |
+| 0.90 | 23 | +5 | 91.3% | +$10.50 | +$0.457 |
+| 0.92 | 24 | +6 | 91.7% | +$10.56 | +$0.440 |
+
+Apesar dos 5–6 trades novos renderem +$1.14/+$1.56, **7 trades existentes pioram** porque o bot entra mais caro (o 1º signal_ok estava acima de 0.86 e o teto mais alto faz entrar imediatamente em vez de esperar o bid cair):
+
+| Slug | EP atual | EP com teto 0.90 | Impacto |
+|---|---|---|---|
+| 446100 | 0.82 | 0.89 | +$0.54 → +$0.12 (−$0.42) |
+| 468900 | 0.82 | 0.88 | +$0.60 → +$0.24 (−$0.36) |
+| 465000 | 0.83 | 0.89 | +$0.84 → +$0.48 (−$0.36) |
+| 465900 | 0.85 | 0.90 | +$0.84 → +$0.54 (−$0.30) |
+
+Degradação nos 18 existentes: **−$1.92**. Ganho nos 5 novos: **+$1.14**. Saldo: **−$0.78**.
+
+O teto 0.86 funciona como **estratégia de execução** — quando signal_ok dispara com bid em 0.91, esperar o bid voltar para 0.82–0.86 captura o dip natural e garante entrada melhor. Subir o teto elimina esse "wait-for-dip".
+
+#### 9.9.4 Conclusão: faixa 0.82–0.86 está bem calibrada
+
+- **Floor 0.82**: filtro de trajetória. Abaixo disso, os vencedores oscilam tanto que o stop dispara incorretamente.
+- **Ceiling 0.86**: estratégia de execução. Acima disso, o bot entra no pico em vez de esperar o dip natural.
+- **Resultado**: qualquer alteração na faixa atual piora o PnL total com os dados disponíveis.
+- **Oportunidade real identificada**: o `el_vel` dos WIN_HEDGE (0.082 e 0.106) é menor que a média WIN (0.132). Gate `el_vel >= 0.11` eliminaria os 2 HEDGE sem custar WIN na amostra atual — mas n=2 é insuficiente para validar.
+
+### 9.10 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
 
