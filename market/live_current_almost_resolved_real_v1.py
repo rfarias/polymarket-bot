@@ -1716,6 +1716,11 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "cancelled_order_ids": _stale_cancelled,
                         "signal": signal,
                     })
+                    # Ordens in-flight (sendo executadas no momento do cancel) não
+                    # aparecem em get_open_orders() mas ainda podem preencher. O sleep
+                    # aqui dá tempo para o fill assentar na blockchain antes do
+                    # balance check — evita o double-entry onde ambos preenchem juntos.
+                    time.sleep(max(poll_secs * 2, 1.0))
 
                 # Guarda contra posição residual: se já há tokens na conta para este
                 # token_id, não entrar — significa que uma entrada anterior não foi
@@ -1835,6 +1840,19 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     _fill_at_stop = _fill_stop > 0 and _fill_bid > 0 and _fill_bid <= _fill_stop
                     _fill_event = "fill_on_invalid_signal" if (not _fill_signal_ok or _fill_at_stop) else "fill"
                     _append_jsonl(log_path, {"type": _fill_event, "ts": now, "session_id": session_id, "cancel_remainder": resp, "fill_bid": _fill_bid, "fill_signal_ok": _fill_signal_ok, "fill_at_stop": _fill_at_stop, "trade": _trade_summary(trade)})
+                    # Detecta double entry: ordem GTC obsoleta preencheu junto com a nova.
+                    # Threshold 1.5x: margem para fills parciais legítimos vs. double entry claro.
+                    _double_entry_threshold = _safe_float(trade.entry_qty_requested, 0.0) * 1.5
+                    if _double_entry_threshold > 0 and trade.entry_qty_filled > _double_entry_threshold:
+                        _append_jsonl(log_path, {
+                            "type": "double_entry_detected",
+                            "ts": now,
+                            "session_id": session_id,
+                            "entry_qty_requested": trade.entry_qty_requested,
+                            "entry_qty_filled": trade.entry_qty_filled,
+                            "excess_qty": round(trade.entry_qty_filled - _safe_float(trade.entry_qty_requested, 0.0), 4),
+                            "trade": _trade_summary(trade),
+                        })
                 elif trade.entry_order_style in ("patient_limit", "passive_limit"):
                     current_slug = str(current_item.get("slug") or "") if current_item else ""
                     signal_still_valid = (
