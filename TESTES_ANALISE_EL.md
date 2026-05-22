@@ -588,7 +588,81 @@ Trailing stop: dispara perto de resolução (secs 70→35) onde os bids caem bru
 Stop fixo 0.67 único (+$4,62 vs base) supera PP+stop atual (+$4,20 com 15 trades).  
 Com 18 trades, o stop fixo ainda domina — mas n ainda é pequeno para confirmar que nenhum WIN futuro terá min_bid < 0.67.
 
-### 9.8 Próximos relatórios
+### 9.8 Análise: min_bid nos logs market_monitor (pré-implementação EE standalone)
+
+**Script:** `analyze_ee_minbid_monitor.py`  
+**Logs:** 4 arquivos market_monitor (20260520_171127, 20260521_074834, 20260521_085611, 20260521_103036)  
+**Objetivo:** validar o nível de stop (0.67) numa amostra mais ampla — trades que o EE simulado teria feito antes do runner standalone existir.
+
+#### Resultados — 11 trades encontrados
+
+| # | Slug | Lado | EP | Outcome | min_bid | <0.67 | <0.65 | PnL |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `…368400` | UP | 0.86 | WIN | 0.860 | - | - | +0.42 |
+| 2 | `…369000` | DOWN | 0.83 | WIN | 0.800 | - | - | +0.51 |
+| 3 | `…372000` | UP | 0.83 | WIN | 0.830 | - | - | +0.51 |
+| 4 | `…374100` | UP | 0.84 | WIN | 0.840 | - | - | +0.48 |
+| 5 | `…376200` | UP | 0.83 | WIN | 0.810 | - | - | +0.51 |
+| **6** | **`…376500`** | **UP** | **0.86** | **WIN** | **0.580** | **SIM** | **SIM** | +0.42 |
+| 7 | `…376800` | UP | 0.83 | WIN | 0.830 | - | - | +0.51 |
+| 8 | `…384300` | UP | 0.82 | WIN | 0.820 | - | - | +0.54 |
+| 9 | `…384900` | UP | 0.83 | WIN | 0.830 | - | - | +0.51 |
+| 10 | `…386400` | DOWN | 0.85 | WIN | 0.850 | - | - | +0.45 |
+| **11** | **`…369900`** | **DOWN** | **0.82** | **WIN_HEDGE** | **0.560** | **SIM** | **SIM** | -1.23 |
+
+**WIN floor (10 trades):** 0.58 (slug 376500) — **1 WIN tocou abaixo de 0.67 e 0.65**  
+**WIN_HEDGE floor (1 trade):** 0.56 — também abaixo de 0.67 e 0.65
+
+#### Análise do caso anômalo — slug 376500 (WIN com min_bid = 0.58)
+
+Este mercado tem padrão completamente atípico em relação ao grupo:
+
+```
+secs=885→220  bid EL ≈ 0.49  (estável na metade por ~11 min)
+secs=188      bid oscila 0.36 → 0.74 → 0.81  (subida explosiva)
+secs=157      state=entry bid=0.86  (entrada)
+secs=125      bid oscila 0.88 → 0.63 → 0.68  (queda abrupta)
+secs=93       bid cai para 0.58  <-- min_bid aqui
+secs=93→62   bid se recupera 0.66 → 0.76 → 0.87 → 0.91 → 0.94
+secs=31       WIN  bid=0.98
+```
+
+**Características que diferem dos outros trades:**
+1. O bid EL estava em 0.49 por ~11 minutos (padrão de 50/50 prolongado)
+2. A subida de 0.49 → 0.86 ocorreu em apenas 2-3 polls (30s)
+3. Durante a janela secs=121-180 (usada pelo cont_ok), o bid oscilou entre 0.36 e 0.87
+4. O bid caiu até 0.58 em secs=93 antes de se recuperar completamente
+
+**Hipótese — cont_ok provavelmente teria bloqueado este trade:**  
+O critério `cont_ok` exige que o bid EL **nunca** caia abaixo de 0.70 em secs=121-180. Em secs=188, os polls mostram bid em 0.36 — bids que chegam ao final da janela 180 com valores muito baixos. O runner real provavelmente teria rejeitado este trade por cont_ok falso. A simulação do market_monitor pode usar critérios ligeiramente diferentes.
+
+#### Simulação de stop nos 11 trades do monitor
+
+| Stop | Ativa total | Ativa WIN | Ativa LOSS | WR | PnL | vs base |
+|---|---|---|---|---|---|---|
+| 0.80 | 2 | 1 | 1 | 81.8% | +4.20 | +0.57 |
+| 0.67 | 2 | 1 | 1 | 81.8% | +3.42 | -0.21 |
+| 0.65 | 2 | 1 | 1 | 81.8% | +3.30 | -0.33 |
+| **base** | — | — | — | 90.9% | **+3.63** | — |
+
+**No monitor:** stop em qualquer nível é PIOR que a base — pois o stop corta o WIN 376500 (pnl ideal +0.42 → pnl stop = (0.67-0.86)×3 = -0.57) e o WIN_HEDGE (0.56 < 0.67 → (0.67-0.82)×3 = -0.45 vs hedge -1.23), resultando em ganho líquido menor.
+
+#### Conclusão consolidada (18 standalone + 11 monitor = 29 trades)
+
+| Grupo | n WIN | min_bid floor WIN | n LOSS | min_bid floor LOSS | Stop 0.67 seguro? |
+|---|---|---|---|---|---|
+| Standalone runner | 16 | **0.68** | 2 | 0.05/0.27 | **Sim** (0 WIN cortados) |
+| Market monitor | 10 | **0.58** (1 outlier) | 1 | 0.56 | **Não** (1 WIN cortado) |
+| **Combinado** | **26** | **0.58** | **3** | — | **Incerto** |
+
+**Achado principal:** o trade 376500 do monitor invalida a hipótese "stop 0.67 = 100% seguro". Porém:
+- Este trade provavelmente seria **filtrado pelo cont_ok** no runner real (bid oscilou <0.70 na janela 121-180)
+- O standalone runner (18 trades, critérios idênticos ao runner real) ainda mostra floor de 0.68 para WIN
+- A margem de segurança (0.68 - 0.67 = 1 tick) é estreita — confirmar com mais amostras
+
+**Status:** manter stop em 0.65 + PP 0.88 conforme v2 implementado. Aguardar mais 30-50 trades do runner standalone para validar se o floor WIN permanece ≥ 0.68.
+
+### 9.9 Próximos relatórios
 
 Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
 
