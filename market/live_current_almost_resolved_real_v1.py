@@ -77,6 +77,22 @@ def _append_jsonl(path: Path, row: dict) -> None:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Parâmetros Early Entry (EE) v2
+# ---------------------------------------------------------------------------
+EE_EL_MIN              = 0.55
+EE_CONT_MIN            = 0.70
+EE_VEL_MIN             = 0.08
+EE_ENTRY_LO            = 0.82
+EE_ENTRY_HI            = 0.86
+EE_MAX_ENTRY_SECS      = 180
+EE_MIN_ENTRY_SECS      = 30
+EE_STOP_LEVEL          = 0.65
+EE_PROFIT_PROTECT_BID  = 0.88
+EE_PROFIT_PROTECT_SECS = 70
+EE_HEDGE_THR           = 0.50
+
+
 def _build_log_dir() -> Path:
     ts = time.strftime("%Y%m%d_%H%M%S")
     return Path("logs") / f"current_almost_resolved_real_{ts}"
@@ -152,6 +168,10 @@ class LiveCurrentAlmostResolvedTradeState:
     redeem_attempted_at: float = 0.0
     redeem_required: bool = False
     last_reason: Optional[str] = None
+    hedge_token_id: Optional[str] = None
+    hedge_order_id: Optional[str] = None
+    hedge_price: float = 0.0
+    hedge_qty_filled: float = 0.0
 
     @property
     def remaining_position_qty(self) -> float:
@@ -360,6 +380,87 @@ class _EarlyLeaderTracker:
     def evict_old(self, current_slug: str) -> None:
         for slug in [k for k in self._by_slug if k != current_slug]:
             del self._by_slug[slug]
+
+
+class _EarlyLeaderTrackerEE:
+    """Rastreia EL por slug para a estratégia Early Entry — calcula el_vel e F3 (cont_ok).
+
+    Janelas:
+      secs 181-240: detecta qual lado lidera (early_leader, bid_240)
+      secs 121-180: verifica continuidade (cont_ok) e calcula el_vel
+    """
+
+    def __init__(self) -> None:
+        self._slug: Optional[str] = None
+        self._s240: list = []
+        self._s180: list = []
+        self.early_leader: Optional[str] = None
+        self.el_bid_240:   float = 0.0
+        self.el_bid_180:   float = 0.0
+        self.el_vel:       float = 0.0
+        self.cont_ok:      bool  = False
+
+    def update(self, slug: str, secs: Optional[int], up_bid: float, down_bid: float) -> None:
+        if secs is None:
+            return
+        if self._slug != slug:
+            self._reset(slug)
+        snap = {"secs": secs, "up_bid": up_bid, "down_bid": down_bid}
+        if 181 <= secs <= 240:
+            self._s240.append(snap)
+            self._compute_el()
+        elif 121 <= secs <= 180:
+            self._s180.append(snap)
+            self._compute_f3()
+
+    def _compute_el(self) -> None:
+        if not self._s240:
+            return
+        avg_up = sum(s["up_bid"]   for s in self._s240) / len(self._s240)
+        avg_dn = sum(s["down_bid"] for s in self._s240) / len(self._s240)
+        if avg_up >= EE_EL_MIN:
+            self.early_leader = "UP"
+            self.el_bid_240   = round(avg_up, 4)
+        elif avg_dn >= EE_EL_MIN:
+            self.early_leader = "DOWN"
+            self.el_bid_240   = round(avg_dn, 4)
+
+    def _compute_f3(self) -> None:
+        if not (self.early_leader and self._s180):
+            return
+        bids = [
+            s["up_bid"] if self.early_leader == "UP" else s["down_bid"]
+            for s in self._s180
+        ]
+        self.el_bid_180 = round(sum(bids) / len(bids), 4)
+        self.el_vel     = round(self.el_bid_180 - self.el_bid_240, 4)
+        self.cont_ok    = min(bids) >= EE_CONT_MIN
+
+    def _reset(self, slug: str) -> None:
+        self._slug        = slug
+        self._s240        = []
+        self._s180        = []
+        self.early_leader = None
+        self.el_bid_240   = 0.0
+        self.el_bid_180   = 0.0
+        self.el_vel       = 0.0
+        self.cont_ok      = False
+
+    @property
+    def signal_ok(self) -> bool:
+        return bool(self.early_leader and self.cont_ok and self.el_vel >= EE_VEL_MIN)
+
+    def state_dict(self) -> dict:
+        return {
+            "early_side":  self.early_leader,
+            "el_bid_240":  self.el_bid_240,
+            "el_bid_180":  self.el_bid_180,
+            "el_vel":      self.el_vel,
+            "f3_ok":       self.cont_ok,
+            "signal_ok":   self.signal_ok,
+            "n_s240":      len(self._s240),
+            "n_s180":      len(self._s180),
+        }
 
 
 def _is_match_status(status: Optional[str]) -> bool:
@@ -721,6 +822,30 @@ def _exit_reason(
         return "structural_stop"
     if not hold_winner_to_resolution and not trade.hold_to_resolution and now - trade.created_at >= cfg.max_hold_secs:
         return "timeout"
+    return None
+
+
+def _ee_exit_reason(
+    trade: LiveCurrentAlmostResolvedTradeState,
+    *,
+    el_bid: float,
+    opp_bid: float,
+    secs_to_end: Optional[int],
+) -> Optional[str]:
+    """Lógica de saída para trades early_entry (v2: stop 0.65, PP 0.88@secs<=70)."""
+    if el_bid <= 0 or trade.entry_price is None:
+        return None
+    if secs_to_end is not None and secs_to_end <= 35:
+        if el_bid >= 0.85:
+            return "ee_win"
+        if opp_bid >= 0.85:
+            return "ee_reversal"
+    if secs_to_end is not None and 36 <= secs_to_end <= EE_PROFIT_PROTECT_SECS and el_bid >= EE_PROFIT_PROTECT_BID:
+        return "ee_profit_protect"
+    if el_bid < EE_STOP_LEVEL:
+        return "ee_stop"
+    if el_bid < EE_HEDGE_THR and opp_bid > 0:
+        return "ee_hedge_gap"
     return None
 
 
@@ -1149,6 +1274,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     oracle_margin_exit_enabled = _env_bool("POLY_ORACLE_MARGIN_EXIT_ENABLED", True)
     oracle_margin_exit_bps = _env_float("POLY_ORACLE_MARGIN_EXIT_BPS", 2.0)
     oracle_margin_exit_secs = _env_int("POLY_ORACLE_MARGIN_EXIT_SECS", 30)
+    ee_enabled = _env_bool("EE_REAL_ENABLED", False)
+    ee_posts_enabled = _env_bool("EE_REAL_POSTS_ENABLED", False)
     session_dir = Path(log_dir) if log_dir else _build_log_dir()
     session_dir.mkdir(parents=True, exist_ok=True)
     log_path = session_dir / "current_almost_resolved_real.jsonl"
@@ -1202,6 +1329,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
             "session_id": session_id,
             "startup_orders": [o.as_dict() for o in startup_orders],
             "restored_trade": _trade_summary(restored_trade),
+            "ee_enabled": ee_enabled,
+            "ee_posts_enabled": ee_posts_enabled,
         },
     )
 
@@ -1229,6 +1358,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     _bid_history: dict[str, deque] = {}        # keyed "slug:SIDE", tracks leader buy price per poll
     _loser_bid_history: dict[str, deque] = {}  # keyed "slug:LOSER_SIDE", tracks loser buy price for scalp
     _el_tracker = _EarlyLeaderTracker(early_min=0.55, cont_min=0.70, strong_min=0.72)
+    _ee_tracker = _EarlyLeaderTrackerEE()
     started_at = time.time()
     _health_check_polls = max(1, int(60.0 / max(0.25, poll_secs)))
     _health_poll_counter = 0
@@ -1408,6 +1538,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 _el_dn = _safe_float((current_exec or {}).get("down_bid"), 0.0)
                 _el_tracker.update(_el_slug, current_secs, _el_up, _el_dn)
                 _el_tracker.evict_old(_el_slug)
+                _ee_tracker.update(_el_slug, current_secs, _el_up, _el_dn)
             _el_state = _el_tracker.state(_el_slug) if _el_slug else {}
 
             # Logar inversão forte ao detectar (uma vez por slug)
@@ -1469,6 +1600,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "bid_decel_gate": {"up": _decel_gate_up, "down": _decel_gate_down},
                 "loser_bid_tracker": _loser_bid_info,
                 "early_leader": _el_state,
+                "ee_tracker": _ee_tracker.state_dict() if ee_enabled else None,
             }
             _append_jsonl(log_path, snapshot)
             print(
@@ -1819,6 +1951,102 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         "signal": signal,
                     },
                 )
+
+            # Early Entry — bloco de entrada independente do sinal AR
+            if trade.mode == "idle" and ee_enabled and current_item and not counter_reversal_active:
+                _ee_up  = _safe_float((current_exec or {}).get("up_bid"), 0.0)
+                _ee_dn  = _safe_float((current_exec or {}).get("down_bid"), 0.0)
+                _ee_sl  = _ee_tracker.early_leader
+                _ee_bid = (_ee_up if _ee_sl == "UP" else _ee_dn) if _ee_sl else 0.0
+                if (
+                    _ee_tracker.signal_ok
+                    and current_secs is not None
+                    and EE_MIN_ENTRY_SECS <= current_secs <= EE_MAX_ENTRY_SECS
+                    and EE_ENTRY_LO <= _ee_bid <= EE_ENTRY_HI
+                ):
+                    _ee_event_slug = str(current_item.get("slug") or "")
+                    _ee_token_id   = _token_id_for_side(current_snap, _ee_sl)
+                    _ee_tick       = _tick_size_from_snap(current_snap, _ee_sl)
+                    _ee_stale = _cancel_open_orders_for_token(broker, _ee_token_id)
+                    if _ee_stale:
+                        _append_jsonl(log_path, {
+                            "type": "pre_entry_stale_cancel", "ts": now,
+                            "session_id": session_id, "source": "early_entry",
+                            "token_id": _ee_token_id, "cancelled_order_ids": _ee_stale,
+                        })
+                        time.sleep(max(poll_secs * 2, 1.0))
+                    _ee_balance = _token_balance_qty(broker, _ee_token_id)
+                    if _ee_balance > 0:
+                        _append_jsonl(log_path, {
+                            "type": "entry_blocked", "ts": now,
+                            "session_id": session_id,
+                            "reason": f"ee_pre_entry_balance_nonzero:{round(_ee_balance, 4)}",
+                            "source": "early_entry",
+                        })
+                    elif not _has_sufficient_collateral_for_entry(broker, entry_price=_ee_bid, qty=float(qty)):
+                        _append_jsonl(log_path, {
+                            "type": "entry_blocked", "ts": now,
+                            "session_id": session_id,
+                            "reason": "ee_insufficient_collateral",
+                            "source": "early_entry",
+                        })
+                    elif not ee_posts_enabled:
+                        # Shadow mode: loga sinal EE sem postar ordem real
+                        _append_jsonl(log_path, {
+                            "type": "ee_shadow_entry", "ts": now,
+                            "session_id": session_id,
+                            "slug": _ee_event_slug,
+                            "side": _ee_sl, "ep": round(_ee_bid, 4),
+                            "secs": current_secs,
+                            "el": _ee_tracker.state_dict(),
+                        })
+                        print(
+                            f"[EE_SHADOW] {_ee_sl}  ep={_ee_bid:.3f}  "
+                            f"vel={_ee_tracker.el_vel:+.3f}  secs={current_secs}"
+                        )
+                    else:
+                        _ee_signal = {
+                            "side": _ee_sl,
+                            "event_slug": _ee_event_slug,
+                            "entry_price": _ee_bid,
+                            "setup_variant": "early_entry",
+                            "stop_price": EE_STOP_LEVEL,
+                            "exit_price": EE_PROFIT_PROTECT_BID,
+                        }
+                        try:
+                            trade = _post_entry_order(
+                                broker,
+                                signal=_ee_signal,
+                                snap=current_snap,
+                                qty=qty,
+                                tick_size=_ee_tick,
+                                now=now,
+                                cfg=signal_cfg,
+                                entry_price_override=_ee_bid,
+                                order_style="direct_limit",
+                                aggressive_entry_fak=False,
+                            )
+                            _save_state(state_path, trade)
+                            _append_jsonl(log_path, {
+                                "type": "ee_real_entry", "ts": now,
+                                "session_id": session_id,
+                                "slug": _ee_event_slug,
+                                "side": _ee_sl, "ep": round(_ee_bid, 4),
+                                "secs": current_secs,
+                                "el": _ee_tracker.state_dict(),
+                                "trade": _trade_summary(trade),
+                            })
+                            print(
+                                f"[EE_REAL] ENTRADA {_ee_sl}  ep={_ee_bid:.3f}  "
+                                f"vel={_ee_tracker.el_vel:+.3f}  secs={current_secs}"
+                            )
+                        except Exception as _ee_exc:
+                            _append_jsonl(log_path, {
+                                "type": "ee_entry_error", "ts": now,
+                                "session_id": session_id,
+                                "error": f"{type(_ee_exc).__name__}: {_exception_message(_ee_exc)}",
+                                "slug": _ee_event_slug,
+                            })
 
             if trade.mode in ("pending_entry", "open_position", "exit_pending_confirm"):
                 trade = _sync_entry_order(broker, trade)
@@ -2196,7 +2424,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         oracle_margin_bps_threshold=oracle_margin_exit_bps,
                         oracle_margin_secs=oracle_margin_exit_secs,
                     )
-                    if _emerg_reason:
+                    if _emerg_reason and trade.setup_variant != "early_entry":
                         trade = _post_exit_order(
                             broker,
                             trade,
@@ -2207,29 +2435,220 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         )
                         _save_state(state_path, trade)
                         _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": _emerg_reason, "trade": _trade_summary(trade)})
-                    else:
-                        reason = _exit_reason(
-                            trade,
-                            bid_now=active_bid,
-                            tick_size=tick_size,
-                            now=now,
-                            secs_to_end=current_secs,
-                            signal=signal,
-                            cfg=signal_cfg,
-                            flatten_deadline_secs=flatten_deadline_secs,
-                            hold_winner_to_resolution=hold_winner_to_resolution,
-                        )
-                        if reason:
-                            trade = _post_exit_order(
-                                broker,
+                    elif trade.setup_variant == "early_entry":
+                        # EE v2 exit logic: stop 0.65, PP 0.88@secs<=70, win, reversal, hedge
+                        _ee_opp_side_now = "DOWN" if (trade.side or "UP") == "UP" else "UP"
+                        _ee_opp_bid_now  = _bid_for_side(current_exec, _ee_opp_side_now)
+                        # Verificar fill de hedge se pendente
+                        if trade.hedge_order_id and not trade.hedge_qty_filled and trade.hedge_token_id:
+                            _hbal = _token_balance_qty(broker, trade.hedge_token_id)
+                            if _hbal > 0:
+                                trade.hedge_qty_filled = _hbal
+                                trade.updated_at = now
+                                trade = _mark_awaiting_redeem(trade, now=now, reason="ee_hedge_filled_awaiting_redeem")
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "ee_hedge_filled", "ts": now,
+                                    "session_id": session_id,
+                                    "hedge_qty": round(_hbal, 6),
+                                    "hedge_price": trade.hedge_price,
+                                    "trade": _trade_summary(trade),
+                                })
+                                print(f"[EE_REAL] HEDGE_FILLED  qty={round(_hbal, 6)}  price={trade.hedge_price}")
+                        else:
+                            ee_reason = _ee_exit_reason(
                                 trade,
-                                exit_price=active_bid,
-                                now=now,
-                                reason=reason,
-                                min_limit_exit_qty=min_limit_exit_qty,
+                                el_bid=active_bid,
+                                opp_bid=_ee_opp_bid_now,
+                                secs_to_end=current_secs,
                             )
-                            _save_state(state_path, trade)
-                            _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": reason, "trade": _trade_summary(trade)})
+                            if ee_reason == "ee_win":
+                                trade = _mark_awaiting_redeem(trade, now=now, reason="resolution_win_awaiting_redeem")
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "ee_win", "ts": now, "session_id": session_id,
+                                    "el_bid": round(active_bid, 4), "secs": current_secs,
+                                    "trade": _trade_summary(trade),
+                                })
+                                print(f"[EE_REAL] WIN  el_bid={active_bid:.3f}  secs={current_secs}")
+                            elif ee_reason in ("ee_reversal", "ee_stop"):
+                                trade = _post_exit_order(
+                                    broker, trade, exit_price=active_bid, now=now,
+                                    reason=ee_reason, min_limit_exit_qty=min_limit_exit_qty,
+                                )
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "exit_posted", "ts": now, "session_id": session_id,
+                                    "reason": ee_reason, "trade": _trade_summary(trade),
+                                })
+                                print(f"[EE_REAL] {ee_reason.upper()}  el_bid={active_bid:.3f}  secs={current_secs}")
+                            elif ee_reason == "ee_profit_protect":
+                                trade = _post_exit_order(
+                                    broker, trade, exit_price=active_bid, now=now,
+                                    reason=ee_reason, min_limit_exit_qty=min_limit_exit_qty,
+                                )
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "exit_posted", "ts": now, "session_id": session_id,
+                                    "reason": ee_reason, "trade": _trade_summary(trade),
+                                })
+                                print(f"[EE_REAL] PROFIT_PROTECT  el_bid={active_bid:.3f}  secs={current_secs}")
+                            elif ee_reason == "ee_hedge_gap":
+                                _h_ep  = _safe_float(trade.entry_price, 0.0)
+                                _h_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                                _stop_pnl  = (active_bid - _h_ep) * _h_qty
+                                _hedge_pnl = (1.0 - _h_ep - _ee_opp_bid_now) * _h_qty
+                                if _hedge_pnl > _stop_pnl and _ee_opp_bid_now > 0 and _h_qty > 0:
+                                    _hedge_side = _ee_opp_side_now
+                                    _htok   = _token_id_for_side(current_snap, _hedge_side)
+                                    _htick  = _tick_size_from_snap(current_snap, _hedge_side)
+                                    _hprice = _clamp_limit_price(_ee_opp_bid_now, tick_size=_htick)
+                                    _hreq   = BrokerOrderRequest(
+                                        token_id=_htok, side="BUY", price=_hprice,
+                                        size=_h_qty, order_type="GTC",
+                                        market_slug=trade.event_slug, outcome=_hedge_side,
+                                        client_order_key=f"ee_hedge:{int(now)}:{_hedge_side}",
+                                    )
+                                    try:
+                                        _hord = broker.place_limit_order(_hreq)
+                                        trade.hedge_token_id = _htok
+                                        trade.hedge_order_id = _hord.order_id
+                                        trade.hedge_price    = _hprice
+                                        trade.updated_at     = now
+                                        trade.last_reason    = f"ee_hedge_posted:{_hedge_side}:{_hprice}"
+                                        _save_state(state_path, trade)
+                                        _append_jsonl(log_path, {
+                                            "type": "ee_hedge_posted", "ts": now,
+                                            "session_id": session_id,
+                                            "hedge_side": _hedge_side, "hedge_price": _hprice,
+                                            "stop_pnl": round(_stop_pnl, 4),
+                                            "hedge_pnl": round(_hedge_pnl, 4),
+                                            "trade": _trade_summary(trade),
+                                        })
+                                        print(f"[EE_REAL] HEDGE  opp={_hedge_side}  opp_bid={_ee_opp_bid_now:.3f}")
+                                    except Exception as _hg_exc:
+                                        trade = _post_exit_order(
+                                            broker, trade, exit_price=active_bid, now=now,
+                                            reason="ee_stop_hedge_fallback",
+                                            min_limit_exit_qty=min_limit_exit_qty,
+                                        )
+                                        _save_state(state_path, trade)
+                                        _append_jsonl(log_path, {
+                                            "type": "exit_posted", "ts": now,
+                                            "session_id": session_id,
+                                            "reason": "ee_stop_hedge_fallback",
+                                            "error": f"{type(_hg_exc).__name__}: {_exception_message(_hg_exc)}",
+                                            "trade": _trade_summary(trade),
+                                        })
+                                else:
+                                    trade = _post_exit_order(
+                                        broker, trade, exit_price=active_bid, now=now,
+                                        reason="ee_stop_hedge_gap",
+                                        min_limit_exit_qty=min_limit_exit_qty,
+                                    )
+                                    _save_state(state_path, trade)
+                                    _append_jsonl(log_path, {
+                                        "type": "exit_posted", "ts": now,
+                                        "session_id": session_id,
+                                        "reason": "ee_stop_hedge_gap",
+                                        "trade": _trade_summary(trade),
+                                    })
+                    else:
+                        # Verificar fill de hedge AR pendente
+                        if trade.hedge_order_id and not trade.hedge_qty_filled and trade.hedge_token_id:
+                            _hbal = _token_balance_qty(broker, trade.hedge_token_id)
+                            if _hbal > 0:
+                                trade.hedge_qty_filled = _hbal
+                                trade.updated_at = now
+                                trade = _mark_awaiting_redeem(trade, now=now, reason="ar_hedge_filled_awaiting_redeem")
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "ar_hedge_filled", "ts": now,
+                                    "session_id": session_id,
+                                    "hedge_qty": round(_hbal, 6),
+                                    "hedge_price": trade.hedge_price,
+                                    "trade": _trade_summary(trade),
+                                })
+                        else:
+                            reason = _exit_reason(
+                                trade,
+                                bid_now=active_bid,
+                                tick_size=tick_size,
+                                now=now,
+                                secs_to_end=current_secs,
+                                signal=signal,
+                                cfg=signal_cfg,
+                                flatten_deadline_secs=flatten_deadline_secs,
+                                hold_winner_to_resolution=hold_winner_to_resolution,
+                            )
+                            if reason:
+                                if reason == "mid_book_reversal" and active_bid < 0.50 and current_exec:
+                                    # bid cruzou 0.50 — calcular se hedge supera stop
+                                    _ar_opp_side = "DOWN" if (trade.side or "UP") == "UP" else "UP"
+                                    _ar_opp_bid  = _bid_for_side(current_exec, _ar_opp_side)
+                                    _ar_ep   = _safe_float(trade.entry_price, 0.0)
+                                    _ar_qty  = _safe_float(trade.entry_qty_filled, 0.0)
+                                    _ar_stop_pnl  = (active_bid - _ar_ep) * _ar_qty
+                                    _ar_hedge_pnl = (1.0 - _ar_ep - _ar_opp_bid) * _ar_qty if _ar_opp_bid > 0 else float("-inf")
+                                    if _ar_hedge_pnl > _ar_stop_pnl and _ar_opp_bid > 0 and _ar_qty > 0:
+                                        _ar_opp_tok  = _token_id_for_side(current_snap, _ar_opp_side)
+                                        _ar_opp_tick = _tick_size_from_snap(current_snap, _ar_opp_side)
+                                        _ar_hprice   = _clamp_limit_price(_ar_opp_bid, tick_size=_ar_opp_tick)
+                                        try:
+                                            _ar_hreq = BrokerOrderRequest(
+                                                token_id=_ar_opp_tok, side="BUY", price=_ar_hprice,
+                                                size=_ar_qty, order_type="GTC",
+                                                market_slug=trade.event_slug, outcome=_ar_opp_side,
+                                                client_order_key=f"ar_hedge:{int(now)}:{_ar_opp_side}",
+                                            )
+                                            _ar_hord = broker.place_limit_order(_ar_hreq)
+                                            trade.hedge_token_id = _ar_opp_tok
+                                            trade.hedge_order_id = _ar_hord.order_id
+                                            trade.hedge_price    = _ar_hprice
+                                            trade.updated_at     = now
+                                            trade.last_reason    = f"ar_hedge_posted:{_ar_opp_side}:{_ar_hprice}"
+                                            _save_state(state_path, trade)
+                                            _append_jsonl(log_path, {
+                                                "type": "ar_hedge_posted", "ts": now,
+                                                "session_id": session_id,
+                                                "hedge_side": _ar_opp_side, "hedge_price": _ar_hprice,
+                                                "stop_pnl": round(_ar_stop_pnl, 4),
+                                                "hedge_pnl": round(_ar_hedge_pnl, 4),
+                                                "trade": _trade_summary(trade),
+                                            })
+                                        except Exception as _ar_hg_exc:
+                                            trade = _post_exit_order(
+                                                broker, trade, exit_price=active_bid, now=now,
+                                                reason="mid_book_reversal_hedge_fallback",
+                                                min_limit_exit_qty=min_limit_exit_qty,
+                                            )
+                                            _save_state(state_path, trade)
+                                            _append_jsonl(log_path, {
+                                                "type": "exit_posted", "ts": now,
+                                                "session_id": session_id,
+                                                "reason": "mid_book_reversal_hedge_fallback",
+                                                "error": f"{type(_ar_hg_exc).__name__}: {_exception_message(_ar_hg_exc)}",
+                                                "trade": _trade_summary(trade),
+                                            })
+                                    else:
+                                        trade = _post_exit_order(
+                                            broker, trade, exit_price=active_bid, now=now,
+                                            reason="mid_book_reversal",
+                                            min_limit_exit_qty=min_limit_exit_qty,
+                                        )
+                                        _save_state(state_path, trade)
+                                        _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": "mid_book_reversal", "trade": _trade_summary(trade)})
+                                else:
+                                    trade = _post_exit_order(
+                                        broker,
+                                        trade,
+                                        exit_price=active_bid,
+                                        now=now,
+                                        reason=reason,
+                                        min_limit_exit_qty=min_limit_exit_qty,
+                                    )
+                                    _save_state(state_path, trade)
+                                    _append_jsonl(log_path, {"type": "exit_posted", "ts": now, "session_id": session_id, "reason": reason, "trade": _trade_summary(trade)})
 
             if trade.mode == "awaiting_redeem":
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
@@ -2272,7 +2691,11 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             _rdm_exit_price = 1.0
                         elif "resolution_loss" in _rdm_reason or (collateral_balance == 0 and _rdm_qty > 0):
                             _rdm_exit_price = 0.0
-                        _rdm_pnl = round((_rdm_exit_price - _rdm_ep) * _rdm_qty, 4) if _rdm_exit_price is not None and _rdm_ep > 0 and _rdm_qty > 0 else None
+                        if trade.hedge_token_id and _safe_float(trade.hedge_price) > 0:
+                            # EE hedge: net PnL = (1.0 - entry_price - hedge_price) * qty
+                            _rdm_pnl = round((1.0 - _rdm_ep - _safe_float(trade.hedge_price)) * _rdm_qty, 4) if _rdm_ep > 0 and _rdm_qty > 0 else None
+                        else:
+                            _rdm_pnl = round((_rdm_exit_price - _rdm_ep) * _rdm_qty, 4) if _rdm_exit_price is not None and _rdm_ep > 0 and _rdm_qty > 0 else None
                         _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "collateral_balance_usd": collateral_balance, "exit_price": _rdm_exit_price, "pnl_usd": _rdm_pnl, "trade": _trade_summary(trade)})
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
@@ -2344,6 +2767,79 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         )
                         _save_state(state_path, trade)
                         _append_jsonl(log_path, {"type": "awaiting_redeem", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "active_bid": active_bid, "trade": _trade_summary(trade)})
+                    elif active_bid > 0 and _safe_float(trade.stop_price, 0.0) > 0 and active_bid <= _safe_float(trade.stop_price, 0.0):
+                        # Bid abaixo do stop enquanto sem ordem de saída ativa — agir imediatamente
+                        # sem esperar exit_repost_secs. Calcular hedge vs stop.
+                        _pe_opp_side = "DOWN" if (trade.side or "UP") == "UP" else "UP"
+                        _pe_opp_bid  = _bid_for_side(current_exec, _pe_opp_side) if current_exec else 0.0
+                        _pe_ep   = _safe_float(trade.entry_price, 0.0)
+                        _pe_qty  = token_balance_qty
+                        _pe_stop_pnl  = (active_bid - _pe_ep) * _pe_qty
+                        _pe_hedge_pnl = (1.0 - _pe_ep - _pe_opp_bid) * _pe_qty if _pe_opp_bid > 0 else float("-inf")
+                        _pe_do_hedge  = (
+                            active_bid < 0.50
+                            and _pe_hedge_pnl > _pe_stop_pnl
+                            and _pe_opp_bid > 0
+                            and _pe_qty > 0
+                            and current_snap is not None
+                        )
+                        if _pe_do_hedge:
+                            _pe_opp_tok  = _token_id_for_side(current_snap, _pe_opp_side)
+                            _pe_opp_tick = _tick_size_from_snap(current_snap, _pe_opp_side)
+                            _pe_hprice   = _clamp_limit_price(_pe_opp_bid, tick_size=_pe_opp_tick)
+                            try:
+                                _pe_hreq = BrokerOrderRequest(
+                                    token_id=_pe_opp_tok, side="BUY", price=_pe_hprice,
+                                    size=_pe_qty, order_type="GTC",
+                                    market_slug=trade.event_slug, outcome=_pe_opp_side,
+                                    client_order_key=f"ar_hedge_pe:{int(now)}:{_pe_opp_side}",
+                                )
+                                _pe_hord = broker.place_limit_order(_pe_hreq)
+                                trade.hedge_token_id = _pe_opp_tok
+                                trade.hedge_order_id = _pe_hord.order_id
+                                trade.hedge_price    = _pe_hprice
+                                trade.exit_order_id  = None
+                                trade.updated_at     = now
+                                trade.last_reason    = f"pending_exit_ar_hedge_posted:{_pe_opp_side}:{_pe_hprice}"
+                                # Voltar para open_position para monitorar fill do hedge
+                                trade.mode = "open_position"
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "ar_hedge_posted", "ts": now,
+                                    "session_id": session_id,
+                                    "from": "pending_exit_stop_recheck",
+                                    "hedge_side": _pe_opp_side, "hedge_price": _pe_hprice,
+                                    "stop_pnl": round(_pe_stop_pnl, 4),
+                                    "hedge_pnl": round(_pe_hedge_pnl, 4),
+                                    "trade": _trade_summary(trade),
+                                })
+                            except Exception as _pe_hg_exc:
+                                trade = _post_exit_order(
+                                    broker, trade, exit_price=active_bid, now=now,
+                                    reason="stop_loss_pending_exit_recheck_hedge_fallback",
+                                    min_limit_exit_qty=min_limit_exit_qty,
+                                )
+                                _save_state(state_path, trade)
+                                _append_jsonl(log_path, {
+                                    "type": "exit_posted", "ts": now,
+                                    "session_id": session_id,
+                                    "reason": "stop_loss_pending_exit_recheck_hedge_fallback",
+                                    "error": f"{type(_pe_hg_exc).__name__}: {_exception_message(_pe_hg_exc)}",
+                                    "trade": _trade_summary(trade),
+                                })
+                        else:
+                            trade = _post_exit_order(
+                                broker, trade, exit_price=active_bid, now=now,
+                                reason="stop_loss_pending_exit_recheck",
+                                min_limit_exit_qty=min_limit_exit_qty,
+                            )
+                            _save_state(state_path, trade)
+                            _append_jsonl(log_path, {
+                                "type": "exit_posted", "ts": now,
+                                "session_id": session_id,
+                                "reason": "stop_loss_pending_exit_recheck",
+                                "trade": _trade_summary(trade),
+                            })
                     elif now - trade.updated_at >= exit_repost_secs:
                         trade = _post_exit_order(
                             broker,
