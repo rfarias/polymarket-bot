@@ -732,9 +732,77 @@ O teto 0.86 funciona como **estratégia de execução** — quando signal_ok dis
 - **Resultado**: qualquer alteração na faixa atual piora o PnL total com os dados disponíveis.
 - **Oportunidade real identificada**: o `el_vel` dos WIN_HEDGE (0.082 e 0.106) é menor que a média WIN (0.132). Gate `el_vel >= 0.11` eliminaria os 2 HEDGE sem custar WIN na amostra atual — mas n=2 é insuficiente para validar.
 
-### 9.10 Próximos relatórios
+### 9.10 Análise: STOP_LOSS — gap de execução, hedge e PP (2026-05-23)
 
-Acompanhar acumulado após 24h+ de coleta. Meta: 30–50 trades EE + 10+ would_enter para validação.
+**Scripts:** `_check_summary.py`, `_check_stops_trajectory.py`, `_check_stops_detail.py`  
+**Contexto:** runner v2 acumulou 43 trades fechados (19 WIN + 19 PP + 2 WIN_HEDGE + **3 STOP_LOSS**)
+
+#### Acumulado v2 (43 trades fechados)
+
+| Outcome | n | PnL parcial |
+|---|---|---|
+| WIN | 19 | — |
+| PROFIT_PROTECT | 19 | +$13.86 (exit 0.89–1.00) |
+| WIN_HEDGE | 2 | −$6.78 (da v1) |
+| STOP_LOSS | 3 | −$7.20 |
+| **Total** | **43** | **+$18.42** |
+
+**WR: 88.4% | avg +$0.428/trade**
+
+#### Gap de execução nos 3 STOP_LOSS
+
+O stop detecta `el_bid < 0.65` a cada poll (0.5s), mas o bid pode ter saltado para muito abaixo de 0.65 entre dois polls — o fill real é no bid atual, não em 0.65:
+
+| Slug | EP | Exit esperada (0.65) | Exit real | Gap | PnL real | PnL esperado |
+|---|---|---|---|---|---|---|
+| 495300 | 0.82 | 0.65 | **0.36** | −0.29 | −$2.76 | −$1.02 |
+| 500100 | 0.86 | 0.65 | **0.51** | −0.14 | −$2.10 | −$1.26 |
+| 502800 | 0.83 | 0.65 | **0.44** | −0.21 | −$2.34 | −$1.08 |
+
+Custo real dos 3 stops: **−$7.20** vs −$3.36 esperados. O gap de execução é o risco estrutural de stop em mercado com baixa liquidez — o bid já caiu antes do próximo poll.
+
+#### Hedge seria melhor que stop?
+
+No momento do crash, o `opp_bid` estava disponível (0.50–0.65). Análise comparativa:
+
+| Slug | opp_bid no crash | PnL stop | PnL hedge | Delta |
+|---|---|---|---|---|
+| 495300 | 0.65 (OK) | −$2.76 | −$2.82 | −$0.06 |
+| 500100 | 0.50 (OK) | −$2.10 | −$2.16 | −$0.06 |
+| 502800 | 0.57 (OK) | −$2.34 | −$2.40 | −$0.06 |
+
+**Hedge é marginalmente pior (−$0.06/trade).** O stop sai do EL a 0.36–0.51 (algum valor residual), enquanto o hedge assume EL vai a 0 e paga opp a 0.50–0.65. Adicionalmente, comprar opp requer abrir nova posição — o stop apenas vende o que já tem.
+
+Liquidez: o `opp_bid` a 0.50–0.65 indica liquidez razoável para compra, mas o sell-side no crash (vender EL a 0.36) é ainda mais limitado. Na prática, ambas as saídas têm risco de slippage — o stop tem ligeira vantagem por não abrir nova posição.
+
+#### PP com janela mais larga salvaria os stops?
+
+Trade 495300 chegou a **bid=0.94 em secs=109** — fora da janela PP atual (36–70). Testado o impacto de ampliar `PP_SECS`:
+
+| PP_SECS | PP disparou | PnL WIN+PP | vs atual |
+|---|---|---|---|
+| **70 (atual)** | **16/38** | **+$28.92** | — |
+| 90 | 33/38 | +$24.36 | −$4.56 |
+| 110 | 33/38 | +$21.42 | −$7.50 |
+| 130 | 35/38 | +$18.18 | −$10.74 |
+
+Ampliar PP_SECS para 110 salvaria o trade 495300 (+$3.48), mas cortaria prematuramente 17 trades WIN adicionais — custo de −$7.50 no portfólio total. **Não compensa.**
+
+Trades 500100 e 502800: sem proteção por PP em nenhuma janela (bid nunca atingiu 0.88).  
+Trade 502800: bid nunca superou o EP (0.83). Declínio imediato desde a entrada — nenhuma estratégia protege sem custo nos wins.
+
+#### Conclusão
+
+Os 3 STOP_LOSS são **perdas esperadas**, não evitáveis com o conjunto atual de ferramentas:
+- Hedge: levemente pior e mais complexo de executar
+- PP mais largo: salva 1 caso mas destrói +$7.50 em wins
+- Stop mais apertado: dispararia em WIN trades (floor de 0.68 na amostra)
+
+O gap de execução (fill a 0.36–0.51 em vez de 0.65) é o custo estrutural de operar stop-market em mercado de baixa liquidez. A configuração atual (stop 0.65 + PP secs<=70) permanece o melhor trade-off disponível.
+
+### 9.11 Próximos relatórios
+
+Acompanhar acumulado após 24h+ de coleta. Meta: 50+ trades EE para validar distribuição de outcomes.
 
 ---
 
