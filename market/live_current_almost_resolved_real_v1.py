@@ -1335,7 +1335,40 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     )
 
     if restored_trade.mode != "idle":
-        restored_trade = _restore_trade_from_broker(broker, restored_trade)
+        # Reconciliar awaiting_redeem imediatamente: tokens podem ter zerado enquanto runner estava parado
+        if restored_trade.mode == "awaiting_redeem" and restored_trade.token_id:
+            _su_bal = _token_balance_qty(broker, restored_trade.token_id)
+            _su_collateral = _collateral_balance_usd(broker)
+            if _is_flat_qty(_su_bal):
+                _su_ep  = _safe_float(restored_trade.entry_price, 0.0)
+                _su_qty = _safe_float(restored_trade.entry_qty_filled, 0.0)
+                _su_rsn = str(restored_trade.last_reason or "")
+                if "resolution_win" in _su_rsn:
+                    _su_exit = 1.0
+                elif "resolution_loss" in _su_rsn:
+                    _su_exit = 0.0
+                else:
+                    _su_exit = None
+                _su_pnl = round((_su_exit - _su_ep) * _su_qty, 4) if _su_exit is not None and _su_ep > 0 and _su_qty > 0 else None
+                _append_jsonl(log_path, {
+                    "type": "redeem_flat", "ts": time.time(), "session_id": session_id,
+                    "source": "startup_reconcile",
+                    "token_balance_qty": _su_bal, "collateral_balance_usd": _su_collateral,
+                    "exit_price": _su_exit, "pnl_usd": _su_pnl,
+                    "trade": _trade_summary(restored_trade),
+                })
+                _append_jsonl(log_path, {
+                    "type": "trade_closed", "ts": time.time(), "session_id": session_id,
+                    "source": "startup_reconcile",
+                    "side": restored_trade.side, "entry_price": _su_ep,
+                    "exit_price": _su_exit, "qty": _su_qty, "pnl_usd": _su_pnl,
+                    "entry_slug": restored_trade.event_slug,
+                    "last_reason": _su_rsn,
+                })
+                restored_trade = LiveCurrentAlmostResolvedTradeState()
+                _clear_state(state_path)
+        if restored_trade.mode != "idle":
+            restored_trade = _restore_trade_from_broker(broker, restored_trade)
         print("[RESTORED_CURRENT_ALMOST_RESOLVED_TRADE]", asdict(restored_trade))
         if restored_trade.mode == "idle":
             _clear_state(state_path)
@@ -2697,6 +2730,14 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         else:
                             _rdm_pnl = round((_rdm_exit_price - _rdm_ep) * _rdm_qty, 4) if _rdm_exit_price is not None and _rdm_ep > 0 and _rdm_qty > 0 else None
                         _append_jsonl(log_path, {"type": "redeem_flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "collateral_balance_usd": collateral_balance, "exit_price": _rdm_exit_price, "pnl_usd": _rdm_pnl, "trade": _trade_summary(trade)})
+                        _append_jsonl(log_path, {
+                            "type": "trade_closed", "ts": now, "session_id": session_id,
+                            "source": "redeem_flat",
+                            "side": trade.side, "entry_price": _rdm_ep,
+                            "exit_price": _rdm_exit_price, "qty": _rdm_qty, "pnl_usd": _rdm_pnl,
+                            "entry_slug": trade.event_slug,
+                            "last_reason": _rdm_reason,
+                        })
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
@@ -2739,6 +2780,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                                 "trade": _trade_summary(trade),
                             },
                         )
+                        _append_jsonl(log_path, {"type": "trade_closed", "ts": now, "session_id": session_id, "source": "resolution_loss_writeoff", "side": trade.side, "entry_price": _wo_ep, "exit_price": 0.0, "qty": _wo_qty, "pnl_usd": _wo_pnl, "entry_slug": trade.event_slug, "last_reason": str(trade.last_reason or "")})
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
@@ -2750,6 +2792,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 if exit_order is None:
                     if _is_flat_qty(token_balance_qty):
                         _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "exit_order": None, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                        _tc_ep = _safe_float(trade.entry_price, 0.0); _tc_xp = _safe_float(trade.exit_price_posted, 0.0); _tc_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                        _append_jsonl(log_path, {"type": "trade_closed", "ts": now, "session_id": session_id, "source": "flat", "side": trade.side, "entry_price": _tc_ep, "exit_price": _tc_xp if _tc_xp else None, "qty": _tc_qty, "pnl_usd": round((_tc_xp - _tc_ep) * _tc_qty, 4) if _tc_xp and _tc_ep and _tc_qty else None, "entry_slug": trade.event_slug, "last_reason": trade.last_reason})
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
@@ -2856,6 +2900,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                     status = str(getattr(exit_order, "status", "") or "").lower()
                     if _is_flat_qty(token_balance_qty) or trade.remaining_position_qty <= 0:
                         _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "exit_order": exit_order.as_dict(), "exit_status": status, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                        _tc_ep = _safe_float(trade.entry_price, 0.0); _tc_xp = _safe_float(trade.exit_price_posted, 0.0); _tc_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                        _append_jsonl(log_path, {"type": "trade_closed", "ts": now, "session_id": session_id, "source": "flat", "side": trade.side, "entry_price": _tc_ep, "exit_price": _tc_xp if _tc_xp else None, "qty": _tc_qty, "pnl_usd": round((_tc_xp - _tc_ep) * _tc_qty, 4) if _tc_xp and _tc_ep and _tc_qty else None, "entry_slug": trade.event_slug, "last_reason": trade.last_reason})
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
@@ -2885,6 +2931,8 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
                 if _is_flat_qty(token_balance_qty):
                     _append_jsonl(log_path, {"type": "flat", "ts": now, "session_id": session_id, "token_balance_qty": token_balance_qty, "trade": _trade_summary(trade)})
+                    _tc_ep = _safe_float(trade.entry_price, 0.0); _tc_xp = _safe_float(trade.exit_price_posted, 0.0); _tc_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                    _append_jsonl(log_path, {"type": "trade_closed", "ts": now, "session_id": session_id, "source": "flat", "side": trade.side, "entry_price": _tc_ep, "exit_price": _tc_xp if _tc_xp else None, "qty": _tc_qty, "pnl_usd": round((_tc_xp - _tc_ep) * _tc_qty, 4) if _tc_xp and _tc_ep and _tc_qty else None, "entry_slug": trade.event_slug, "last_reason": trade.last_reason})
                     if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
                         _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                     trade = LiveCurrentAlmostResolvedTradeState()

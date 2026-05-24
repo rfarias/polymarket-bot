@@ -4,6 +4,7 @@ param(
     [int]$Qty = 10,
     [int]$RestartDelaySeconds = 5,
     [switch]$ArmReal,
+    [switch]$ArmEE,
     [switch]$Continuous,
     [int]$MaxCycles = 1
 )
@@ -25,6 +26,14 @@ while ($true) {
         $env:POLY_GUARDED_SHADOW_ONLY = "false"
         $env:POLY_GUARDED_REAL_POSTS_ENABLED = "true"
     }
+    if ($ArmEE) {
+        $env:EE_REAL_ENABLED       = "true"
+        $env:EE_REAL_POSTS_ENABLED = "true"
+    } else {
+        # Shadow mode: EE detecta e loga sinais mas não posta ordens reais
+        $env:EE_REAL_ENABLED       = "true"
+        $env:EE_REAL_POSTS_ENABLED = "false"
+    }
     $env:POLY_CURRENT_ALMOST_RESOLVED_REAL_ENABLED = "true"
     $env:POLY_CURRENT_ALMOST_RESOLVED_QTY = [string]$Qty
     $env:POLY_CURRENT_ALMOST_RESOLVED_POLL_SECS = [string]$PollSeconds
@@ -34,7 +43,7 @@ while ($true) {
     $env:POLY_CURRENT_ALMOST_RESOLVED_HYBRID_AGGRESSIVE_MAX_PRICE = "0.99"
     $env:POLY_CURRENT_ALMOST_RESOLVED_AGGRESSIVE_ENTRY_FAK = "true"
     $env:POLY_CURRENT_ALMOST_RESOLVED_HOLD_WINNER_TO_RESOLUTION = "true"
-    $env:POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED = "false"
+    $env:POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED = "true"
 
     Add-Content -Path $watchdogLog -Value ("[START] " + (Get-Date -Format s) + " cycle=" + $cycle + " run_seconds=" + $RunSeconds + " poll_seconds=" + $PollSeconds + " qty=" + $Qty)
     & $python "run_live_current_almost_resolved_real_v1.py" "--seconds" ([string]$RunSeconds)
