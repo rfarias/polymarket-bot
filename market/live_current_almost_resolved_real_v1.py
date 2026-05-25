@@ -2785,6 +2785,58 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
+                    elif not _loss_reason and _secs_since_res >= 120.0:
+                        # Saldo > dust mas sem motivo de perda e já passou 2 min:
+                        # a plataforma provavelmente já processou o redeem mas a API de
+                        # balance está desatualizada. Força um refresh on-chain e re-verifica.
+                        try:
+                            broker.update_balance_allowance(asset_type="CONDITIONAL", token_id=trade.token_id)
+                        except Exception:
+                            pass
+                        _fresh_bal = _token_balance_qty(broker, trade.token_id)
+                        _st_ep = _safe_float(trade.entry_price, 0.0)
+                        _st_filled_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                        _st_sold_qty = _safe_float(trade.exit_qty_filled, 0.0)
+                        _st_sold_price = _safe_float(trade.exit_price_posted, 0.0)
+                        _pct_remaining = _fresh_bal / max(0.000001, _st_filled_qty)
+                        _win_like = "win" in str(trade.last_reason or "").lower()
+                        _stale_exit_price = 1.0 if _win_like else None
+                        if _is_flat_qty(_fresh_bal) or _pct_remaining < 0.10:
+                            # Redeem confirmado (fresh balance zero) ou residual < 10% do total
+                            _st_residual = max(0.0, _st_filled_qty - _st_sold_qty)
+                            if _stale_exit_price is not None and _st_ep > 0 and _st_filled_qty > 0:
+                                _st_pnl = round(
+                                    (_st_sold_price - _st_ep) * _st_sold_qty
+                                    + (_stale_exit_price - _st_ep) * _st_residual,
+                                    4,
+                                )
+                            elif _st_ep > 0 and _st_sold_qty > 0 and _st_sold_price > 0:
+                                _st_pnl = round((_st_sold_price - _st_ep) * _st_sold_qty, 4)
+                            else:
+                                _st_pnl = None
+                            _append_jsonl(log_path, {
+                                "type": "stale_redeem_closed",
+                                "ts": now, "session_id": session_id,
+                                "token_balance_cached": token_balance_qty,
+                                "token_balance_fresh": _fresh_bal,
+                                "pct_remaining": round(_pct_remaining, 4),
+                                "secs_since_resolution": round(_secs_since_res, 1),
+                                "exit_price_inferred": _stale_exit_price,
+                                "pnl_usd": _st_pnl,
+                                "trade": _trade_summary(trade),
+                            })
+                            _append_jsonl(log_path, {
+                                "type": "trade_closed", "ts": now, "session_id": session_id,
+                                "source": "stale_redeem_closed",
+                                "side": trade.side, "entry_price": _st_ep,
+                                "exit_price": _stale_exit_price, "qty": _st_filled_qty,
+                                "pnl_usd": _st_pnl, "entry_slug": trade.event_slug,
+                                "last_reason": str(trade.last_reason or ""),
+                            })
+                            if trade.event_slug and _st_filled_qty > 0:
+                                _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
+                            trade = LiveCurrentAlmostResolvedTradeState()
+                            _clear_state(state_path)
 
             if trade.mode == "pending_exit":
                 token_balance_qty = _token_balance_qty(broker, trade.token_id)
