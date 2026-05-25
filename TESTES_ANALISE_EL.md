@@ -800,9 +800,81 @@ Os 3 STOP_LOSS são **perdas esperadas**, não evitáveis com o conjunto atual d
 
 O gap de execução (fill a 0.36–0.51 em vez de 0.65) é o custo estrutural de operar stop-market em mercado de baixa liquidez. A configuração atual (stop 0.65 + PP secs<=70) permanece o melhor trade-off disponível.
 
-### 9.11 Próximos relatórios
+### 9.11 Coleta estendida fim de semana — 122 trades (2026-05-22 a 2026-05-25)
 
-Acompanhar acumulado após 24h+ de coleta. Meta: 50+ trades EE para validar distribuição de outcomes.
+**Sessões:** 36 | **Trades fechados:** 122 (+ 3 abertas no encerramento)  
+**Script de análise:** `_check_results_full.py`
+
+#### Acumulado total
+
+| Outcome | n | PnL |
+|---|---|---|
+| WIN | 23 | — |
+| PROFIT_PROTECT | 70 | +$47.16 (exit 0.88–1.00) |
+| WIN_HEDGE | 2 | −$6.78 |
+| STOP_LOSS | 25 | ~−$43.56 |
+| REVERSAL | 2 | — |
+| **Total** | **122** | **+$8.76** |
+
+**WR: 76.2% | avg +$0.072/trade**
+
+#### Comparação por período
+
+| Período | Trades | WR | PnL | Taxa STOP | PP |
+|---|---|---|---|---|---|
+| 1ª amostra — qui 22/05 | 43 | 88.4% | +$18.42 | 7.0% (3) | 19 |
+| **Adicionais — sex-dom** | **79** | **69.6%** | **−$9.66** | **27.8% (22)** | 51 |
+| **Total** | **122** | **76.2%** | **+$8.76** | **20.5% (25)** | 70 |
+
+O período de fim de semana teve quase 4× mais stops e foi net negativo em −$9.66. Hipótese: mercado BTC comporta-se diferente aos fins de semana (menor volume institucional, mais volatilidade de curto prazo → mais reversões do EL antes da resolução).
+
+#### Gap de execução nos STOP_LOSS
+
+O fill real acontece no bid do próximo poll após cruzar 0.65, não em 0.65:
+
+| Faixa de gap | n trades |
+|---|---|
+| gap < 0.02 (fill próximo de 0.65) | 3 |
+| gap 0.02–0.05 | 3 |
+| gap 0.05–0.10 | 8 |
+| gap 0.10–0.20 | 8 |
+| gap > 0.20 | 3 |
+
+**Gap médio: 0.10** → custo médio real por stop ≈ −$1.74 vs −$1.14 esperado (1.53× o teórico).
+
+#### el_vel por outcome
+
+| Outcome | n | avg el_vel | min | max |
+|---|---|---|---|---|
+| WIN | 23 | 0.140 | 0.085 | 0.325 |
+| PROFIT_PROTECT | 70 | 0.140 | 0.081 | 0.327 |
+| STOP_LOSS | 25 | 0.122 | 0.080 | 0.278 |
+| WIN_HEDGE | 2 | 0.094 | 0.082 | 0.106 |
+| REVERSAL | 2 | 0.102 | 0.081 | 0.124 |
+
+STOP_LOSS têm el_vel médio 14% menor que WIN/PP (0.122 vs 0.140). A separação não é limpa mas cria oportunidade para gate.
+
+#### Simulação gate el_vel (122 trades)
+
+O **gate el_vel** é o threshold mínimo de crescimento do bid EL na janela secs 121–180 (`el_vel = bid_180 − bid_240`). Atualmente 0.08; valores maiores filtram sinais mais fracos:
+
+| Gate | Trades | WR | STOP | STOP% | PnL | avg/trade |
+|---|---|---|---|---|---|---|
+| 0.08 (atual) | 122 | 76.2% | 25 | 20.5% | +$8.76 | +$0.072 |
+| 0.10 | 82 | 80.5% | 14 | 17.1% | +$17.40 | +$0.212 |
+| 0.12 | 62 | 83.9% | 9 | 14.5% | +$20.46 | +$0.330 |
+| **0.13** | **51** | **86.3%** | **7** | **13.7%** | **+$22.38** | **+$0.439** |
+| 0.15 | 37 | 86.5% | 5 | 13.5% | +$16.50 | +$0.446 |
+
+Gate 0.13 triplicaria o avg/trade e aumentaria o PnL total em 2.6× — bloqueando 71 trades (58% das entradas). Gate 0.15 bloqueia 85 trades sem ganho adicional de WR.
+
+**Melhor candidato: gate 0.12–0.13.** Requer validação em mais dados antes de alterar o runner — pode haver overfitting a esse período de fim de semana. Próximo passo: coletar semana completa e comparar distribuição de el_vel por dia da semana.
+
+### 9.12 Próximos passos
+
+- Validar gate el_vel 0.12–0.13 em coleta de dias úteis (segunda–sexta)
+- Comparar taxa de STOP por dia da semana (fim de semana vs dia útil)
+- Acompanhar primeiros resultados do runner EE real (`market/live_early_entry_real_v1.py`) quando for ativado
 
 ---
 
