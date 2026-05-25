@@ -14,7 +14,7 @@ Categorias de sinal:
   C) el_only     = el detectado mas sem cont_ok
   D) no_signal   = apenas el_bid em range, sem EL detectado
 """
-import json, re, time, requests, statistics
+import json, re, time, requests, statistics, argparse
 from pathlib import Path
 from collections import defaultdict
 
@@ -91,7 +91,11 @@ def _simulate_exit(snaps_chrono: list, ep: float, side: str) -> tuple:
 # ---------------------------------------------------------------------------
 # 1. Varrer snapshots — construir candidatos e trajetorias
 # ---------------------------------------------------------------------------
-sessions = sorted(Path("logs").glob("ee_paper_*/ee_paper.jsonl"))
+_ap = argparse.ArgumentParser()
+_ap.add_argument('--logs', default='logs/ee_paper_*/ee_paper.jsonl',
+                 help='Glob pattern para logs EE (paper ou real)')
+_args = _ap.parse_args()
+sessions = sorted(Path(".").glob(_args.logs))
 
 # slug -> {"entry": snap, "snaps_after": [...], "ts_entry": float}
 slug_data: dict = {}

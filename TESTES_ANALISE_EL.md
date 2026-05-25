@@ -1109,6 +1109,170 @@ O risco maior é BTC *longe* do threshold (sobreextendido), não perto. Quando B
 
 ---
 
+### 9.15 Análise EE — dist_ptb trajectory, BTC momentum e universo completo (2026-05-25)
+
+**Scripts:** `_sim_dist_trajectory.py`, `_sim_btc_momentum.py`, `_sim_full_universe.py`  
+**Amostra:** 122 trades fechados (paper runner, fim de semana 2026-05-22 a 2026-05-25)  
+**Leitor unificado:** `_ee_log_reader.py` — suporta paper e runner real via `--logs`
+
+---
+
+#### 9.15.1 Trajetória da dist_ptb durante o hold (WIN vs STOP)
+
+**Script:** `_sim_dist_trajectory.py`  
+**Conceito:** `dist_ptb = abs(btc_spot - opening_reference_price)`. Positivo = BTC se afastando do threshold. Negativo = BTC voltando.
+
+| Outcome | n | dist_entry | dist_exit | delta_médio |
+|---|---|---|---|---|
+| WIN | 23 | 33.3 | 44.9 | **+11.6** |
+| PROFIT_PROTECT | 70 | 32.0 | 40.8 | **+8.8** |
+| STOP_LOSS | 25 | 44.3 | 38.5 | **-5.8** |
+
+**Padrão confirmado:** trades vencedores têm BTC se afastando do threshold (+8.8 a +11.6 USD). Stops têm BTC voltando em direção ao threshold (-5.8 USD). A direção do BTC durante o hold prediz o outcome melhor que qualquer filtro de entrada testado até aqui.
+
+**Limitação:** 16/25 stops mostram `delta=0` — entrada e saída caem no mesmo candle de 1min da Binance, sem resolução no preço. Seria necessário tick data para analisar esses casos.
+
+**Stops com el_vel < 0.13 vs >= 0.13:**
+- el_vel < 0.13: delta médio = -8.4 (BTC voltou acentuadamente)
+- el_vel >= 0.13: delta médio = +0.8 (BTC estável — stops por outro motivo)
+
+---
+
+#### 9.15.2 BTC momentum 3 minutos antes da entrada (paradoxo adverso)
+
+**Script:** `_sim_btc_momentum.py`  
+**Método:** 3 candles 1m Binance antes da entrada. `adverse_1m = True` se BTC vai na direção oposta ao lado EL (ex: BTC caindo para posição UP, ou subindo para DOWN).
+
+**Resultado principal:**
+
+| Grupo | n | WR | STOP% | PnL | avg/trade |
+|---|---|---|---|---|---|
+| BTC adverso 1m | 18 | **94.4%** | 5.6% | +$10.86 | **+$0.603** |
+| BTC favorável 1m | 104 | 73.1% | 23.1% | -$2.10 | -$0.020 |
+| todos | 122 | 76.2% | 20.5% | +$8.76 | +$0.072 |
+
+**Paradoxo adverso:** entrar com BTC indo contra o lado EL é *melhor*, não pior. Interpretação: o orderbook EL se mantém forte (bid 0.82-0.86) mesmo com pressão de spot contrária → sinal de convicção mais forte. Só 1/25 stops tinha BTC adverso — praticamente todos os stops ocorrem com BTC *favorável*.
+
+**Efeito simétrico (UP e DOWN):**
+- UP adverso (BTC caindo, d1m_avg = -9.9): n=8, WR=100%, avg=+$0.630
+- DOWN adverso (BTC subindo, d1m_avg = +9.4): n=10, WR=90%, avg=+$0.582
+
+**Gate de volatilidade (range_3m_usd < X):**
+
+| Gate | n | WR | STOP% | avg/trade | bloqueados |
+|---|---|---|---|---|---|
+| < 50 | 61 | 80.3% | 16.4% | +$0.218 | 61 |
+| < 80 | 95 | 78.9% | 17.9% | +$0.149 | 27 |
+| < 100 | 104 | 77.9% | 19.2% | +$0.125 | 18 |
+| base | 122 | 76.2% | 20.5% | +$0.072 | 0 |
+
+**Combinações chave (122 trades reais):**
+
+| Cenário | n | WR | avg/trade |
+|---|---|---|---|
+| el_vel >= 0.13 | 51 | 86.3% | +$0.439 |
+| el_vel >= 0.13 + range_3m < 100 | 43 | 86.0% | +$0.427 |
+| el_vel >= 0.13 + favorável_3m | 48 | 85.4% | +$0.438 |
+| el_vel >= 0.12 + favorável_3m + rng < 100 | 47 | 85.1% | +$0.416 |
+
+---
+
+#### 9.15.3 Simulação do universo completo (440 candidatos)
+
+**Script:** `_sim_full_universe.py`  
+**Método:** Varre todos os snapshots paper (não só trades reais do runner). Detecta primeiro snap com el_bid em [0.82, 0.86] em secs [30, 180]. Simula saída com lógica real (stop 0.65, PP 0.88 @ secs 36-70, WIN <= 35s). Busca BTC momentum via Binance klines histórico.
+
+**Categorias de sinal:**
+
+| Categoria | n candidatos | Definição |
+|---|---|---|
+| A_signal_ok | 100 | el_vel >= 0.08 + cont_ok (o que o runner aceita) |
+| B_cont_only | 149 | cont_ok mas el_vel < 0.08 |
+| C_el_only | 191 | EL detectado sem cont_ok |
+
+**Resultados por categoria (435 simulados com outcome):**
+
+| Categoria | n | WR | STOP% | avg/trade | adv1m | rng3m |
+|---|---|---|---|---|---|---|
+| A_signal_ok | 97 | 78.4% | 19.6% | +$0.108 | 12.4% | 58.6 |
+| B_cont_only | 148 | 73.0% | 25.7% | -$0.019 | 29.1% | 77.9 |
+| C_el_only | 190 | 75.3% | 23.2% | +$0.032 | 39.5% | 42.6 |
+| **TOTAL** | **435** | **75.2%** | **23.2%** | **+$0.032** | — | — |
+
+**Por faixa el_vel (universo completo):**
+
+| Faixa | n | WR | STOP% | avg/trade |
+|---|---|---|---|---|
+| < 0.0 | 101 | 78.2% | 19.8% | +$0.110 |
+| [0.0, 0.04) | 79 | 77.2% | 21.5% | -$0.002 |
+| [0.04, 0.06) | 44 | 72.7% | 27.3% | +$0.044 |
+| [0.06, 0.08) | 60 | 78.3% | 20.0% | +$0.114 |
+| **[0.08, 0.10)** | **32** | **68.8%** | **28.1%** | **-$0.141** |
+| **[0.10, 0.13)** | **39** | **64.1%** | **30.8%** | **-$0.343** |
+| >= 0.13 | 80 | 76.2% | 23.8% | +$0.148 |
+
+**Zona perigosa el_vel [0.08, 0.13):** pior performance de todas as faixas (-$0.343 avg). O gate 0.13 efetivamente "pula" essa zona ruim — os primeiros snaps com el_bid em range capturam el_vel antes da janela EL ter convergido completamente.
+
+**Paradoxo adverso por categoria (universo completo):**
+
+| Grupo | n | WR | avg/trade |
+|---|---|---|---|
+| [A] adverso_1m | 12 | **91.7%** | **+$0.545** |
+| [A] favorável_1m | 85 | 76.5% | +$0.046 |
+| [B] adverso_1m | 43 | **81.4%** | **+$0.066** |
+| [B] favorável_1m | 105 | 69.5% | -$0.053 |
+| [C] adverso_1m | 75 | 72.0% | **-$0.063** ← inverte sem cont_ok |
+| [C] favorável_1m | 115 | 77.4% | +$0.094 |
+
+**O efeito adverso depende de cont_ok.** Sem confirmação EL (categoria C), o paradoxo inverte — adverso piora. Com cont_ok (A e B), adverso sempre melhora.
+
+**Melhores combinações no universo completo:**
+
+| Cenário | n | WR | STOP% | avg/trade |
+|---|---|---|---|---|
+| base (qualquer el_bid em range) | 435 | 75.2% | 23.2% | +$0.032 |
+| el_vel >= 0.08 (signal_ok) | 97 | 78.4% | 19.6% | +$0.108 |
+| el_vel >= 0.13 | 80 | 76.2% | 23.8% | +$0.148 |
+| range_3m < 80 | 348 | 76.1% | 22.4% | +$0.059 |
+| **el_vel >= 0.08 + range_3m < 80** | **77** | **81.8%** | **16.9%** | **+$0.218** |
+| el_vel >= 0.08 + adverso_1m | 12 | 91.7% | 8.3% | +$0.545 |
+| el_vel >= 0.13 + range_3m < 80 | 64 | 78.1% | 21.9% | +$0.180 |
+
+**Gate mais robusto identificado:** `el_vel >= 0.08 + range_3m < 80` — 77 trades, WR 81.8%, avg +$0.218. Mais volume que o gate 0.13 puro (80 trades com avg menor +$0.148) e resistente ao período de fim de semana.
+
+---
+
+#### 9.15.4 Leitor unificado e testes nos logs do runner real
+
+**Arquivo:** `_ee_log_reader.py`  
+Detecta automaticamente paper vs real pelos tipos de registro:
+- Paper: `ee_paper_entry` / `ee_paper_closed` (pnl em `r['ee']['pnl']`)
+- Real: `ee_real_entry` / `ee_real_closed` (pnl em `r['pnl']` direto)
+
+Todos os 4 scripts de análise aceitam `--logs` para apontar para logs do runner real:
+
+```bash
+# Paper (padrão):
+python _sim_dist_ptb_retro.py
+python _sim_dist_trajectory.py
+python _sim_btc_momentum.py
+python _sim_full_universe.py
+
+# Runner real (no PC do runner):
+python _sim_dist_ptb_retro.py  --logs "logs/ee_real_*/ee_real.jsonl"
+python _sim_dist_trajectory.py --logs "logs/ee_real_*/ee_real.jsonl"
+python _sim_btc_momentum.py    --logs "logs/ee_real_*/ee_real.jsonl"
+python _sim_full_universe.py   --logs "logs/ee_real_*/ee_real.jsonl"
+```
+
+**O que comparar ao rodar nos logs reais:**
+1. `_sim_btc_momentum.py`: confirmar paradoxo adverso (WR 94.4% adverso) em dias úteis com volume real
+2. `_sim_full_universe.py`: confirmar zona ruim [0.08, 0.13) e gate `el_vel >= 0.08 + range_3m < 80`
+3. `_sim_dist_trajectory.py`: confirmar delta positivo WIN, negativo STOP (pode ser mais limpo com menor latência do runner real)
+4. `_sim_dist_ptb_retro.py`: confirmar diferença stops (+44.3 USD) vs wins (+32-33 USD) em dias úteis
+
+---
+
 ## 10. Testes Pendentes (executar nos logs do runner real)
 
 > **No PC do runner real:** `git pull` e então executar os scripts abaixo.
@@ -1138,6 +1302,30 @@ Hipótese: EL estável em secs 200, bid >= 0.82, hold to resolution sem stop →
 ### TESTE E — Inversão de EL como sinal de entrada (script pendente)
 Criar `analyze_el_flip_signal.py`.  
 Hipótese: EL inverte em secs 180–121 com bid 0.60–0.72 → comprar novo líder, stop 3T, hold.
+
+### TESTE F — BTC momentum nos logs reais (confirmar paradoxo adverso)
+```bash
+python _sim_btc_momentum.py --logs "logs/ee_real_*/ee_real.jsonl"
+```
+Verificar: WR adverso 1m ainda ~90%+ em dias úteis? Confirma que o efeito não é artefato de fim de semana.
+
+### TESTE G — Universo completo nos logs reais (confirmar zona [0.08, 0.13))
+```bash
+python _sim_full_universe.py --logs "logs/ee_real_*/ee_real.jsonl"
+```
+Verificar: zona el_vel [0.08, 0.13) ainda piora nos dados reais? Gate `el_vel >= 0.08 + range_3m < 80` se mantém?
+
+### TESTE H — Trajetória dist_ptb nos logs reais
+```bash
+python _sim_dist_trajectory.py --logs "logs/ee_real_*/ee_real.jsonl"
+```
+Verificar: delta positivo WIN (+8 a +12 USD), negativo STOP (-5 USD) se confirma?
+
+### TESTE I — dist_ptb retrospectivo nos logs reais
+```bash
+python _sim_dist_ptb_retro.py --logs "logs/ee_real_*/ee_real.jsonl"
+```
+Verificar: diferença stops (~44 USD) vs wins (~32 USD) se mantém em dias úteis?
 
 ---
 

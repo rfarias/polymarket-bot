@@ -11,13 +11,13 @@ Para cada trade:
 Hipotese: STOP_LOSS = delta negativo (BTC voltou)
           WIN/PP    = delta positivo ou estavel
 """
-import json
 import re
 import time
 import requests
 import statistics
-from pathlib import Path
+import argparse
 from collections import defaultdict
+from _ee_log_reader import load_ee_trades
 
 BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
 TIMEOUT = 6
@@ -53,33 +53,23 @@ def _event_ts(slug: str) -> int | None:
 # ---------------------------------------------------------------------------
 # Leitura dos logs
 # ---------------------------------------------------------------------------
-sessions = sorted(Path('logs').glob('ee_paper_*/ee_paper.jsonl'))
+_ap = argparse.ArgumentParser()
+_ap.add_argument('--logs', default='logs/ee_paper_*/ee_paper.jsonl',
+                 help='Glob pattern para logs EE (paper ou real)')
+_args = _ap.parse_args()
 
 records = []
-for lp in sessions:
-    rows = [json.loads(l) for l in lp.read_text(encoding='utf-8').splitlines() if l.strip()]
-    entries = {r['slug']: r for r in rows if r.get('type') == 'ee_paper_entry'}
-    closed  = {r['slug']: r for r in rows if r.get('type') == 'ee_paper_closed'}
-
-    for slug, entry in entries.items():
-        cl = closed.get(slug)
-        if not cl:
-            continue
-        ee = cl.get('ee', {})
-        outcome = ee.get('outcome', '?')
-        if outcome in ('aberta', 'MISSED'):
-            continue
-
-        records.append({
-            'slug':       slug,
-            'ts_entry':   entry.get('ts', 0),
-            'ts_exit':    cl.get('ts', 0),
-            'ep':         entry.get('ep', 0),
-            'secs_entry': entry.get('secs', 0),
-            'el_vel':     entry.get('el', {}).get('el_vel', 0),
-            'outcome':    outcome,
-            'pnl':        ee.get('pnl', 0),
-        })
+for t in load_ee_trades(_args.logs):
+    records.append({
+        'slug':       t['slug'],
+        'ts_entry':   t['ts_entry'],
+        'ts_exit':    t['ts_exit'],
+        'ep':         t['ep'],
+        'secs_entry': t['secs'],
+        'el_vel':     t['el_vel'],
+        'outcome':    t['outcome'],
+        'pnl':        t['pnl'],
+    })
 
 n_total = len(records)
 print(f"\nTrades carregados: {n_total}")
