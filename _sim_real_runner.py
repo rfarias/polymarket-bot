@@ -219,8 +219,14 @@ if real_stops:
     paper_stops = [r for r in records if r['paper_outcome'] == 'STOP_LOSS']
     paper_gaps  = [round(0.65 - (r['ep'] + r['paper_pnl']/QTY), 3) for r in paper_stops]
     print(f"\n  STOP_LOSS comparison:")
-    print(f"    Paper stops: {len(paper_stops)}  avg_gap={sum(paper_gaps)/len(paper_gaps):.3f}")
-    print(f"    Real  stops: {len(real_stops)}   avg_gap={sum(gaps)/len(gaps):.3f}" if gaps else "")
+    if paper_gaps:
+        print(f"    Paper stops: {len(paper_stops)}  avg_gap={sum(paper_gaps)/len(paper_gaps):.3f}")
+    else:
+        print(f"    Paper stops: {len(paper_stops)}  (sem gaps)")
+    if gaps:
+        print(f"    Real  stops: {len(real_stops)}   avg_gap={sum(gaps)/len(gaps):.3f}")
+    else:
+        print(f"    Real  stops: {len(real_stops)}   (sem gaps com exit_p>0)")
 
 print(f"\n{'='*70}")
 print(f"  RESUMO EXECUTIVO")

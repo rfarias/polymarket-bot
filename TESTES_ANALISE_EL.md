@@ -1018,16 +1018,23 @@ FASE 2 — Simulação (concluída):
   [x] _sim_early_entry.py                   — EE com/sem stop, sem lookahead bias
   [x] _sim_early_entry_v2.py                — hedge em 0.50, filtros el_vel / spot / secs
 
-FASE 3 — Runner de teste (em andamento):
+FASE 3 — Runner de teste (concluída):
   [x] EE implementado em run_market_monitor.py
   [x] Bug de logging corrigido (_just_closed)
-  [ ] Coletar 24h+ de dados com EE ativo
-  [ ] Analisar: python analyze_monitor_pnl.py --all-logs (novo log com campos EE)
+  [x] 53 trades EE paper coletados (3 sessões, mai/2026)
+  [x] Analisado: WR=92.5%, PnL=+$29.04, ZERO stops
 
-FASE 4 — Validação e produção (futuro):
-  [ ] Comparar WR/PnL real vs simulação (~94% WR, ~$0.61/trade)
-  [ ] Implementar EXC.OPOSTO no runner real (bloquear AR contraditório)
-  [ ] Implementar gate range_15s se validado nos logs reais
+FASE 4 — Validação e produção (concluída em 2026-05-25):
+  [x] _sim_real_runner.py: runner real simulado vs paper → +$2.28 melhor
+  [x] EE real runner implementado (market/live_early_entry_real_v1.py)
+  [x] EE integrado ao AR runner (EE_REAL_ENABLED + EE_REAL_POSTS_ENABLED)
+  [x] Gates AR por variante implementados (ver Seção 13)
+  [x] EE real ativo com ordens reais desde 2026-05-25
+
+FASE 5 — Monitoramento e ajuste fino (em andamento):
+  [ ] Coletar 50+ trades EE real, comparar WR/PnL com paper (meta: ~90%+ WR)
+  [ ] Validar gates AR com novos dados (meta: PnL positivo em cada variante)
+  [ ] Avaliar gate range_15s nos logs reais do runner AR (Teste C)
   [ ] Avaliar EL flip signal (comprar reversão)
 ```
 
@@ -1042,10 +1049,93 @@ FASE 4 — Validação e produção (futuro):
 | `EE_VEL_MIN` | 0.08 | Velocidade mínima de crescimento do bid EL |
 | `EE_ENTRY_LO` | 0.82 | Faixa de entrada: mínimo |
 | `EE_ENTRY_HI` | 0.86 | Faixa de entrada: máximo |
-| `EE_HEDGE_THR` | 0.50 | Crossing que ativa hedge |
+| `EE_STOP_LEVEL` | 0.65 | Stop FAK quando el_bid < 0.65 |
+| `EE_PROFIT_PROTECT_BID` | 0.88 | PP GTC quando el_bid >= 0.88 e secs 36-70 |
+| `EE_PROFIT_PROTECT_SECS` | 70 | Janela de PP |
 | `EE_MAX_SECS` | 180 | Janela máxima de entrada |
-| `qty EE` | 6 shares | Equiparado ao runner real (2026-05-21) |
-| `qty AR normal` | 6 shares | Não alterar sem validação |
-| `entry_min AR` | 0.88 | Não alterar sem validação |
-| `stop AR` | 2T | Para EE, sem stop (hold to resolution) |
-| `range_15s gate` | 0.03 | Proposto; validar nos logs reais (Teste C) |
+| `EE_MIN_SECS` | 30 | Janela mínima de entrada |
+| `qty EE` | 6 shares | Não alterar sem validação |
+| `qty AR` | 6 shares | Não alterar sem validação |
+
+---
+
+## 13. Gates AR por Variante (implementado em 2026-05-25)
+
+### Contexto
+
+O runner AR acumulou -$37.65 em 140 trades históricos. A análise por variante revelou que as perdas se concentram em cenários específicos e evitáveis.
+
+Scripts: `_analyze_ar_gates.py`, `_analyze_variant_gates.py`  
+Dados: 142 trades cruzados (enter + flat/trade_closed/redeem_flat)
+
+### Resultados por Variante
+
+| Variante | n | WR | PnL | avg |
+|---|---|---|---|---|
+| `standard` | 101 | 73% | -$39.29 | -$0.389 |
+| `dual_rich_late_limit` | 29 | 28% | +$0.54 | +$0.019 |
+| `controlled_late_entry` | 10 | 80% | +$1.10 | +$0.110 |
+
+**`standard`** — problema central: entradas a `ep >= 0.97` têm risco assimétrico fatal. Win máximo = 6 × 0.01 = $0.12; loss quando mercado resolve errado = 6 × 0.97 = $5.82. O stop não executa quando o bid vai de 0.98 → 0 instantaneamente na resolução. Adicionalmente, `d_bps < 12` indica margem insuficiente vs o price-to-beat.
+
+**`dual_rich_late_limit`** — 19 de 29 trades são breakeven puro: entram a ep=0.99, saem a 0.99 (preço de saída máximo = preço de entrada). Travam o capital sem gerar lucro. Os 2 stops reais também foram a ep=0.99.
+
+**`controlled_late_entry`** — positivo sem gates adicionais. Manter.
+
+### Gates Implementados
+
+```python
+# em market/live_current_almost_resolved_real_v1.py
+# (logo antes de _post_entry_order)
+
+if variant == "standard":
+    if ep >= 0.97:       → entry_blocked  # risco catastrófico
+    if d_bps < 12.0:     → entry_blocked  # margem insuficiente
+
+if variant == "dual_rich_late_limit":
+    if ep >= 0.985:      → entry_blocked  # zero margem de lucro
+```
+
+### Impacto Histórico (simulado nos 142 trades)
+
+| | n | WR | PnL | avg |
+|---|---|---|---|---|
+| Sem gates (base) | 140 | 64% | -$37.65 | -$0.269 |
+| Com gates (mantidos) | 46 | 83% | +$0.29 | +$0.006 |
+| Bloqueados | 94 | — | -$37.94 | — |
+
+Os 94 trades bloqueados concentram 100% das perdas históricas.
+
+### Como rodar os testes do outro PC
+
+```bash
+# Logs EE paper estão em test_data/ee_paper/ (commitados no git)
+# Copiar para logs/ antes de rodar:
+mkdir -p logs
+cp -r test_data/ee_paper/ee_paper_* logs/
+
+# Testar EE paper
+python _check_results_full.py
+python _sim_real_runner.py
+
+# Testar AR runner real (requer logs/current_almost_resolved_real_*)
+python _check_results_full.py --ar
+python _analyze_ar_gates.py
+python _analyze_variant_gates.py
+```
+
+---
+
+## 14. Correção awaiting_redeem (2026-05-25)
+
+**Bug:** Quando o runner vendia parcialmente uma posição (ex: 5.98/6.0 tokens) e os 0.02 restantes iam para `awaiting_redeem`, o trade ficava preso para sempre se:
+- `token_balance_qty > dust_archive_qty (0.01)` → não é dust
+- `last_reason` não contém "resolution_loss" → o loss_writeoff_timeout (1h) nunca dispara
+
+**Fix:** Após 2 minutos em `awaiting_redeem` sem motivo de perda, o runner força um `update_balance_allowance` (refresh on-chain) e fecha o trade com `stale_redeem_closed` se:
+- O fresh balance é zero (redeem já processado, API estava atrasada), **ou**
+- O residual é < 10% do qty preenchido (write-off parcial mínimo)
+
+PnL calculado = porção vendida + residual estimado (1.0 para WIN inferred).
+
+Evento logado: `type: "stale_redeem_closed"` com `token_balance_cached`, `token_balance_fresh`, `pct_remaining`.
