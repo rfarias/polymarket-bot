@@ -1462,3 +1462,89 @@ python _analyze_variant_gates.py
 PnL calculado = porção vendida + residual estimado (1.0 para WIN inferred).
 
 Evento logado: `type: "stale_redeem_closed"` com `token_balance_cached`, `token_balance_fresh`, `pct_remaining`.
+
+---
+
+## 15. Simulação EL Flip — Inversão do Early Leader (2026-05-25)
+
+Script: `_sim_el_flip.py`  
+Dados: 860 slugs paper local (fim de semana 22-25/05) + 37 slugs shadow quinta-feira (test_data)
+
+### 15.1 Conceito
+
+Quando o EL original perde a liderança e o lado oposto assume com bid em [0.60, 0.72],
+entra-se no **novo líder** em vez do EL original. Complementa o EE: EE entra no EL
+estável (0.82-0.86), Flip entra na inversão (0.60-0.72). Não competem — slugs distintos.
+
+Frequência: 344/834 slugs com EL = **41% dos slugs têm inversão na faixa**.
+
+### 15.2 Resultados sem stop (hold mode) — 295 trades
+
+| Segmento | n | WR | avg/trade |
+|---|---|---|---|
+| **Base (todos)** | 295 | **81.0%** | **+$0.276** |
+| gap >= 0.35 (flip dominante) | 57 | **89.5%** | +$0.385 |
+| ep 0.69-0.72 (entrada mais cara) | 37 | **94.6%** | +$0.636 |
+| flip secs 180-121 | 105 | 83.8% | +$0.426 |
+| flip secs > 180 | 82 | 80.5% | +$0.279 |
+
+Breakdown de outcomes: 239 TP_WIN (+1.237 avg) vs 56 LOSS_RESOLVE (-3.826 avg).
+
+### 15.3 Comparação com stop 0.45 (parâmetros do overlay)
+
+| Stop | WR | stop% | avg/trade |
+|---|---|---|---|
+| Sem stop | 81.0% | 0% | **+$0.276** |
+| Stop=0.45 | 50.7% | 49.3% | +$0.067 |
+| Stop=0.30 | 62.8% | 37.2% | +$0.023 |
+
+**Conclusão**: stop causa 40% de falsos stops (trades que iriam para TP mas tocaram 0.45 antes).
+BTC oscila muito na faixa 0.40-0.70 antes de resolver. Stop prejudica sistematicamente.
+
+### 15.4 Filtro de secs — diferença vs overlay SOL/XRP
+
+| Janela de entrada | WR (no-stop) | avg |
+|---|---|---|
+| flip secs > 180 | 80.5% | +0.279 |
+| flip secs 180-121 | 83.8% | **+0.426** |
+| flip secs 120-61 | 82.0% | +0.303 |
+| flip secs 60-31 | 78.6% | +0.180 |
+| **flip secs <= 30** | **68.4%** | **-0.515** |
+
+**Importante**: o filtro `secs<=60` do overlay (para SOL/XRP) **piora** os resultados em BTC.
+WR cai para 74.5% vs 81.0% base. Inversões mais tardias têm menos tempo para atingir o TP=0.85.
+
+### 15.5 Shadow data (quinta-feira — dia útil)
+
+13 trades, WR 92.3%, avg +$1.052. Padrão weekday mais forte, consistente com análise EE.
+
+### 15.6 Comparação EE vs EL Flip
+
+| Estratégia | Candidatos | WR | avg/trade | Nota |
+|---|---|---|---|---|
+| EE (com stop) | 435 | ~82-87% | +$0.032 | bid 0.82-0.86, EL estável |
+| EL Flip (no-stop) | 344 | 81.0% | +$0.276 | bid 0.60-0.72, EL inverte |
+| EL Flip gap>=0.35 | 57 | 89.5% | +$0.385 | inversão dominante |
+
+### 15.7 Perfil de risco
+
+- Win: (0.85 - ep) × 6 ≈ +$1.20 por trade (ep médio ~0.65)
+- Loss: (0.00 - ep) × 6 ≈ -$3.90 por trade (catastrófico — 19% dos trades)
+- EV positivo apenas porque WR=81% supera a assimetria negativa
+
+### 15.8 Próximos passos
+
+- [ ] Validar gate gap>=0.35 em logs reais (runner do outro PC)
+- [ ] Confirmar padrão weekday em dados reais (meta: WR >= 85% com gap>=0.35)
+- [ ] Avaliar se ep 0.69-0.72 (WR 94.6%) representa "flips dominantes" que já confirmaram
+- [ ] Implementar como estratégia separada (runner flip) — não no EE runner atual
+
+```bash
+# Rodar simulação EL Flip
+python _sim_el_flip.py
+python _sim_el_flip.py --no-stop
+python _sim_el_flip.py --logs "logs/ee_real_*/ee_real.jsonl"
+
+# Testar com gap mais restritivo
+python _sim_el_flip.py --no-stop --flip-gap 0.20
+```
