@@ -875,6 +875,102 @@ Gate 0.13 triplicaria o avg/trade e aumentaria o PnL total em 2.6× — bloquean
 - Validar gate el_vel 0.12–0.13 em coleta de dias úteis (segunda–sexta)
 - Comparar taxa de STOP por dia da semana (fim de semana vs dia útil)
 - Acompanhar primeiros resultados do runner EE real (`market/live_early_entry_real_v1.py`) quando for ativado
+- Corrigir bug de prioridade do hedge no runner real (ver 9.13)
+
+---
+
+### 9.13 Simulação do Runner Real vs Paper (122 trades — fim de semana)
+
+**Script:** `_sim_real_runner.py`  
+**Data:** 2026-05-25  
+**Metodologia:** Replay dos snapshots dos 36 logs de paper, aplicando a lógica de saída exata do `live_early_entry_real_v1.py` (shadow mode).
+
+#### Resultado global
+
+| Modo | PnL | WR | avg/trade |
+|---|---|---|---|
+| Paper runner | +$8.76 | 76.2% (93/122) | +$0.072 |
+| Runner real (shadow sim.) | +$10.80 | 77.0% (94/122) | +$0.089 |
+| **Delta** | **+$2.04** | | **+$0.017** |
+
+Runner real seria **$2.04 melhor** que o paper nos mesmos 122 trades.
+
+#### Distribuição de outcomes
+
+| Outcome | Paper | Real (sim.) | Diferença |
+|---|---|---|---|
+| WIN | 23 | 7 | -16 |
+| PROFIT_PROTECT | 70 | 87 | +17 |
+| STOP_LOSS | 25 | 26 | +1 |
+| WIN_HEDGE | 2 | 0 | -2 |
+| REVERSAL | 2 | 2 | 0 |
+
+#### Trades alteradas (18 de 122)
+
+**Grupo A — 16 trades: WIN (paper) → PROFIT_PROTECT (real)**
+
+O runner real detecta el_bid >= 0.88 na janela PP (secs 36-70) e sai antecipadamente. O paper runner perdeu essa janela — provavelmente porque o EL tracker foi reiniciado por 1 poll (mudança de slug momentânea), zerando `early_leader`, e a condição de PP `el_bid >= 0.88` não pôde ser avaliada.
+
+- PnL médio paper (WIN): +$0.97/trade
+- PnL médio real (PP): +$0.80/trade  
+- Delta médio: -$0.17/trade × 16 = -$2.72 total
+
+Impacto: o runner real capta o pico do bid antes de uma possível queda, mas perde entre $0.06 e $0.66 por trade comparado ao WIN completo.
+
+**Grupo B — 2 trades: WIN_HEDGE (paper) → diferente (real)**
+
+| Slug | EP | Paper outcome | Paper PnL | Real outcome | Real PnL | Delta |
+|---|---|---|---|---|---|---|
+| 455700 | 0.840 | WIN_HEDGE | -$4.14 | PROFIT_PROTECT | +$0.24 | **+$4.38** |
+| 468000 | 0.860 | WIN_HEDGE | -$2.64 | STOP_LOSS | -$1.86 | **+$0.78** |
+
+- **455700:** bid chegou a 0.880 em secs=62 (janela PP). Runner real sai via PP a +$0.24. Paper runner (com EL tracker ativo) aciona hedge quando bid cai abaixo de 0.50 após o pico, encerrando a -$4.14.
+- **468000:** bid cai diretamente de >0.65 para 0.55 (abaixo do stop). Runner real: STOP em 0.55 = -$1.86. Paper: hedge a preço desfavorável = -$2.64.
+
+**Impacto total Grupo B:** real = **+$5.16** melhor que paper.
+
+#### Bug crítico identificado: hedge é código morto no runner real
+
+**Problema:** A prioridade 4 (hedge dinâmico) em `live_early_entry_real_v1.py` nunca é alcançada:
+
+```python
+# Prioridade 3: stop loss (el_bid < 0.65)  ← captura el_bid < 0.50 PRIMEIRO
+elif 0 < el_bid < EE_STOP_LEVEL:           # EE_STOP_LEVEL = 0.65
+    # stop
+
+# Prioridade 4: hedge (el_bid < 0.50)  ← CÓDIGO MORTO
+elif el_bid < EE_HEDGE_THR and opp_bid > 0:  # EE_HEDGE_THR = 0.50
+    # hedge — NUNCA chega aqui (P3 captura qualquer 0 < el_bid < 0.65 antes)
+```
+
+Qualquer el_bid entre 0 e 0.65 aciona o stop (P3) antes do hedge (P4). O hedge só seria alcançável se el_bid == 0 exatamente.
+
+**Impacto na prática (fim de semana):** Nenhum dano — PP disparou antes dos casos de hedge, resultando em PnL melhor. Mas em condições onde PP não puder disparar (bid não chega a 0.88 na janela 36-70), o runner real fará STOP em vez de hedge, potencialmente com resultado pior.
+
+**Fix sugerido:** Mover o bloco de hedge para ANTES do stop no runner real (`live_early_entry_real_v1.py` ~linhas 840-860):
+
+```python
+# Prioridade 3: gap abaixo de 0.50 — hedge dinâmico (MOVER PARA ANTES DO STOP)
+elif el_bid < EE_HEDGE_THR and opp_bid > 0:
+    stop_pnl  = (el_bid  - entry_price) * qty
+    hedge_pnl = (1.0 - entry_price - opp_bid) * qty
+    if hedge_pnl > stop_pnl:
+        # hedge
+    else:
+        # stop
+
+# Prioridade 4: stop loss convencional (el_bid entre 0.50 e 0.65)
+elif 0 < el_bid < EE_STOP_LEVEL:
+    # stop
+```
+
+Requer confirmação antes de implementar (alterar lógica de risco).
+
+#### Conclusão
+
+O runner real (`live_early_entry_real_v1.py`) em shadow mode **produziria +$2.04 (23%) a mais que o paper** nos 122 trades do fim de semana. O ganho vem principalmente da PP capturando picos antes de colapsos que o paper não capturou (+$5.16 nos 2 WIN_HEDGE → PP/STOP). As 16 trades WIN→PP resultam em -$2.72, mas ainda sim a PP é benéfica globalmente.
+
+O bug do hedge (prioridade invertida) não causou dano neste dataset, mas é um risco latente para cenários futuros onde PP não disponível.
 
 ---
 
