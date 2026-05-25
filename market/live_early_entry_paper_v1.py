@@ -28,6 +28,11 @@ from market.rest_5m_shadow_public_v5 import (
     _fetch_slot_state,
     _slot_snapshot,
 )
+from market.slug_discovery import fetch_event_by_slug
+from market.current_scalp_signal_v1 import (
+    fetch_external_btc_reference_v1,
+    fetch_binance_open_price_for_event_start_v1,
+)
 
 # ---------------------------------------------------------------------------
 # Parâmetros EE
@@ -263,6 +268,9 @@ def run_early_entry_paper_v1(
     started_at = time.time()
     _last_slug = ""
 
+    # cache do preço de abertura do candle (price to beat) — atualizado uma vez por slug
+    _open_ref: dict = {"slug": None, "price": None, "event_start_time": None}
+
     # acumuladores de sessão
     session_pnl    = 0.0
     session_wins   = 0
@@ -307,6 +315,16 @@ def run_early_entry_paper_v1(
                 ee.reset()
                 _last_slug = slug
 
+                # Busca o preço de abertura do candle (price to beat) para o novo slug
+                try:
+                    raw_event = fetch_event_by_slug(slug)
+                    mkt = (raw_event.get("markets") or [{}])[0] if raw_event else {}
+                    est = mkt.get("eventStartTime") or (raw_event.get("startTime") if raw_event else None)
+                    open_ref = fetch_binance_open_price_for_event_start_v1(est) if est else {}
+                    _open_ref = {"slug": slug, "price": open_ref.get("open_price"), "event_start_time": est}
+                except Exception:
+                    _open_ref = {"slug": slug, "price": None, "event_start_time": None}
+
             # --- Atualiza EL tracker ---
             elt.update(slug, secs, up_bid, down_bid)
 
@@ -322,15 +340,39 @@ def run_early_entry_paper_v1(
                 and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
             ):
                 ee.open_entry(el_side, el_bid, now, secs)
+
+                # Captura distância ao price to beat (apenas para logging — sem efeito na entrada)
+                btc_info: dict = {}
+                try:
+                    ref = fetch_external_btc_reference_v1()
+                    btc_spot = ref.get("reference_price")
+                    ptb      = _open_ref.get("price")
+                    if btc_spot and ptb:
+                        dist_usd = round(abs(btc_spot - ptb), 2)
+                        dist_bps = round(abs(btc_spot - ptb) / ptb * 10000, 2)
+                        btc_info = {
+                            "spot":      round(btc_spot, 2),
+                            "threshold": round(ptb, 2),
+                            "dist_usd":  dist_usd,
+                            "dist_bps":  dist_bps,
+                            "above":     btc_spot > ptb,
+                        }
+                    else:
+                        btc_info = {"spot": btc_spot, "threshold": ptb, "dist_usd": None, "dist_bps": None}
+                except Exception:
+                    btc_info = {"dist_usd": None, "dist_bps": None, "error": True}
+
                 _append_jsonl(log_path, {
                     "type": "ee_paper_entry", "ts": now,
                     "session_id": session_id, "slug": slug,
                     "side": el_side, "ep": round(el_bid, 4), "secs": secs,
                     "el": elt.state_dict(),
+                    "btc": btc_info,
                 })
+                dist_str = f"  dist_ptb={btc_info['dist_usd']}usd" if btc_info.get("dist_usd") is not None else ""
                 print(
                     f"[EE_PAPER] ENTRADA {el_side}  ep={el_bid:.3f}  "
-                    f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
+                    f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}{dist_str}"
                 )
 
             # --- Monitorar posição em entry ---

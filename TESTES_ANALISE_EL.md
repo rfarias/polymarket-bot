@@ -974,6 +974,104 @@ O bug do hedge (prioridade invertida) não causou dano neste dataset, mas é um 
 
 ---
 
+### 9.14 Simulação: opp_bid e dist_pp na entrada (2026-05-25)
+
+**Script:** `_sim_opp_gate.py`  
+**Contexto:** Observação do operador — ao usar manualmente a extensão com sinal EE, notou que em algumas entradas "verdes" o preço spot do BTC estava muito próximo do threshold de resolução (ex: BTC em $80.020, threshold em $79.990 = apenas $30 de margem com >1 min restante). Hipótese: pouca margem em dólares = risco maior de reversão cruzar o threshold.
+
+#### O que foi simulado (proxy no Polymarket)
+
+Por não ter o preço spot do BTC nos logs atuais, foram usados dois proxies disponíveis nos snapshots:
+
+- **opp_bid**: bid do lado oposto na entrada. Em mercado binário, `ep + opp_bid ≈ 1.0` — quanto maior o opp, mais "contestado" o mercado.
+- **dist_pp**: `0.88 - ep` = distância até o trigger de Profit Protect. Proxy imperfeito da "folga" de preço.
+
+#### Resultado: opp_bid NÃO discrimina STOP_LOSS
+
+```
+opp_bid médio por outcome:
+  WIN:          0.171
+  PP:           0.167
+  STOP_LOSS:    0.167   ← diferença de apenas -0.001
+  
+Diferença stops vs não-stops: -0.001 (irrelevante)
+```
+
+**Motivo estrutural:** em mercado binário, opp_bid é mecanicamente o complemento do ep (`opp ≈ 1 - ep - spread`). Se ep=0.82, opp≈0.19 por construção. Não há informação adicional — é redundante com o preço de entrada.
+
+#### Resultado: dist_pp > 0.03 tem valor marginal
+
+| Gate dist_pp > | n | WR | avg/trade | Bloqueados |
+|---|---|---|---|---|
+| base | 122 | 76.2% | +$0.072 | 0 |
+| 0.03 | 99 | 79.8% | **+$0.238** | 23 |
+| 0.04 | 68 | 76.5% | +$0.184 | 54 |
+| 0.05 | 36 | 72.2% | +$0.157 | 86 |
+
+`dist_pp > 0.03` equivale a "não entrar quando ep=0.86". Melhora avg de +$0.072 para +$0.238 bloqueando apenas 23 trades — os de entrada mais alta (mais próximos do PP trigger).
+
+#### Gates opp_bid < X não funcionam
+
+| Gate | n | avg | Problema |
+|---|---|---|---|
+| < 0.25 / < 0.22 / < 0.20 | 122 | +$0.072 | Todos passam — max opp na amostra é 0.19 |
+| < 0.18 | 84 | +$0.021 | **Piora** — bloqueou os ep=0.82 que eram bons |
+| < 0.16 | 25 | **-$0.672** | Catástrofe — sobram apenas os ruins |
+
+#### Melhor combinação encontrada
+
+| Cenário | n | WR | avg/trade |
+|---|---|---|---|
+| el_vel >= 0.13 | 51 | 86.3% | +$0.439 |
+| el_vel >= 0.13 + opp < 0.18 | 32 | **90.6%** | **+$0.512** |
+
+A combinação chega a 90.6% WR mas bloqueia 90/122 trades — volume insuficiente para validar sozinho.
+
+#### O que o operador realmente observou (conceito diferente — não simulado)
+
+A observação original era sobre a **distância em dólares entre o preço spot do BTC e o threshold de resolução** do contrato — exatamente o mesmo conceito que o almost_resolved já usa como gate principal.
+
+**Exemplo concreto:** BTC em $80.020, candle abre/resolve em $79.990 → apenas $30 de margem com >1 min restante. O sinal EL pode estar verde porque BTC cruzou o nível recentemente, mas quanto mais próximo do threshold, maior o risco de retorno.
+
+Esse conceito é fundamentalmente diferente dos proxies simulados acima (`opp_bid`, `dist_pp`):
+- É baseado no **gráfico de preço**, não no orderbook Polymarket.
+- A mesma distância em cents no orderbook (ep=0.84) pode corresponder a $15 ou $150 de distância no BTC, dependendo do momento do candle.
+- É sensível ao **tempo restante**: $30 de margem com 90s restantes é muito diferente de $30 com 10s restantes.
+
+#### Por que não foi possível simular ainda
+
+Os snapshots do paper runner (`ee_paper.jsonl`) não incluem o preço spot do BTC nem o opening reference price. Apenas registram `up_bid`, `down_bid`, `secs`.
+
+#### Requisitos para implementar esse filtro
+
+As funções já existem em `market/current_scalp_signal_v1.py` — são as mesmas do almost_resolved:
+
+```python
+from market.current_scalp_signal_v1 import (
+    fetch_external_btc_reference_v1,            # BTC spot atual (Binance + Coinbase, mediana)
+    fetch_binance_open_price_for_event_start_v1, # preço de abertura do candle (= price to beat)
+)
+```
+
+**Para adicionar ao paper runner EE (`live_early_entry_paper_v1.py`):**
+
+1. **Por slug (uma vez):** chamar `fetch_binance_open_price_for_event_start_v1(event_start_time)` para obter o `opening_reference_price` (threshold de resolução)
+2. **Na entrada:** chamar `fetch_external_btc_reference_v1()` para obter `reference_price` (BTC spot)
+3. **Calcular:** `dist_ptb_usd = abs(reference_price - opening_reference_price)`
+4. **Logar** no `ee_paper_entry`: campos `btc_spot`, `btc_threshold`, `dist_ptb_usd`, `dist_ptb_bps`
+5. **Gate candidato:** `dist_ptb_usd > X` — valor de X a determinar com dados (almost_resolved usa 35–100 USD dependendo do setup)
+
+**Nota:** `event_start_time` já está disponível no quase_resolvido via `fetch_event_by_slug`. O paper EE precisaria adicionar essa chamada uma vez por slug novo.
+
+#### Status e próximo passo
+
+- Valor: **potencialmente alto** — filtra entradas onde o sinal EL pode estar correto mas a margem de segurança no gráfico é mínima.
+- Risco de implementação: **baixo** — é um gate adicional, não altera lógica de saída.
+- Pré-requisito: **adicionar logging do preço spot e threshold** ao paper runner antes de poder testar.
+- Prioridade: **refinamento futuro**, após validar gate el_vel >= 0.13 em dias úteis.
+
+---
+
 ## 10. Testes Pendentes (executar nos logs do runner real)
 
 > **No PC do runner real:** `git pull` e então executar os scripts abaixo.
