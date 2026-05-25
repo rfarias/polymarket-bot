@@ -148,9 +148,72 @@ postar ordens reais no lado contrário, o que requer revisão de risk gates.
 
 ---
 
+## 4. Análise EE Runner Real (Early Entry)
+
+O EE runner está ativo desde 2026-05-25. Logs em `logs/ee_real_*/ee_real.jsonl`.
+
+### Rodar análise completa (one-shot)
+
+```powershell
+# Roda todos os scripts de simulação + commita resultados + envia ao PC de dev
+.\_run_real_analysis.ps1 -Push
+```
+
+O script verifica os logs, faz `git pull`, roda os 8 scripts abaixo, salva output
+em `analysis_results/real_analysis_<ts>.txt`, copia logs para `test_data/ee_real/`
+e faz commit + push.
+
+### Scripts individuais
+
+```powershell
+$LOGS = "logs/ee_real_*/ee_real.jsonl"
+
+# EL Flip — inversão do EL, entra no novo líder (bid 0.60-0.72)
+python _sim_el_flip.py --logs $LOGS
+python _sim_el_flip.py --logs $LOGS --no-stop          # sem stop = acuidade direcional pura
+
+# Universo completo de candidatos EE
+python _sim_full_universe.py --logs $LOGS
+
+# Estabilidade do bid antes da entrada (gate dip)
+python _sim_el_bid_stability.py --logs $LOGS --cat A
+
+# 3 gates de qualidade (dip, mono, opp)
+python _sim_3gates.py --logs $LOGS
+
+# Comparação bloquear vs esperar dip
+python _sim_dip_strategies.py --logs $LOGS
+
+# Paradoxo adverso BTC (cont_ok + BTC direction)
+python _sim_btc_momentum.py --logs $LOGS
+```
+
+### O que olhar nos resultados
+
+| Métrica | Alvo |
+|---|---|
+| WR base EE | >= 85% em dias úteis |
+| Gate el_vel >= 0.13 | WR >= 85%, n >= 30 trades |
+| EL Flip sem stop | WR >= 81% (paper); se > 85% com gap >= 0.35, avaliar implementação |
+| Dip gate (delta_30s < -0.04) | WR >= 87%, confirmar que não é só fim de semana |
+
+### Estrutura dos logs EE
+
+```
+logs/ee_real_YYYYMMDD_HHMMSS/
+    ee_real.jsonl
+```
+
+Tipos de evento relevantes:
+- `snapshot` — estado do mercado a cada poll (inclui `early_leader`, bids)
+- `ee_real_entry` — entrada EE executada
+- `ee_real_closed` — trade fechado (campos: `outcome`, `pnl`)
+
+---
+
 ## Estrutura dos logs esperada
 
-O runner real grava em:
+O runner real AR grava em:
 ```
 logs/current_almost_resolved_real_YYYYMMDD_HHMMSS/
     current_almost_resolved_real.jsonl
