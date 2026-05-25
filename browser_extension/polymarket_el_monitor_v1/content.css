@@ -1,0 +1,398 @@
+html.pm-el-monitor-right-dock-active body {
+  margin-right: var(--pm-el-monitor-dock-width, 300px) !important;
+  width: calc(100% - var(--pm-el-monitor-dock-width, 300px)) !important;
+}
+
+#pm-el-monitor-ext {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2147483646;
+  width: var(--pm-el-monitor-dock-width, 300px);
+  min-width: var(--pm-el-monitor-dock-width, 300px);
+  max-width: var(--pm-el-monitor-dock-width, 300px);
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+  box-sizing: border-box;
+  background: rgba(10, 16, 28, 0.97);
+  color: #e2eaf6;
+  border-radius: 0;
+  padding: 10px 12px;
+  font-family: Consolas, monospace;
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.4);
+  border-left: 1px solid rgba(99, 160, 220, 0.2);
+  cursor: default;
+  user-select: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  line-height: 1.35;
+  scrollbar-gutter: stable;
+}
+
+#pm-el-monitor-ext *,
+#pm-el-monitor-ext *::before,
+#pm-el-monitor-ext *::after {
+  box-sizing: border-box;
+}
+
+/* Header */
+#pm-el-monitor-ext .elm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+#pm-el-monitor-ext .elm-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7ab8f5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#pm-el-monitor-ext .elm-secs {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e2eaf6;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+
+/* Status badge */
+#pm-el-monitor-ext .elm-status {
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: 8px;
+  letter-spacing: 0.05em;
+}
+
+#pm-el-monitor-ext .elm-status-green {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.55);
+}
+
+#pm-el-monitor-ext .elm-status-orange {
+  background: rgba(249, 115, 22, 0.18);
+  color: #fdba74;
+  border: 1px solid rgba(249, 115, 22, 0.55);
+}
+
+#pm-el-monitor-ext .elm-status-yellow {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fde68a;
+  border: 1px solid rgba(234, 179, 8, 0.45);
+}
+
+#pm-el-monitor-ext .elm-status-gray {
+  background: rgba(100, 116, 139, 0.18);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.4);
+}
+
+#pm-el-monitor-ext .elm-status-error {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.42);
+}
+
+/* Detail line */
+#pm-el-monitor-ext .elm-detail {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+  min-height: 14px;
+}
+
+/* Bids strip */
+#pm-el-monitor-ext .elm-bids {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+#pm-el-monitor-ext .elm-bid-box {
+  flex: 1;
+  padding: 5px 6px;
+  border-radius: 6px;
+  text-align: center;
+  border: 1px solid rgba(99, 160, 220, 0.2);
+}
+
+#pm-el-monitor-ext .elm-bid-box.leader {
+  border-color: rgba(99, 160, 220, 0.6);
+  background: rgba(99, 160, 220, 0.1);
+}
+
+#pm-el-monitor-ext .elm-bid-label {
+  font-size: 9px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#pm-el-monitor-ext .elm-bid-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e2eaf6;
+  line-height: 1.2;
+}
+
+#pm-el-monitor-ext .elm-bid-box.leader .elm-bid-val {
+  color: #7ab8f5;
+}
+
+/* EL details section */
+#pm-el-monitor-ext .elm-section {
+  margin-bottom: 8px;
+  border: 1px solid rgba(99, 160, 220, 0.12);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+#pm-el-monitor-ext .elm-section-title {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #4a6fa5;
+  margin-bottom: 4px;
+}
+
+#pm-el-monitor-ext .elm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #94a3b8;
+  gap: 4px;
+}
+
+#pm-el-monitor-ext .elm-row-label {
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+#pm-el-monitor-ext .elm-row-val {
+  font-weight: 700;
+  color: #e2eaf6;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+#pm-el-monitor-ext .elm-row-val.ok {
+  color: #86efac;
+}
+
+#pm-el-monitor-ext .elm-row-val.warn {
+  color: #fde68a;
+}
+
+#pm-el-monitor-ext .elm-row-val.bad {
+  color: #fca5a5;
+}
+
+/* Criteria */
+#pm-el-monitor-ext .elm-criteria {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+#pm-el-monitor-ext .elm-criterion {
+  padding: 4px 7px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+#pm-el-monitor-ext .elm-criterion.ok {
+  background: rgba(34, 197, 94, 0.10);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+#pm-el-monitor-ext .elm-criterion.block {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+#pm-el-monitor-ext .elm-criterion-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+#pm-el-monitor-ext .elm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+#pm-el-monitor-ext .ok .elm-dot { background: #22c55e; }
+#pm-el-monitor-ext .block .elm-dot { background: #ef4444; }
+
+#pm-el-monitor-ext .elm-criterion-label {
+  color: #e2eaf6;
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+}
+
+#pm-el-monitor-ext .elm-criterion-value {
+  color: #94a3b8;
+  text-align: right;
+  white-space: nowrap;
+}
+
+#pm-el-monitor-ext .elm-criterion-detail {
+  margin-left: 11px;
+  margin-top: 1px;
+  font-size: 9px;
+  color: #4a6fa5;
+  overflow-wrap: anywhere;
+}
+
+/* Position section */
+#pm-el-monitor-ext .elm-position-section {
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+#pm-el-monitor-ext .elm-position-active {
+  border-color: rgba(249, 115, 22, 0.35);
+  background: rgba(249, 115, 22, 0.04);
+}
+
+#pm-el-monitor-ext .elm-pos-exit-badge {
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 5px;
+}
+
+#pm-el-monitor-ext .elm-pos-detail {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+#pm-el-monitor-ext .elm-pos-buttons {
+  display: flex;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+#pm-el-monitor-ext .elm-pos-buttons-sm {
+  margin-top: 4px;
+}
+
+#pm-el-monitor-ext .elm-btn-entry {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid rgba(99, 160, 220, 0.3);
+  border-radius: 5px;
+  background: #1a2535;
+  color: #7ab8f5;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: Consolas, monospace;
+  text-align: center;
+}
+
+#pm-el-monitor-ext .elm-btn-entry:hover {
+  background: #253347;
+}
+
+#pm-el-monitor-ext .elm-btn-entry.active {
+  background: rgba(99, 160, 220, 0.2);
+  border-color: rgba(99, 160, 220, 0.7);
+  color: #e2eaf6;
+}
+
+#pm-el-monitor-ext .elm-btn-entry-up.active {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #86efac;
+}
+
+#pm-el-monitor-ext .elm-btn-entry-dn.active {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+#pm-el-monitor-ext .elm-btn-clear {
+  flex: 1;
+  padding: 5px 6px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 5px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: Consolas, monospace;
+}
+
+#pm-el-monitor-ext .elm-status-red {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+}
+
+/* Actions */
+#pm-el-monitor-ext .elm-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+#pm-el-monitor-ext button {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.35;
+  font-family: Consolas, monospace;
+}
+
+#pm-el-monitor-ext .elm-btn-hide {
+  background: #1e2a3a;
+  color: #7ab8f5;
+  border: 1px solid rgba(99, 160, 220, 0.3);
+}
+
+#pm-el-monitor-ext .elm-btn-hide:hover {
+  background: #253347;
+}
+
+@media (max-width: 760px) {
+  html.pm-el-monitor-right-dock-active body {
+    margin-right: 0 !important;
+    width: 100% !important;
+  }
+  #pm-el-monitor-ext {
+    width: min(92vw, var(--pm-el-monitor-dock-width, 300px));
+    min-width: min(92vw, var(--pm-el-monitor-dock-width, 300px));
+    max-width: min(92vw, var(--pm-el-monitor-dock-width, 300px));
+  }
+}
