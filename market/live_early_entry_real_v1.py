@@ -12,8 +12,6 @@ Estratégia EE v2:
   - Stop loss:     sai por FAK se bid EL < 0.65
   - Profit protect: sai por GTC se bid EL >= 0.88 e 36 <= secs <= 70
   - WIN:           hold to resolution (awaiting_redeem)
-  - Hedge dinâmico: se bid EL cai < 0.50 (gap sobre o stop), calcula qual preserva
-                    mais capital — stop FAK ou comprar lado oposto.
 
 Shadow mode (sem -ArmReal / EE_REAL_POSTS_ENABLED=false):
   Loga o que faria mas não posta ordens reais.
@@ -51,7 +49,6 @@ EE_ENTRY_HI            = 0.86
 EE_STOP_LEVEL          = 0.65   # stop loss: sai por FAK se bid EL < 0.65
 EE_PROFIT_PROTECT_BID  = 0.88   # profit protect: sai por GTC se bid EL >= 0.88
 EE_PROFIT_PROTECT_SECS = 70     # profit protect: só ativa quando 36 <= secs <= 70
-EE_HEDGE_THR           = 0.50   # hedge: bid EL caiu abaixo do stop em gap
 EE_MAX_ENTRY_SECS      = 180
 EE_MIN_ENTRY_SECS      = 30
 
@@ -63,8 +60,7 @@ EE_MIN_ENTRY_SECS      = 30
 @dataclass
 class EarlyEntryTradeState:
     mode: str = "idle"
-    # idle | pending_entry | open_position | pending_exit
-    # awaiting_hedge_fill | awaiting_redeem
+    # idle | pending_entry | open_position | pending_exit | awaiting_redeem
     slug: Optional[str] = None
     side: Optional[str] = None
     token_id: Optional[str] = None
@@ -76,11 +72,6 @@ class EarlyEntryTradeState:
     exit_price_posted: float = 0.0
     exit_qty_filled: float = 0.0
     exit_reason: str = ""
-    # hedge fields
-    hedge_token_id: Optional[str] = None
-    hedge_order_id: Optional[str] = None
-    hedge_price: float = 0.0
-    hedge_qty_filled: float = 0.0
     # meta
     pnl: float = 0.0
     created_at: float = 0.0
@@ -149,11 +140,6 @@ def _is_flat_qty(qty: float, epsilon: float = 0.000001) -> bool:
 def _token_id_for_side(snap: dict, side: str) -> str:
     book = (snap.get("up") if side == "UP" else snap.get("down")) or {}
     return str(book.get("token_id") or "")
-
-
-def _opp_token_id_for_side(snap: dict, side: str) -> str:
-    opp = "DOWN" if side == "UP" else "UP"
-    return _token_id_for_side(snap, opp)
 
 
 def _bid_for_side(executable: Optional[dict], side: str) -> float:
@@ -434,7 +420,7 @@ def _post_ee_exit(
         trade.updated_at = now
         return trade
 
-    urgent = "stop" in reason or "reversal" in reason or "hedge_fallback" in reason
+    urgent = "stop" in reason or "reversal" in reason
     order_type = "FAK" if urgent else "GTC"
 
     tick_size = 0.001
@@ -475,65 +461,6 @@ def _post_ee_exit(
     except Exception as exc:
         trade.exit_order_id = None
         trade.last_reason = f"exit_post_failed:{reason}:{type(exc).__name__}:{exc}"
-    return trade
-
-
-def _post_ee_hedge(
-    broker,
-    trade: EarlyEntryTradeState,
-    *,
-    log_path: Path,
-    session_id: str,
-    snap: dict,
-    opp_bid: float,
-    now: float,
-    real_posts: bool,
-) -> EarlyEntryTradeState:
-    """Compra o lado oposto como hedge quando el_bid colapsa abaixo de 0.50."""
-    opp_side = "DOWN" if trade.side == "UP" else "UP"
-    opp_token_id = _opp_token_id_for_side(snap, trade.side or "UP")
-    qty = trade.entry_qty_filled or trade.entry_qty_requested
-
-    _append_jsonl(log_path, {
-        "type": "ee_real_hedge_posted",
-        "ts": now, "session_id": session_id, "slug": trade.slug,
-        "opp_side": opp_side, "opp_bid": round(opp_bid, 4),
-        "opp_token_id": opp_token_id, "qty": round(qty, 4),
-        "shadow": not real_posts,
-    })
-    print(f"[EE_REAL] HEDGE {opp_side}  opp_bid={opp_bid:.3f}  qty={qty:.2f}")
-
-    trade.hedge_token_id = opp_token_id
-    trade.hedge_price = round(opp_bid, 6)
-    trade.mode = "awaiting_hedge_fill"
-    trade.updated_at = now
-    trade.last_reason = f"hedge_posted:{opp_side}:{round(opp_bid, 4)}"
-
-    if not real_posts:
-        trade.hedge_qty_filled = qty   # shadow: assume fill imediato
-        trade.mode = "awaiting_redeem"
-        return trade
-
-    req = BrokerOrderRequest(
-        token_id=opp_token_id,
-        side="BUY",
-        price=round(opp_bid, 6),
-        size=float(qty),
-        order_type="GTC",
-        market_slug=trade.slug,
-        outcome=opp_side,
-        client_order_key=f"ee_real:hedge:{int(now)}:{opp_side}",
-    )
-    try:
-        order = broker.place_limit_order(req)
-        trade.hedge_order_id = order.order_id
-        trade.hedge_qty_filled = _sf(getattr(order, "size_matched", None), 0.0)
-        trade.last_reason = f"hedge_posted:id={order.order_id}:matched={trade.hedge_qty_filled}"
-    except Exception as exc:
-        trade.hedge_order_id = None
-        trade.last_reason = f"hedge_post_failed:{type(exc).__name__}:{exc}"
-        # Fallback: stop FAK
-        trade.mode = "open_position"
     return trade
 
 
@@ -594,7 +521,6 @@ def run_early_entry_real_v1(
             "EE_ENTRY_HI": EE_ENTRY_HI, "EE_STOP_LEVEL": EE_STOP_LEVEL,
             "EE_PROFIT_PROTECT_BID": EE_PROFIT_PROTECT_BID,
             "EE_PROFIT_PROTECT_SECS": EE_PROFIT_PROTECT_SECS,
-            "EE_HEDGE_THR": EE_HEDGE_THR,
         },
     })
 
@@ -602,7 +528,7 @@ def run_early_entry_real_v1(
     trade = _load_state(state_path) or EarlyEntryTradeState()
     if trade.mode != "idle":
         print(f"[EE_REAL] Estado restaurado: mode={trade.mode}  slug={trade.slug}  side={trade.side}")
-        if broker and trade.mode not in ("awaiting_redeem", "awaiting_hedge_fill"):
+        if broker and trade.mode not in ("awaiting_redeem",):
             # Sincronizar com broker
             if trade.entry_order_id and trade.mode == "pending_entry":
                 order = _get_order_status(broker, trade.entry_order_id)
@@ -685,12 +611,7 @@ def run_early_entry_real_v1(
 
                 elif trade.mode == "awaiting_redeem":
                     # Slug rolou → resolução confirmada
-                    if trade.hedge_token_id:
-                        # Posição hedgeada: pnl garantido
-                        pnl = round((1.0 - trade.entry_price - trade.hedge_price)
-                                    * trade.entry_qty_filled, 4)
-                    else:
-                        pnl = round((1.0 - trade.entry_price) * trade.entry_qty_filled, 4)
+                    pnl = round((1.0 - trade.entry_price) * trade.entry_qty_filled, 4)
                     trade.pnl = pnl
                     session_pnl += pnl
                     if pnl > 0:
@@ -710,7 +631,7 @@ def run_early_entry_real_v1(
                     trade = EarlyEntryTradeState()
                     _clear_state(state_path)
 
-                elif trade.mode in ("awaiting_hedge_fill", "open_position"):
+                elif trade.mode == "open_position":
                     # Slug rolou com posição aberta — MISSED
                     _append_jsonl(log_path, {
                         "type": "ee_real_closed",
@@ -837,28 +758,6 @@ def run_early_entry_real_v1(
                     )
                     _save_state(state_path, trade)
 
-                # Prioridade 4: gap abaixo de 0.50 — hedge dinâmico
-                elif el_bid < EE_HEDGE_THR and opp_bid > 0:
-                    stop_pnl  = (el_bid  - trade.entry_price) * trade.entry_qty_filled
-                    hedge_pnl = (1.0 - trade.entry_price - opp_bid) * trade.entry_qty_filled
-                    if hedge_pnl > stop_pnl:
-                        # Hedge preserva mais capital
-                        trade = _post_ee_hedge(
-                            broker or _MockBroker(), trade,
-                            log_path=log_path, session_id=session_id,
-                            snap=current_snap, opp_bid=opp_bid,
-                            now=now, real_posts=real_posts,
-                        )
-                    else:
-                        # Stop FAK é melhor
-                        trade = _post_ee_exit(
-                            broker or _MockBroker(), trade,
-                            log_path=log_path, session_id=session_id,
-                            exit_price=el_bid, reason="stop_loss_hedge_gap",
-                            now=now, real_posts=real_posts,
-                        )
-                    _save_state(state_path, trade)
-
             # ── Modo pending_exit: aguardar fill de saída ─────────────────────
             elif trade.mode == "pending_exit":
                 token_bal = _token_balance_qty(broker, trade.token_id) if (real_posts and trade.token_id) else 0.0
@@ -920,39 +819,13 @@ def run_early_entry_real_v1(
                         trade = _mark_awaiting_redeem(trade, now=now, reason="pp_timeout_to_win")
                         _save_state(state_path, trade)
 
-            # ── Modo awaiting_hedge_fill ──────────────────────────────────────
-            elif trade.mode == "awaiting_hedge_fill":
-                if real_posts and trade.hedge_token_id:
-                    hedge_bal = _token_balance_qty(broker, trade.hedge_token_id)
-                    if hedge_bal > 0:
-                        trade.hedge_qty_filled = max(trade.hedge_qty_filled, hedge_bal)
-                        trade.mode = "awaiting_redeem"
-                        trade.updated_at = now
-                        trade.last_reason = "hedge_filled"
-                        _append_jsonl(log_path, {
-                            "type": "ee_real_hedge_filled",
-                            "ts": now, "session_id": session_id, "slug": slug,
-                            "hedge_price": trade.hedge_price,
-                            "hedge_qty": round(trade.hedge_qty_filled, 4),
-                        })
-                        print(f"[EE_REAL] HEDGE FILLED  price={trade.hedge_price:.3f}  qty={trade.hedge_qty_filled:.2f}")
-                        _save_state(state_path, trade)
-                elif not real_posts:
-                    trade.mode = "awaiting_redeem"
-                    _save_state(state_path, trade)
-
             # ── Modo awaiting_redeem ──────────────────────────────────────────
             elif trade.mode == "awaiting_redeem":
                 if real_posts and trade.token_id:
                     token_bal = _token_balance_qty(broker, trade.token_id)
                     if _is_flat_qty(token_bal):
                         # Plataforma fez redeem automático
-                        pnl = trade.pnl  # já calculado quando slug rolou, ou recalcular
-                        if not trade.hedge_token_id:
-                            pnl = round((1.0 - trade.entry_price) * trade.entry_qty_filled, 4)
-                        else:
-                            pnl = round((1.0 - trade.entry_price - trade.hedge_price)
-                                        * trade.entry_qty_filled, 4)
+                        pnl = round((1.0 - trade.entry_price) * trade.entry_qty_filled, 4)
                         trade.pnl = pnl
                         session_pnl += pnl
                         session_wins += 1
