@@ -1063,12 +1063,49 @@ from market.current_scalp_signal_v1 import (
 
 **Nota:** `event_start_time` já está disponível no quase_resolvido via `fetch_event_by_slug`. O paper EE precisaria adicionar essa chamada uma vez por slug novo.
 
+#### Análise retrospectiva dos 122 trades (2026-05-25)
+
+**Script:** `_sim_dist_ptb_retro.py`  
+O slug `btc-updown-5m-XXXXXXXXXX` contém diretamente o Unix timestamp do início do candle (= price to beat). Combinando com o `ts` da entrada, foi possível reconstruir `dist_ptb_usd` para todos os 122 trades via Binance klines histórico.
+
+**dist_usd médio por outcome:**
+```
+WIN:            33.5 USD  (avg)
+PROFIT_PROTECT: 32.0 USD
+STOP_LOSS:      44.3 USD  ← notavelmente maior
+Diferença: stops 44.3 vs não-stops 32.9 = +11.4 USD
+```
+
+**Direção do efeito (oposta à intuição inicial):**  
+O risco maior é BTC *longe* do threshold (sobreextendido), não perto. Quando BTC já se afastou $80-120 da abertura do candle, o movimento é mais provável de reverter (traders saindo da posição). Quando BTC está perto ($20-30), o EL acabou de se formar e o momentum é mais fresco.
+
+**Gate `dist_usd < X` (bloquear sobreextensão):**
+
+| Gate usd< | n | WR | STOP% | avg/trade | bloq |
+|---|---|---|---|---|---|
+| base | 122 | 76.2% | 20.5% | +$0.072 | — |
+| < 80 | 115 | 78.3% | 19.1% | +$0.146 | 7 |
+| < 50 | 99 | 79.8% | 17.2% | **+$0.170** | 23 |
+| < 30 | 61 | 82.0% | 16.4% | +$0.261 | 61 |
+
+**Combinações:**
+
+| Cenário | n | WR | avg/trade |
+|---|---|---|---|
+| el_vel >= 0.13 | 51 | 86.3% | +$0.439 |
+| el_vel >= 0.12 + dist < 80 | **60** | 85.0% | **+$0.416** |
+| el_vel >= 0.12 + dist < 50 | 50 | 86.0% | +$0.422 |
+| el_vel >= 0.13 + dist < 80 | 50 | 86.0% | +$0.434 |
+
+**Insight chave:** `el_vel >= 0.12 + dist_usd < 80` mantém 60 trades (+9 vs gate 0.13 puro) com avg/trade praticamente idêntico (+$0.416 vs +$0.439). O dist_usd adiciona valor principalmente na faixa el_vel 0.08–0.12 — os 3 piores stops com dist > 80 USD têm todos el_vel < 0.13, logo o gate 0.13 já os bloquearia de qualquer forma.
+
+**Logging já implementado:** o paper runner (commit `db1c46b`) agora registra `btc.dist_usd`, `btc.dist_bps`, `btc.spot` e `btc.threshold` em cada `ee_paper_entry`. Após coletar dados de dias úteis, comparar `el_vel >= 0.12 + dist_usd < 80` vs `el_vel >= 0.13` em volume e qualidade.
+
 #### Status e próximo passo
 
-- Valor: **potencialmente alto** — filtra entradas onde o sinal EL pode estar correto mas a margem de segurança no gráfico é mínima.
-- Risco de implementação: **baixo** — é um gate adicional, não altera lógica de saída.
-- Pré-requisito: **adicionar logging do preço spot e threshold** ao paper runner antes de poder testar.
-- Prioridade: **refinamento futuro**, após validar gate el_vel >= 0.13 em dias úteis.
+- Valor: **confirmado** — dist_usd tem correlação real (+11.4 USD de diferença stops vs não-stops).
+- Gate prioritário: validar `el_vel >= 0.13` em dias úteis primeiro. Depois testar `el_vel >= 0.12 + dist_usd < 80` como alternativa com mais volume.
+- Logging ativo: paper runner já captura os campos desde `db1c46b`.
 
 ---
 
