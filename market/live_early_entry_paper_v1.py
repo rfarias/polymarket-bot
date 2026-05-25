@@ -341,9 +341,12 @@ def run_early_entry_paper_v1(
             ):
                 ee.open_entry(el_side, el_bid, now, secs)
 
-                # Captura distância ao price to beat (apenas para logging — sem efeito na entrada)
+                # Captura dist ao price to beat + momentum/volatilidade BTC (apenas logging)
                 btc_info: dict = {}
                 try:
+                    import requests as _req
+                    BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
+
                     ref = fetch_external_btc_reference_v1()
                     btc_spot = ref.get("reference_price")
                     ptb      = _open_ref.get("price")
@@ -359,8 +362,34 @@ def run_early_entry_paper_v1(
                         }
                     else:
                         btc_info = {"spot": btc_spot, "threshold": ptb, "dist_usd": None, "dist_bps": None}
+
+                    # Momentum: 3 candles 1m antes da entrada
+                    start_ms = (int(now // 60) - 3) * 60 * 1000
+                    km = _req.get(BINANCE_KLINES, params={
+                        "symbol": "BTCUSDT", "interval": "1m",
+                        "startTime": start_ms, "limit": 3,
+                    }, timeout=5)
+                    krows = km.json() or []
+                    if len(krows) >= 3:
+                        closes  = [float(krows[i][4]) for i in range(3)]
+                        highs   = [float(krows[i][2]) for i in range(3)]
+                        lows    = [float(krows[i][3]) for i in range(3)]
+                        ref_k   = closes[-1]
+                        d1m     = round(closes[2] - closes[1], 2)
+                        d3m     = round(closes[2] - closes[0], 2)
+                        rng3m   = round(max(highs) - min(lows), 2)
+                        btc_info.update({
+                            "delta_1m_usd":  d1m,
+                            "delta_3m_usd":  d3m,
+                            "delta_1m_bps":  round(d1m / ref_k * 10000, 2) if ref_k else None,
+                            "delta_3m_bps":  round(d3m / ref_k * 10000, 2) if ref_k else None,
+                            "range_3m_usd":  rng3m,
+                            "range_3m_bps":  round(rng3m / ref_k * 10000, 2) if ref_k else None,
+                            "adverse_1m":    (d1m < 0 if el_side == "UP" else d1m > 0),
+                            "adverse_3m":    (d3m < 0 if el_side == "UP" else d3m > 0),
+                        })
                 except Exception:
-                    btc_info = {"dist_usd": None, "dist_bps": None, "error": True}
+                    btc_info.setdefault("dist_usd", None)
 
                 _append_jsonl(log_path, {
                     "type": "ee_paper_entry", "ts": now,
@@ -369,10 +398,14 @@ def run_early_entry_paper_v1(
                     "el": elt.state_dict(),
                     "btc": btc_info,
                 })
-                dist_str = f"  dist_ptb={btc_info['dist_usd']}usd" if btc_info.get("dist_usd") is not None else ""
+                dist_str = f"  dist={btc_info['dist_usd']}usd" if btc_info.get("dist_usd") is not None else ""
+                adv_str  = "  ADV!" if btc_info.get("adverse_1m") else ""
+                mom_str  = (f"  d1m={btc_info['delta_1m_usd']:+.0f}usd  rng={btc_info['range_3m_usd']:.0f}usd"
+                            if btc_info.get("delta_1m_usd") is not None else "")
                 print(
                     f"[EE_PAPER] ENTRADA {el_side}  ep={el_bid:.3f}  "
-                    f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}{dist_str}"
+                    f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
+                    f"{dist_str}{mom_str}{adv_str}"
                 )
 
             # --- Monitorar posição em entry ---
