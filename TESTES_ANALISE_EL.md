@@ -1808,3 +1808,107 @@ sugestão inicial é que volatilidade maior pode ser favorável (mais trades res
 - `_run_real_analysis.ps1 -Push` — roda todos os scripts no outro PC e faz push
 
 ---
+
+## 18. Análise de Regime de Mercado AR Paper (2026-05-26)
+
+**Objetivo:** identificar em que condições de mercado o AR runner erra — sessões/métricas
+desfavoráveis — para eventualmente propor gates ou alertas no runner real.
+
+**Script:** `_analise_sessoes_ar.py` (criado em 2026-05-26)
+
+### Dataset
+
+| Sessões | Trades | WR | Ticks | PnL |
+|---------|--------|----|-------|-----|
+| 7 | 192 | 97.4% | +373 | +$80.55 |
+
+> ⚠️ **Atenção:** a sessão de 26/05 (111 trades, 100% WR) domina o dataset e representa
+> condições excepcionalmente favoráveis. Conclusões são preliminares.
+
+### Ranking de Sessões
+
+| Sessão | N | WR% | Ticks | Avg dist_bps | Avg src_div |
+|--------|---|-----|-------|--------------|-------------|
+| 20260526_092617 | 111 | 100% | +288 | 19.05 | 13.28 |
+| manual_eval_v1 | 2 | 100% | +4 | 7.11 | 2.22 |
+| resolved_pullback_safe_v2_3h | 45 | 97.8% | +57 | 14.25 | 1.75 |
+| variant_1h | 13 | 92.3% | +11 | 9.71 | 2.83 |
+| resolved_pullback_safe_v2_1h | 15 | 86.7% | +11 | 10.25 | 1.54 |
+| **resolved_pullback_safe_v3_20m** | 4 | **75.0%** | 0 | 8.07 | 1.26 |
+
+### Zonas de Risco Identificadas
+
+**distance_to_price_to_beat_bps** (distância do BTC ao threshold):
+
+| Faixa | N | WR% | Ticks | Nota |
+|-------|---|-----|-------|------|
+| [5, 8) | 22 | 86.4% | +17 | ← stops aqui |
+| [8, 12) | 47 | 95.7% | +51 | |
+| [12, 16) | 46 | 100% | +59 | ✓ seguro |
+| [16, 20) | 36 | 100% | +104 | ✓ seguro |
+| [20, 30) | 30 | 100% | +78 | ✓ seguro |
+| [30+) | 11 | 100% | +64 | ✓ seguro |
+
+**source_divergence_bps** (divergência entre exchanges):
+
+| Faixa | N | WR% | Ticks | Nota |
+|-------|---|-----|-------|------|
+| [-inf, 3) | 60 | 91.7% | +61 | ← todos os stops aqui |
+| [3, 6) | 24 | 100% | +30 | |
+| [6, 10) | 12 | 100% | +44 | ✓ seguro |
+| [10, 15) | 68 | 100% | +167 | ✓ seguro |
+| [15+) | 28 | 100% | +71 | ✓ seguro |
+
+**spot_range_60s_usd** (volatilidade BTC últimos 60s):
+
+| Faixa | N | WR% | Nota |
+|-------|---|-----|------|
+| [0, 30) | 49 | 97%+ | ✓ seguro |
+| [30, 80) | 76 | 98%+ | ✓ seguro |
+| [80, 120) | 3 | 66.7% | ← amostra pequena, suspeita |
+
+**entry_distance_bps** (distância da ordem ao mid):
+
+| Faixa | N | WR% | Nota |
+|-------|---|-----|------|
+| [5, 8) | 20 | 85% | ← stops aqui |
+| [8, 10) | 26 | 96.2% | |
+| [10+) | 144 | 99%+ | ✓ seguro |
+
+### Perfil dos 5 Perdedores
+
+Todos os 5 losses têm:
+- `distance_bps` ≤ 10.6 (vs avg 16.34 nos vencedores)
+- `source_divergence` ≤ 1.4 (vs avg 8.67 nos vencedores)
+- Combinação: BTC perto do threshold + sem divergência clara entre exchanges
+
+Padrão: **sinal fraco** quando não há divergência real entre os dados de mercado.
+
+### Gates Candidatos (somente após validação nos logs reais)
+
+```
+distance_bps < 8   → gate candidato (WR=86%, todos os stops)
+source_div < 3     → gate candidato (WR=91.7%, todos os stops)
+```
+
+> ⛔ Não implementar gates no runner real sem validar nos logs reais do outro PC.
+> Ver pendência crítica abaixo.
+
+### Pendência Crítica: Validar nos Logs Reais
+
+Os logs do runner real (outro PC) têm mais diversidade de condições. Rodar após `git pull`:
+
+```powershell
+python _analise_sessoes_ar.py --logs "logs/ar_real_*/ar_real.jsonl"
+# (ajustar glob conforme nome dos arquivos reais)
+```
+
+Perguntas a responder com os logs reais:
+1. `distance_bps < 8` também concentra os stops no real?
+2. `source_divergence < 3` é destrutivo no real?
+3. O padrão de `spot_range_60s >= 80` (BTC volátil) se confirma?
+4. Algum horário do dia é sistematicamente ruim?
+
+**Só após essa validação propor gates no runner real.**
+
+---
