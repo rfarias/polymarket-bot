@@ -333,11 +333,16 @@ def run_early_entry_paper_v1(
             opp_bid = (down_bid if el_side == "UP"  else up_bid)   if el_side else 0.0
 
             # --- Sinal de entrada EE ---
+            # Gate de regime: ep alto com vel baixa tem WR=62% e avg=-$0.08 (137 trades paper).
+            # Com vel>=0.13 o WR sobe para 89% mesmo em ep alto.
+            _ep_vel_blocked = (el_bid >= 0.86 and elt.el_vel < 0.13)
+
             if (
                 ee.state == "none"
                 and elt.signal_ok
                 and secs is not None and 30 <= secs <= EE_MAX_SECS
                 and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
+                and not _ep_vel_blocked
             ):
                 ee.open_entry(el_side, el_bid, now, secs)
 
@@ -406,6 +411,24 @@ def run_early_entry_paper_v1(
                     f"[EE_PAPER] ENTRADA {el_side}  ep={el_bid:.3f}  "
                     f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
                     f"{dist_str}{mom_str}{adv_str}"
+                )
+
+            elif (
+                ee.state == "none"
+                and elt.signal_ok
+                and secs is not None and 30 <= secs <= EE_MAX_SECS
+                and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
+                and _ep_vel_blocked
+            ):
+                _append_jsonl(log_path, {
+                    "type": "entry_blocked", "ts": now,
+                    "session_id": session_id, "slug": slug,
+                    "reason": f"regime_gate:ep={el_bid:.3f}>=0.86,vel={elt.el_vel:.4f}<0.13",
+                    "ep": round(el_bid, 4), "el_vel": elt.el_vel, "secs": secs,
+                })
+                print(
+                    f"[EE_PAPER] BLOQUEADO  ep={el_bid:.3f}  "
+                    f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
                 )
 
             # --- Monitorar posição em entry ---
