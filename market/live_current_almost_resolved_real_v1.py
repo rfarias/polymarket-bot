@@ -1867,8 +1867,12 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 # dual_rich_late_limit: ep >= 0.985 são entradas a 0.99 onde o preço
                 # de saída máximo também é 0.99 — geram breakeven (19/29 trades) ou stop.
                 # Com ep<0.985: 7 trades, WR=100%, PnL=+$1.86.
+                #
+                # IMPORTANTE: usa entry_price (após ajuste hybrid), NÃO signal_entry_price.
+                # Para dual_rich: signal.entry_price=0.98 mas hybrid posta a 0.99 (bid atual).
+                # Verificar signal_entry_price bloquearia apenas 0 casos — o bug real.
                 _gate_variant = str(signal.get("setup_variant") or "")
-                _gate_ep      = signal_entry_price
+                _gate_ep      = entry_price
                 _gate_d_bps   = _safe_float(signal.get("distance_to_price_to_beat_bps"), None)
                 _gate_reason  = None
                 if _gate_variant == "standard":
