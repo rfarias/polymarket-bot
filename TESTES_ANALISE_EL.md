@@ -1912,3 +1912,104 @@ Perguntas a responder com os logs reais:
 **Só após essa validação propor gates no runner real.**
 
 ---
+
+## 19. Análise opp_bid, dist_pp e Cenários Combinados EE Paper (2026-05-26)
+
+### 19.1 Gate opp_bid — `_sim_opp_gate.py`
+
+**Hipótese:** mercado ainda contestado (opp_bid alto) = mais stops.
+
+**Resultado: opp_bid não discrimina.**
+
+| Outcome | N | avg opp_bid |
+|---------|---|-------------|
+| WIN | 23 | 0.171 |
+| PROFIT_PROTECT | 79 | 0.168 |
+| STOP_LOSS | 28 | 0.168 |
+| REVERSAL | 2 | 0.150 |
+
+Opp_bid é quase idêntico em todos os outcomes (~0.17). Gate `opp < 0.18` bloqueia 43 trades sem melhora relevante de WR.
+
+**dist_pp (0.88 − ep) tem leve impacto:**
+
+| Gate dist_pp > | N | WR% | PnL | avg |
+|----------------|---|-----|-----|-----|
+| sem gate | 134 | 76.1% | +$10.62 | +$0.079 |
+| > 0.03 (ep ≤ 0.85) | 110 | 80.0% | +$26.88 | +$0.244 |
+| > 0.04 (ep ≤ 0.84) | 75 | 76.0% | +$12.48 | +$0.166 |
+
+`dist_pp > 0.03` melhora PnL mas o efeito já está capturado pelo gate `el_vel >= 0.13`
+(que elimina as entradas fracas em ep alto).
+
+**Melhor combinação encontrada:**
+
+| Cenário | N | WR% | PnL | avg |
+|---------|---|-----|-----|-----|
+| el_vel>=0.13 + opp<0.18 | 35 | 91.4% | +$18.78 | +$0.537 |
+| el_vel>=0.13 | 58 | 86.2% | +$24.96 | +$0.430 |
+| base | 134 | 76.1% | +$10.62 | +$0.079 |
+
+Adicionar `opp<0.18` ao gate existente sobe WR de 86→91% mas reduz N de 58→35.
+**Decisão: manter gate el_vel>=0.13 isolado; opp_bid não compensa bloqueio adicional.**
+
+Script: `_sim_opp_gate.py`
+
+---
+
+### 19.2 Comparação Cenários: Gate × Dia da Semana — `_compare_scenarios.py`
+
+**Pergunta:** gate el_vel>=0.13 compensa igualmente em todos os dias, ou há dias
+intrinsecamente melhores/piores?
+
+**Resultado base por dia da semana (sem gate):**
+
+| Dia | N | WR% | Stop% | PnL | avg |
+|-----|---|-----|-------|-----|-----|
+| **Sexta** | 30 | 83.3% | 10.0% | +$8.94 | **+$0.298** |
+| Sábado | 43 | 76.7% | 20.9% | +$1.68 | +$0.039 |
+| Domingo | 39 | 71.8% | 25.6% | −$1.32 | −$0.034 |
+| Segunda | 10 | 70.0% | 30.0% | −$0.54 | −$0.054 |
+
+Fim de semana + segunda: WR cai, stops aumentam. **Sab-Seg sem gate é quase break-even ou negativo.**
+
+**Com gate el_vel >= 0.13:**
+
+| Dia | N | WR% | Stop% | PnL | avg |
+|-----|---|-----|-------|-----|-----|
+| **Sexta + gate** | 16 | **93.8%** | 6.2% | +$10.86 | **+$0.679** |
+| Sábado + gate | 21 | 85.7% | 14.3% | +$8.46 | +$0.403 |
+| Domingo + gate | 13 | 76.9% | 23.1% | +$2.70 | +$0.208 |
+| Segunda + gate | 1 | 100% | 0% | +$0.36 | +$0.360 |
+
+O gate melhora todos os dias, mas **sexta continua o melhor dia** mesmo com gate.
+Domingo ainda tem stop% alto (23%) mesmo com gate.
+
+**Ranking dos cenários (134 trades totais):**
+
+| Cenário | N | WR% | PnL | avg/trade | Rank |
+|---------|---|-----|-----|-----------|------|
+| Sexta + gate 0.13 | 16 | 93.8% | +$10.86 | +$0.679 | #1 |
+| Gate 0.13 | 58 | 86.2% | +$24.96 | +$0.430 | #2 |
+| Gate 0.15 | 43 | 86.0% | +$18.18 | +$0.423 | #3 |
+| Gate 0.12 | 69 | 84.1% | +$23.04 | +$0.334 | #4 |
+| Sab-Seg + gate 0.13 | 35 | 82.9% | +$11.52 | +$0.329 | #5 |
+| Base sem gate | 134 | 76.1% | +$10.62 | +$0.079 | #8 |
+| Sab-Seg sem gate | 92 | 73.9% | −$0.18 | −$0.002 | #9 |
+
+**Conclusões:**
+- Gate 0.13 é a maior alavanca individual (+WR, +avg)
+- Dias úteis (especialmente sexta) são estruturalmente melhores
+- Fim de semana sem gate é quase break-even — gate é obrigatório nesses dias
+- Amostra ainda pequena para dias úteis (sexta=30, segunda=10) — validar com mais dados
+
+Script: `_compare_scenarios.py`
+
+---
+
+### 19.3 Verificação min_bid durante trades — `_check_min_bid.py`
+
+Verificou se o stop FAK (<0.65) seria acionado nos trades históricos.
+Resultado: apenas 2 trades teriam ativado stop FAK (<0.65) — ambos WIN_HEDGE com
+reversão brusca. O stop FAK está calibrado adequadamente para o EE paper.
+
+Script: `_check_min_bid.py`
