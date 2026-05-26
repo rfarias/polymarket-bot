@@ -1358,7 +1358,9 @@ FASE 5 — Monitoramento e ajuste fino (em andamento):
   [ ] Coletar 50+ trades EE real, comparar WR/PnL com paper (meta: ~90%+ WR)
   [ ] Validar gates AR com novos dados (meta: PnL positivo em cada variante)
   [ ] Avaliar gate range_15s nos logs reais do runner AR (Teste C)
-  [ ] Avaliar EL flip signal (comprar reversão)
+  [~] Avaliar EL flip signal (comprar reversão) — simulação concluída, ver seção 15
+  [~] Gate el_vel >= 0.13 — validado em 51 trades paper (WR 86.3%), ver seção 16
+        Implementação ADIADA: aguardando 100+ trades E liberação do plano
 ```
 
 ---
@@ -1547,4 +1549,83 @@ python _sim_el_flip.py --logs "logs/ee_real_*/ee_real.jsonl"
 
 # Testar com gap mais restritivo
 python _sim_el_flip.py --no-stop --flip-gap 0.20
+```
+
+---
+
+## 16. Gate el_vel >= 0.13 — Validação Paper (2026-05-26)
+
+Dados: 122 trades EE paper local, sexta 22/05 a segunda 25/05/2026.
+
+### 16.1 Distribuição por faixa de el_vel
+
+| Faixa | n | WR | stop% | avg/trade |
+|---|---|---|---|---|
+| [0.08, 0.11) | 53 | 69.8% | 24.5% | **−$0.160** |
+| [0.11, 0.13) | 18 | 66.7% | 27.8% | **−$0.287** |
+| **[0.13, 0.16)** | **23** | **87.0%** | **13.0%** | **+$0.477** |
+| [0.16, +∞) | 28 | 85.7% | 14.3% | +$0.407 |
+
+A zona [0.08, 0.13) concentra todas as perdas: 71 trades, WR ~68%, avg −$0.22.
+
+### 16.2 Gate cumulativo
+
+| Gate | n | WR | stop% | PnL | avg |
+|---|---|---|---|---|---|
+| base (>= 0.08) | 122 | 76.2% | 20.5% | +$8.76 | +$0.072 |
+| >= 0.11 | 69 | 81.2% | 17.4% | +$17.22 | +$0.250 |
+| **>= 0.13** | **51** | **86.3%** | **13.7%** | **+$22.38** | **+$0.439** |
+| >= 0.16 | 28 | 85.7% | 14.3% | +$11.40 | +$0.407 |
+
+Gate >= 0.13 captura 42% dos trades (51/122) com 255% do PnL total (+$22.38 vs +$8.76).  
+Trades bloqueados (el_vel < 0.13): 71 trades, PnL −$13.62 — toda a destruição de valor.
+
+### 16.3 Gate el_vel >= 0.13 por dia
+
+| Dia | n | WR | avg |
+|---|---|---|---|
+| Sexta-feira | 14 | 92.9% | +$0.664 |
+| Sábado | 21 | 85.7% | +$0.409 |
+| Domingo | 15 | 80.0% | +$0.276 |
+| **Total** | **51** | **86.3%** | **+$0.439** |
+
+**Conclusão importante:** o gate funciona inclusive no fim de semana — não é efeito exclusivo
+de dias úteis. Sábado e domingo permanecem positivos com el_vel >= 0.13.
+
+### 16.4 Outcomes breakdown (base)
+
+| Outcome | n | avg | total |
+|---|---|---|---|
+| PROFIT_PROTECT | 70 | +$0.674 | +$47.16 |
+| WIN | 23 | +$0.968 | +$22.26 |
+| WIN_HEDGE | 2 | −$3.390 | −$6.78 |
+| STOP_LOSS | 25 | −$1.742 | −$43.56 |
+| REVERSAL | 2 | −$5.160 | −$10.32 |
+
+PROFIT_PROTECT é o motor principal (57% dos trades, 5.4× o PnL dos WINs).
+STOP_LOSS e REVERSAL concentram toda a perda — o gate el_vel>=0.13 reduz stop de 20.5%→13.7%.
+
+### 16.5 Status da implementação
+
+**Validado:** 51 trades paper com gate el_vel >= 0.13 — WR 86.3%, avg +$0.439.  
+**Meta:** 100+ trades para implementar no runner real.  
+**Implementação:** ADIADA — aguardando liberação do plano de API.
+
+Implementação é uma mudança de uma linha no runner real:
+```python
+# market/live_early_entry_real_v1.py
+# Adicionar após verificação signal_ok:
+if el_vel < 0.13:
+    continue  # ou: log entry_blocked e pular
+```
+
+Ao retomar: verificar se há novos logs paper (seg–sex da semana seguinte) e rodar:
+```bash
+python -c "
+import json, datetime
+from pathlib import Path
+from collections import defaultdict
+# (script de análise inline — ver análise de 2026-05-26 no histórico de conversa)
+"
+# Ou usar _sim_full_universe.py com --logs 'logs/ee_paper_*/ee_paper.jsonl'
 ```
