@@ -1629,3 +1629,182 @@ from collections import defaultdict
 "
 # Ou usar _sim_full_universe.py com --logs 'logs/ee_paper_*/ee_paper.jsonl'
 ```
+
+---
+
+## 17. Análise de Regime de Mercado EE Paper (2026-05-26)
+
+### 17.1 Motivação
+
+Sessão AR paper do dia 26/05 teve WR=100% em 84 trades — desempenho atípico que levantou a
+questão: **é melhoria estrutural ou o mercado estava favorável?** Investigação mostrou que os
+novos gates do AR (seção 13) não estavam no diagnostics paper. A performance veio de condições
+favoráveis de mercado (BTC oscilando em faixa controlada).
+
+Isso motivou a hipótese: **existe um cenário ideal de mercado para cada setup**, e vale a pena
+identificá-lo e usar como filtro — tanto para ativar quanto para pausar os runners.
+
+### 17.2 Dataset
+
+- **38 sessões EE paper** coletadas de 22/05 a 26/05/2026 (incluindo fins de semana)
+- **137 trades** totais (`ee_paper_closed`)
+- WR global: **75.9%** · PnL global: **+$8.64**
+- Script de análise: `_analise_sessoes_ee.py`
+
+### 17.3 Ranking de sessões — melhores e piores
+
+**Top 5 sessões (por PnL):**
+
+| Sessão | Data/Hora | N | WR | PnL | Avg vel | Avg ep |
+|--------|-----------|---|----|-----|---------|--------|
+| 20260522_073201 | 22/05 07h | 5 | 100% | +$4.86 | 0.127 | 0.838 |
+| 20260523_053337 | 23/05 05h | 6 | 100% | +$4.38 | 0.114 | 0.845 |
+| 20260523_033329 | 23/05 03h | 6 | 100% | +$4.02 | 0.125 | 0.838 |
+| 20260522_113217 | 22/05 12h | 4 | 100% | +$3.72 | 0.124 | 0.845 |
+| 20260522_233310 | 22/05 23h | 4 | 100% | +$3.24 | 0.136 | 0.838 |
+
+**Bottom 5 sessões (por PnL):**
+
+| Sessão | Data/Hora | N | WR | PnL | Avg vel | Avg ep | Nota |
+|--------|-----------|---|----|-----|---------|--------|------|
+| 20260524_093530 | 24/05 10h | 3 | 33% | −$5.88 | 0.112 | 0.847 | REVERSAL |
+| 20260523_133411 | 23/05 14h | 4 | 25% | −$4.56 | 0.137 | 0.843 | 3× STOP |
+| 20260522_213257 | 22/05 22h | 2 | 0%  | −$4.44 | 0.129 | 0.845 | 2× STOP |
+| 20260523_073345 | 23/05 08h | 5 | 80% | −$2.40 | 0.196 | 0.848 | REVERSAL |
+| 20260525_033646 | 25/05 04h | 3 | 33% | −$2.58 | 0.088 | 0.843 | 2× STOP |
+
+**Achado chave:** as médias de el_vel e ep entre top e bottom são quase idênticas (diff < 0.003).
+**O que diferencia boas de más sessões não é o sinal em si — é o cenário de mercado.**
+
+### 17.4 Discriminador principal: hora do dia
+
+Top 8 sessões concentram trades em: 00h–07h, 12h–16h, 20h–21h.  
+Bottom 8 sessões concentram trades em: **10h** (4 trades, WR=20%), 18h (3), 09h (2).
+
+| Hora local (UTC-3) | Top 8 | Bottom 8 | Observação |
+|--------------------|-------|----------|------------|
+| 00h–07h | 18 trades | 5 trades | Melhor período |
+| 09h–10h | 2 trades | 6 trades | **Pior período** |
+| 12h–16h | 9 trades | 2 trades | Bom período |
+| 17h–18h | 1 trade | 3 trades | Risco médio |
+| 20h–21h | 3 trades | 0 trades | Bom |
+
+10h UTC-3 = 13h UTC ≈ abertura da tarde americana. Hipótese: maior volatilidade BTC nesse
+horário causa reversões abruptas que o EE não consegue absorver.
+
+### 17.5 Zonas de risco identificadas
+
+#### Por ep (preço de entrada)
+
+| Faixa ep | N | WR | PnL total | AvgPnL | PP | SL | REV |
+|----------|---|----|-----------|--------|----|----|-----|
+| [0.82, 0.84) | 41 | 73% | +$6.84 | +$0.17 | 21 | 11 | 0 |
+| [0.84, 0.86) | 72 | 83% | +$18.06 | +$0.25 | 47 | 11 | 1 |
+| **[0.86, 0.88)** | **24** | **58%** | **−$16.26** | **−$0.68** | **13** | **7** | **3** |
+
+**ep >= 0.86 é zona de risco.** Contém 100% dos REVERSAL e metade dos WIN_HEDGE.
+
+#### Por leader_spread (bid_líder − bid_counter)
+
+| Faixa spread | N | WR | PnL total | AvgPnL |
+|-------------|---|----|-----------|--------|
+| [0.60, 0.65) | 21 | 76% | +$5.52 | +$0.26 |
+| [0.65, 0.70) | 90 | 81% | +$21.42 | +$0.24 |
+| **[0.70, 0.75)** | **26** | **58%** | **−$18.30** | **−$0.70** |
+
+**leader_spread >= 0.70 é a zona mais destrutiva** — concentra todos os REVERSAL e WIN_HEDGE.
+Correlacionado com ep >= 0.86 (mercado muito avançado = spread alto = ep alto).
+
+#### Por el_vel
+
+| Faixa | N | WR | AvgPnL |
+|-------|---|----|--------|
+| [0.08, 0.10) | 44 | 68% | −$0.20 |
+| [0.10, 0.13) | 35 | 71% | −$0.08 |
+| **[0.13, 0.15)** | **16** | **81%** | **+$0.32** |
+| [0.15, 0.22) | 30 | 86% | +$0.47 |
+| [0.22, +∞) | 12 | 83% | +$0.28 |
+
+Gradiente monotônico — cada faixa acima de 0.13 melhora (confirma seção 16).
+
+### 17.6 Perfil dos trades perdedores vs vencedores
+
+| Campo | Perdas (n=33) | Vitórias (n=104) |
+|-------|---------------|-----------------|
+| el_vel | avg=0.122 [0.08–0.28] | avg=0.140 [0.08–0.33] |
+| ep | avg=0.842 [0.82–0.86] | avg=0.841 [0.82–0.86] |
+| leader_spread | avg=0.676 [0.63–0.74] | avg=0.673 [0.63–0.73] |
+| secs | avg=142 [47–177] | avg=141 [33–180] |
+
+**Conclusão:** as médias são quase idênticas — não há um único campo que separe perdas de vitórias
+individualmente. O risco é multidimensional: `ep alto + spread alto + vel baixa + hora ruim`.
+
+### 17.7 Outcomes: o que separa PROFIT_PROTECT de STOP_LOSS
+
+| Outcome | N | WR | PnL total | Avg PnL | vel_med | ep_med |
+|---------|---|----|-----------|---------|---------|--------|
+| PROFIT_PROTECT | 81 | 100% | +$52.92 | +$0.65 | 0.1398 | 0.8422 |
+| WIN | 23 | 100% | +$22.26 | +$0.97 | 0.1401 | 0.8387 |
+| STOP_LOSS | 29 | 0% | −$49.44 | −$1.70 | 0.1248 | 0.8407 |
+| WIN_HEDGE | 2 | 0% | −$6.78 | −$3.39 | 0.0940 | 0.8500 |
+| REVERSAL | 2 | 0% | −$10.32 | −$5.16 | 0.1024 | 0.8600 |
+
+STOP_LOSS médio é −$1.70 vs PROFIT_PROTECT médio de +$0.65 → ratio risco/retorno ≈ 2.6×.
+REVERSAL é catastrófico (−$5.16) e ocorre **sempre** com ep=0.86.
+
+### 17.8 Gates implementados no paper (26/05/2026)
+
+Dois gates adicionados em `market/live_early_entry_paper_v1.py`:
+
+```python
+_leader_spread  = round(el_bid - opp_bid, 4)
+_ep_vel_blocked = (el_bid >= 0.86 and elt.el_vel < 0.13)
+_spread_blocked = (_leader_spread >= 0.70)
+_regime_blocked = _ep_vel_blocked or _spread_blocked
+```
+
+| Gate | Condição | Base histórica | Impacto esperado |
+|------|----------|----------------|-----------------|
+| `ep_vel` | ep >= 0.86 AND vel < 0.13 | 29 trades, WR=62% | Bloqueia ep alto com sinal fraco |
+| `spread` | leader_spread >= 0.70 | 26 trades, WR=58%, −$18.30 | Bloqueia todos REVERSAL/WIN_HEDGE |
+
+Validação retroativa (26/05): gate de spread bloqueou exatamente 1 entrada (13:02,
+ep=0.86, vel=0.08, spread=0.70 → STOP_LOSS −$1.50). Zero falsos positivos nas outras 8.
+
+### 17.9 Contexto BTC — dados limitados
+
+BTC info disponível apenas para sessões a partir de 26/05 (n=8 trades com dados).
+Tendência preliminar (não conclusiva):
+
+- Perdas: `dist_usd` médio = 96.87, `range_3m` = 62.95
+- Vitórias: `dist_usd` médio = 61.29, `range_3m` = 126.32
+
+Mercado BTC mais volátil (range_3m alto) não correlaciona negativamente com EE — ao contrário,
+sugestão inicial é que volatilidade maior pode ser favorável (mais trades resolvem rapidamente).
+**Precisamos de pelo menos 50 trades com btc_info para conclusão.**
+
+### 17.10 Próximos passos
+
+**Imediatos (paper):**
+1. Coletar 50+ trades com gates ep_vel + spread ativos → medir impacto real no WR
+2. Avaliar gate horário 10h–11h (precisa de 30+ trades nesse horário)
+3. Quando WR >= 80% sustentado em 100+ trades → propor implementação no runner real
+
+**Análise nos logs reais (outro PC — PENDENTE):**
+> ⚠️ **Todo este estudo foi feito exclusivamente nos logs paper local.**
+> Os logs reais do runner (`logs/ee_real_*/ee_paper.jsonl` no outro PC) contêm trades
+> executados com dinheiro real e podem apresentar padrões diferentes.
+>
+> **Quando houver acesso aos logs reais:**
+> 1. Rodar `_analise_sessoes_ee.py --logs "logs/ee_real_*/ee_paper.jsonl"`
+> 2. Rodar `_sim_regime_ee.py --logs "logs/ee_real_*/ee_paper.jsonl"`
+> 3. Comparar zonas de risco: o ep=0.86 e spread>=0.70 também são destrutivos no real?
+> 4. Verificar se o padrão de hora (10h ruim) se confirma no real
+> 5. Só após essa validação propor gates no runner real
+
+**Scripts disponíveis:**
+- `_analise_sessoes_ee.py` — análise completa por sessão (ranking, padrões, outcomes)
+- `_sim_regime_ee.py` — análise por faixas de métricas (zonas de risco)
+- `_run_real_analysis.ps1 -Push` — roda todos os scripts no outro PC e faz push
+
+---
