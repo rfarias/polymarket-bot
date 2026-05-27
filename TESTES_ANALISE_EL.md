@@ -2013,3 +2013,194 @@ Resultado: apenas 2 trades teriam ativado stop FAK (<0.65) — ambos WIN_HEDGE c
 reversão brusca. O stop FAK está calibrado adequadamente para o EE paper.
 
 Script: `_check_min_bid.py`
+
+---
+
+## 20. Análise de Regime de Mercado — AR paper (2026-05-27)
+
+**Objetivo:** Correlacionar o contexto de mercado BTC (tendência primária, posição no range,
+nível absoluto, sessão, volatilidade) com a performance do setup AR paper, para identificar
+quando operar com mais segurança e quando evitar.
+
+**Fonte:** logs paper local `logs/current_almost_resolved_paper_*.jsonl`  
+**Script:** `_analise_regime_ar.py` (análise estendida, inclui timeline global de snapshots)  
+**Dataset:** 525 trades  |  WR=96.6%  |  Ticks=+791  |  PnL=+$289.55
+
+---
+
+### 20.1 Sessão e Hora
+
+| Sessão | N | WR% | Ticks |
+|--------|---|-----|-------|
+| Europa (09-15h) | 275 | **97.5%** | +475 |
+| Asia (00-08h) | 125 | 96.0% | +156 |
+| US (16-23h) | 125 | 95.2% | +160 |
+
+**Horas problemáticas** (WR < 92%): 02h (85.7%, N=7), 04h (90.0%, N=10), 20h (91.7%, N=12),
+23h (90.0%, N=20). Amostras pequenas — observar, não gate ainda.
+
+---
+
+### 20.2 Tendência BTC 15min (delta de preço dos snapshots)
+
+Calculado como delta entre `reference_price` no momento do trade e 900s antes,
+usando a timeline global de snapshots. Proxy de contexto 15min chart.
+
+| Tendência 15min | N | WR% | Ticks | avg/trade |
+|-----------------|---|-----|-------|-----------|
+| `cai_forte (<=−20 bps)` | 135 | **98.5%** | +250 | +1.85 |
+| `cai_leve (−20,−5)` | 150 | 96.0% | +201 | +1.34 |
+| `flat (−5,+5)` | 138 | 96.4% | +168 | +1.22 |
+| `sobe_leve (+5,+20)` | 75 | **93.3% ← pior** | +67 | +0.89 |
+| `sobe_forte (>=+20)` | 25 | **100%** | +101 | +4.04 |
+
+**Insight:** `sobe_leve` no 15min é a PIOR condição — BTC subindo sem convicção.
+`cai_forte` é a melhor. `sobe_forte` é excelente (resolução rápida).
+O perigo não é o BTC cair — é o BTC subir hesitante.
+
+---
+
+### 20.3 Tendência BTC 1h (delta de preço dos snapshots)
+
+Delta entre `reference_price` no trade e 3600s antes. Proxy de tendência primária.
+
+| Tendência 1h | N | WR% | Ticks | avg/trade |
+|--------------|---|-----|-------|-----------|
+| `cai_forte (<=−40 bps)` | 110 | **99.1% ← melhor** | +159 | +1.45 |
+| `cai_leve (−40,−10)` | 125 | 96.8% | +177 | +1.42 |
+| `sobe_leve (+10,+40)` | 128 | 97.7% | +199 | +1.55 |
+| `sobe_forte (>=+40)` | 11 | 90.9% | +69 | +6.27 |
+| `flat (−10,+10)` | 149 | **94.0% ← pior** | +183 | +1.23 |
+
+**Insight contraintuitivo:** BTC **caindo forte no 1h = melhor condição** para o setup AR UP.
+BTC **lateral no 1h = pior**. Explicação: quando BTC cai no 1h, o candle de 5min que
+estamos operando já completou seu movimento UP e está na fase "almost resolved" com
+alta convicção. A queda macro não afeta a resolução já encaminhada. A lateralização no 1h
+cria incerteza — o sinal pode ser prematuro.
+
+---
+
+### 20.4 Posição no Range 2h (estrutural — resistência/suporte)
+
+Para cada trade, calcula onde o preço BTC está dentro do range dos últimos 7200s
+(2h) de snapshots. Valor 0% = no topo (resistência), 100% = no fundo (suporte).
+
+| Posição no range 2h | N | WR% | Ticks | avg/trade |
+|--------------------|---|-----|-------|-----------|
+| `topo (<15%)` — perto de resistência | 27 | **100% ← melhor** | +91 | +3.37 |
+| `alto (15-35%)` | 105 | 98.1% | +156 | +1.49 |
+| `baixo (65-85%)` | 99 | 98.0% | +135 | +1.36 |
+| `fundo (>85%)` — perto de suporte | 203 | 98.0% | +339 | +1.67 |
+| **`meio (35-65%)`** | 89 | **88.8% ← pior** | +66 | +0.74 |
+
+**Insight — hipótese refutada:** A intuição "perto de resistência = ruim" foi **refutada pelos dados**.
+BTC no **topo do range 2h = melhor condição** (WR=100%, avg=+3.37 ticks/trade).
+BTC no **meio do range = pior** (WR=88.8%). O "meio" representa indecisão estrutural —
+o mercado não tem direção clara no contexto de 2h, o que contamina o sinal AR.
+
+---
+
+### 20.5 Nível BTC $500 (granularidade fina)
+
+| Nível | N | WR% | Ticks |
+|-------|---|-----|-------|
+| 75.0k-75.5k | 35 | 100% | +58 |
+| 76.0k-76.5k | 65 | 100% | +114 |
+| 77.0k-77.5k | 22 | 100% | +33 |
+| 76.5k-77.0k | 68 | 98.5% | +139 |
+| 74.5k-75.0k | 58 | 96.6% | +78 |
+| 75.5k-76.0k | 222 | 95.0% | +254 |
+| **77.5k-78.0k** | 54 | **92.6% ← pior** | +105 |
+
+Zona 77.5k-78.0k era o topo do range histórico do dataset — o WR fraco reflete
+que essa zona concentra condições de "topo com queda" (conforme seção 20.6).
+
+---
+
+### 20.6 Cross: Posição Range × Tendência 15min — Combo Mais Perigoso
+
+Cross entre posição no range 2h e tendência BTC 15min.
+**Hipótese testada:** UP binary no meio do range + BTC subindo hesitante = risco.
+
+**Combos problemáticos (WR < 90%, N >= 3):**
+
+| Combo | N | WR% | Ticks | Interpretação |
+|-------|---|-----|-------|---------------|
+| `meio (35-65%) \| sobe_leve (+5,+20)` | 21 | **81.0%** | **−2.0** | BTC indeciso + sobe hesitante |
+| `meio (35-65%) \| cai_leve (−20,−5)` | 30 | 86.7% | +21 | BTC indeciso + cai levemente |
+| `meio (35-65%) \| flat (−5,+5)` | 27 | 92.6% | +28 | BTC indeciso + sem direção |
+
+**O único combo com PnL negativo:** `meio | sobe_leve` no 15min (−2.0 ticks em 21 trades).
+
+**Cross posição × tendência 1h:**
+
+| Combo | N | WR% | Ticks |
+|-------|---|-----|-------|
+| `meio (35-65%) \| flat (−10,+10) 1h` | 49 | **85.7%** | +29 |
+| `meio (35-65%) \| sobe_leve (+10,+40) 1h` | 31 | 90.3% | +21 |
+
+A zona `meio` é estruturalmente ruim independente da tendência. Com `flat` no 1h, piora ainda mais.
+
+---
+
+### 20.7 Cross: Nível $500 × Momentum 60s
+
+| Combo | N | WR% | Ticks |
+|-------|---|-----|-------|
+| `77.5k-78.0k \| queda_forte (<=−8)` | 3 | **66.7%** | −4.0 |
+| `77.5k-78.0k \| flat` | 16 | 93.8% | +22 |
+| `77.5k-78.0k \| sobe_leve` | 13 | 92.3% | +24 |
+
+Com N=3, ainda não é gate. Mas é o único combo com PnL negativo no cross de nível $500.
+
+---
+
+### 20.8 Conclusões e Interpretação Estrutural
+
+**O que o setup AR opera bem:**
+- BTC com convicção direcional clara (forte queda ou forte subida no 15min/1h)
+- BTC no extremo do range 2h (topo ou fundo) — posição clara
+- Sessão Europa (09-15h) — melhor WR e avg
+
+**O que degrada o setup:**
+- BTC no **meio do range 2h** (35-65%): sinal pode ser prematuro / resolução incerta
+- BTC **subindo levemente** no 15min (`sobe_leve +5,+20`): hesitação sem convicção
+- BTC **lateral** na 1h: falta de tendência primária
+- A combinação `meio do range + sobe_leve 15min`: único cenário com PnL negativo (−2.0 ticks, WR=81%)
+
+**Por que BTC caindo no 1h = melhor para UP binary:**
+Quando BTC cai no gráfico 1h, o candle de 5min que operamos completou seu movimento UP
+no início e está na fase "already resolved" — o setup captura o aftermath, não a incerteza
+do movimento. A queda macro no 1h não reverte a resolução do candle já encaminhado.
+
+---
+
+### 20.9 Gate Candidato — NÃO implementar ainda
+
+**Gate identificado:** `range_pos (35-65%) + delta_15m (sobe_leve +5,+20)`
+- WR=81%, ticks=−2.0 em N=21 trades
+- Seria o único gate AR baseado em contexto de mercado
+
+**Requisito para implementar:** validar nos logs reais do outro PC com N >= 50 no combo.
+O dataset paper local tem condições de mercado limitadas (BTC em faixa de $74.5k-$78k,
+período específico de 2026-05-27).
+
+**Script para validar nos logs reais:**
+```powershell
+python _analise_regime_ar.py --logs "logs/ar_real_*/ar_real.jsonl"
+```
+
+---
+
+### 20.10 Arquivos
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `_analise_regime_ar.py` | Script principal (12 seções de análise) |
+| `_analise_sessoes_ar.py` | Análise anterior (sessão + entry_price + gates básicos) |
+| `logs/current_almost_resolved_paper_*.jsonl` | Fonte dos dados (paper local) |
+
+**Próximos passos:**
+1. Rodar `_analise_regime_ar.py` nos logs reais após `git pull` no outro PC
+2. Validar se `meio + sobe_leve` tem WR < 85% também nos logs reais (N >= 50)
+3. Se confirmado: propor gate `range_pos (35-65%) + delta_15m > +5 bps` no runner paper antes do runner real
