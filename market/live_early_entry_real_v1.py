@@ -294,6 +294,7 @@ class _EarlyLeaderTracker:
             "el_vel":      self.el_vel,
             "f3_ok":       self.cont_ok,
             "signal_ok":   self.signal_ok,
+            "n_s180":      len(self._s180),
         }
 
 
@@ -654,6 +655,15 @@ def run_early_entry_real_v1(
             el_bid  = _bid_for_side(current_exec, el_side) if el_side else 0.0
             opp_bid = _opp_bid_for_side(current_exec, el_side) if el_side else 0.0
 
+            # ── Gates de entrada (baseados em dados reais) ────────────────────
+            _n_s180         = len(elt._s180)
+            _n_s180_blocked = (_n_s180 < 3)
+            _secs_blocked   = (secs is not None and secs > 155)
+            _entry_blocked  = _n_s180_blocked or _secs_blocked
+            _gate_reason    = (
+                f"n_s180:{_n_s180}<3" if _n_s180_blocked else f"secs:{secs}>155"
+            ) if _entry_blocked else ""
+
             # ── Modo idle: procurar entrada ───────────────────────────────────
             if trade.mode == "idle":
                 if (
@@ -661,6 +671,7 @@ def run_early_entry_real_v1(
                     and secs is not None
                     and EE_MIN_ENTRY_SECS <= secs <= EE_MAX_ENTRY_SECS
                     and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
+                    and not _entry_blocked
                 ):
                     _broker = broker if real_posts else None
                     new_trade = _post_ee_entry(
@@ -674,6 +685,20 @@ def run_early_entry_real_v1(
                     if new_trade:
                         trade = new_trade
                         _save_state(state_path, trade)
+                elif (
+                    _entry_blocked
+                    and elt.signal_ok
+                    and secs is not None
+                    and EE_MIN_ENTRY_SECS <= secs <= EE_MAX_ENTRY_SECS
+                    and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
+                ):
+                    _append_jsonl(log_path, {
+                        "type": "entry_blocked", "ts": now,
+                        "session_id": session_id, "slug": slug,
+                        "reason": f"gate:{_gate_reason}",
+                        "ep": round(el_bid, 4), "n_s180": _n_s180, "secs": secs,
+                    })
+                    print(f"[EE_REAL] BLOCKED  gate={_gate_reason}  ep={el_bid:.3f}  secs={secs}")
 
             # ── Modo pending_entry: aguardar fill ─────────────────────────────
             elif trade.mode == "pending_entry":
@@ -748,15 +773,10 @@ def run_early_entry_real_v1(
                     )
                     _save_state(state_path, trade)
 
-                # Prioridade 3: stop loss (el_bid < 0.65)
-                elif 0 < el_bid < EE_STOP_LEVEL:
-                    trade = _post_ee_exit(
-                        broker or _MockBroker(), trade,
-                        log_path=log_path, session_id=session_id,
-                        exit_price=el_bid, reason="stop_loss",
-                        now=now, real_posts=real_posts,
-                    )
-                    _save_state(state_path, trade)
+                # Prioridade 3: stop FAK removido — causava fills catastróficos (0.42–0.61)
+                # em livro fino quando o bid temporariamente cai abaixo de 0.65 e depois
+                # se recupera. Paper não para e vence 89% dos casos. A proteção de
+                # reversão genuína é coberta pelo check opp_bid >= 0.85 em secs <= 35.
 
             # ── Modo pending_exit: aguardar fill de saída ─────────────────────
             elif trade.mode == "pending_exit":
