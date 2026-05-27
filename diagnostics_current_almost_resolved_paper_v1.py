@@ -660,6 +660,7 @@ def main() -> int:
     execution_funnel = Counter()
     gray_block_reasons = Counter()
     last_leader_price_by_key: dict[str, float] = {}
+    last_pp_slug: str = ""  # slug do último profit_protect — suprime stop duro na re-entrada
 
     print("[CURRENT_ALMOST_RESOLVED_CONFIG]")
     pprint(signal_cfg.as_dict())
@@ -1144,6 +1145,10 @@ def main() -> int:
                 qty=float(args.order_qty),
                 maker_rebate_bps=float(args.maker_rebate_bps),
             )
+            reentry_after_pp = bool(last_pp_slug and signal.get("current_slug") == last_pp_slug)
+            if reentry_after_pp:
+                trade.stop_price = 0.01  # stop duro desativado: re-entrada pos profit_protect
+                trade.source = str(trade.source or "standard") + "_reentry_pp_nostop"
             entered_variants[str(trade.setup_variant or "standard")] += 1
             execution_funnel["direct_enter"] += 1
             _append_jsonl(
@@ -1155,6 +1160,7 @@ def main() -> int:
                     "suggested_action": suggested_action,
                     "suggested_detail": suggested_detail,
                     "trade": asdict(trade),
+                    "reentry_after_pp": reentry_after_pp,
                 },
             )
             print("[PAPER_ENTER]")
@@ -1190,6 +1196,10 @@ def main() -> int:
                 _append_jsonl(log_path, {"type": "exit", "ts": now, "trade": completed[-1]})
                 print("[PAPER_EXIT]")
                 pprint(completed[-1])
+                if completed[-1].get("exit_reason") == "profit_protect":
+                    last_pp_slug = str(signal.get("current_slug") or "")
+                else:
+                    last_pp_slug = ""
                 trade = PaperTrade()
 
         time.sleep(max(0.5, float(args.poll_secs)))
