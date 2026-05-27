@@ -842,8 +842,9 @@ def _ee_exit_reason(
             return "ee_reversal"
     if secs_to_end is not None and 36 <= secs_to_end <= EE_PROFIT_PROTECT_SECS and el_bid >= EE_PROFIT_PROTECT_BID:
         return "ee_profit_protect"
-    if el_bid < EE_STOP_LEVEL:
-        return "ee_stop"
+    # ee_stop removido: FAK em livro fino gerava fills catastróficos (0.42–0.61)
+    # em dips temporários onde o bid se recupera (paper WR 89% sem stop).
+    # Proteção de reversão genuína via ee_reversal em secs_to_end <= 35.
     if el_bid < EE_HEDGE_THR and opp_bid > 0:
         return "ee_hedge_gap"
     return None
@@ -2031,11 +2032,20 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 _ee_dn  = _safe_float((current_exec or {}).get("down_bid"), 0.0)
                 _ee_sl  = _ee_tracker.early_leader
                 _ee_bid = (_ee_up if _ee_sl == "UP" else _ee_dn) if _ee_sl else 0.0
+                # Gates de entrada baseados em análise dos logs reais (33 trades)
+                _ee_n_s180         = len(_ee_tracker._s180)
+                _ee_n_s180_blocked = (_ee_n_s180 < 3)
+                _ee_secs_blocked   = (current_secs is not None and current_secs > 155)
+                _ee_entry_blocked  = _ee_n_s180_blocked or _ee_secs_blocked
+                _ee_gate_reason    = (
+                    f"n_s180:{_ee_n_s180}<3" if _ee_n_s180_blocked else f"secs:{current_secs}>155"
+                ) if _ee_entry_blocked else ""
                 if (
                     _ee_tracker.signal_ok
                     and current_secs is not None
                     and EE_MIN_ENTRY_SECS <= current_secs <= EE_MAX_ENTRY_SECS
                     and EE_ENTRY_LO <= _ee_bid <= EE_ENTRY_HI
+                    and not _ee_entry_blocked
                 ):
                     _ee_event_slug = str(current_item.get("slug") or "")
                     _ee_token_id   = _token_id_for_side(current_snap, _ee_sl)
@@ -2120,6 +2130,21 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                                 "error": f"{type(_ee_exc).__name__}: {_exception_message(_ee_exc)}",
                                 "slug": _ee_event_slug,
                             })
+                elif (
+                    _ee_entry_blocked
+                    and _ee_tracker.signal_ok
+                    and current_secs is not None
+                    and EE_MIN_ENTRY_SECS <= current_secs <= EE_MAX_ENTRY_SECS
+                    and EE_ENTRY_LO <= _ee_bid <= EE_ENTRY_HI
+                ):
+                    _append_jsonl(log_path, {
+                        "type": "ee_entry_blocked", "ts": now,
+                        "session_id": session_id,
+                        "slug": str(current_item.get("slug") or ""),
+                        "reason": f"gate:{_ee_gate_reason}",
+                        "ep": round(_ee_bid, 4), "n_s180": _ee_n_s180, "secs": current_secs,
+                    })
+                    print(f"[EE_REAL] GATE_BLOCKED  {_ee_gate_reason}  ep={_ee_bid:.3f}  secs={current_secs}")
 
             if trade.mode in ("pending_entry", "open_position", "exit_pending_confirm"):
                 trade = _sync_entry_order(broker, trade)
