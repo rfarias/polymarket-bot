@@ -43,7 +43,7 @@ from market.rest_5m_shadow_public_v5 import (
 
 EE_EL_MIN              = 0.55
 EE_CONT_MIN            = 0.70
-EE_VEL_MIN             = 0.08
+EE_VEL_MIN             = 0.13
 EE_ENTRY_LO            = 0.82
 EE_ENTRY_HI            = 0.86
 EE_STOP_LEVEL          = 0.65   # stop loss: sai por FAK se bid EL < 0.65

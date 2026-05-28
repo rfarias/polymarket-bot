@@ -82,7 +82,7 @@ def _append_jsonl(path: Path, row: dict) -> None:
 # ---------------------------------------------------------------------------
 EE_EL_MIN              = 0.55
 EE_CONT_MIN            = 0.70
-EE_VEL_MIN             = 0.08
+EE_VEL_MIN             = 0.13
 EE_ENTRY_LO            = 0.82
 EE_ENTRY_HI            = 0.86
 EE_MAX_ENTRY_SECS      = 180
