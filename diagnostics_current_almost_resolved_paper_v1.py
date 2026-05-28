@@ -1151,6 +1151,16 @@ def main() -> int:
                 trade.source = str(trade.source or "standard") + "_reentry_pp_nostop"
             entered_variants[str(trade.setup_variant or "standard")] += 1
             execution_funnel["direct_enter"] += 1
+            # Diagnóstico de zona de risco AR (análise 2026-05-28, 838 trades):
+            #   standard + dist_bps < 14 + range60 > 0.15 → concentração de losses
+            _ar_dist_bps  = abs(float(signal.get("distance_to_price_to_beat_bps") or 0))
+            _ar_range60   = float(signal.get("market_range_60s") or 0)
+            _ar_variant   = str(signal.get("setup_variant") or "")
+            _ar_risky_zone = (
+                _ar_variant == "standard"
+                and _ar_dist_bps < 14.0
+                and _ar_range60 > 0.15
+            )
             _append_jsonl(
                 log_path,
                 {
@@ -1161,6 +1171,12 @@ def main() -> int:
                     "suggested_detail": suggested_detail,
                     "trade": asdict(trade),
                     "reentry_after_pp": reentry_after_pp,
+                    "regime_diagnostics": {
+                        "risky_zone": _ar_risky_zone,
+                        "abs_distance_bps": round(_ar_dist_bps, 2),
+                        "market_range_60s": round(_ar_range60, 4),
+                        "setup_variant": _ar_variant,
+                    },
                 },
             )
             print("[PAPER_ENTER]")

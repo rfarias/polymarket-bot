@@ -14,6 +14,7 @@ Estratégia:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import time
@@ -333,18 +334,34 @@ def run_early_entry_paper_v1(
             opp_bid = (down_bid if el_side == "UP"  else up_bid)   if el_side else 0.0
 
             # --- Sinal de entrada EE ---
-            # Gates de regime derivados de 137 trades paper (38 sessões):
+            # Gates de regime derivados de análise de 216 trades paper (87 sessões, 2026-05-28):
             #   ep>=0.86 + vel<0.13 → WR=62%, avg=-$0.08
             #   leader_spread>=0.70 → WR=58%, avg=-$0.70 (cobre REVERSAL e WIN_HEDGE)
+            #   n_s180 < 3  → deployado no runner real em 2026-05-27 (WR=44%→83%)
+            #   n_s180 == 5 → candidato novo: WR=56.2%, PnL=-$4.68 (16 trades paper)
+            #   hora == 6 UTC → candidato novo: WR=42.9% (7 trades paper, pior horário)
+            _utc_hour        = datetime.datetime.utcnow().hour
+            _n180            = len(elt._s180)
             _leader_spread   = round(el_bid - opp_bid, 4) if el_side else 0.0
             _ep_vel_blocked  = (el_bid >= 0.86 and elt.el_vel < 0.13)
             _spread_blocked  = (_leader_spread >= 0.70)
-            _regime_blocked  = _ep_vel_blocked or _spread_blocked
-            _regime_reason   = (
-                f"ep_vel:ep={el_bid:.3f}>=0.86,vel={elt.el_vel:.4f}<0.13"
-                if _ep_vel_blocked else
-                f"spread:spread={_leader_spread:.3f}>=0.70"
-            ) if _regime_blocked else ""
+            _n180_lt3_blocked = (_n180 < 3)
+            _n180_5_blocked  = (_n180 == 5)
+            _hora_6_blocked  = (_utc_hour == 6)
+            _regime_blocked  = (_ep_vel_blocked or _spread_blocked
+                                or _n180_lt3_blocked or _n180_5_blocked or _hora_6_blocked)
+            if _n180_lt3_blocked:
+                _regime_reason = f"n180_lt3:n_s180={_n180}<3"
+            elif _n180_5_blocked:
+                _regime_reason = f"n180_5:n_s180={_n180}"
+            elif _hora_6_blocked:
+                _regime_reason = f"hora_06utc:hora={_utc_hour}"
+            elif _ep_vel_blocked:
+                _regime_reason = f"ep_vel:ep={el_bid:.3f}>=0.86,vel={elt.el_vel:.4f}<0.13"
+            elif _spread_blocked:
+                _regime_reason = f"spread:spread={_leader_spread:.3f}>=0.70"
+            else:
+                _regime_reason = ""
 
             if (
                 ee.state == "none"

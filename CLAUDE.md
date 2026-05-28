@@ -64,6 +64,14 @@ Pendente: validar efetividade dos gates com 50+ trades diurnos (semana de 2026-0
 - Paper local (este PC): coleta seg-sex para validar o gate
 - Logs reais ficam no outro PC em `logs/ee_real_*/ee_real.jsonl`
 
+Gates candidatos novos implementados no paper local em 2026-05-28 (`market/live_early_entry_paper_v1.py`):
+- `n_s180 < 3` — replicado do real para alinhar comportamento paper/real
+- `n_s180 == 5` — WR 56.2% (pior faixa pós-gates), validar com 50+ dias úteis antes de ir pro real
+- `hora UTC == 6` — WR 42.9% (pior horário), validar consistência (pode ser sazonalidade fim-de-semana)
+- Todos logados como `entry_blocked` com reason específico
+
+Documentação completa: `ANALISE_REGIME_MERCADO.md`
+
 Para analisar logs reais no outro PC após `git pull`:
 ```powershell
 .\_run_real_analysis.ps1 -Push   # roda todos os scripts + commita resultados
@@ -91,6 +99,14 @@ Resultado no paper local (fim de semana, 860 slugs):
 Pendente: validar nos logs reais (rodar `_sim_el_flip.py --no-stop` no outro PC).
 Documentação completa: seção 15 de TESTES_ANALISE_EL.md
 
+## Diagnóstico de regime AR (implementado 2026-05-28)
+
+Campo `regime_diagnostics` adicionado ao evento `enter` do AR paper (`diagnostics_current_almost_resolved_paper_v1.py`):
+- `risky_zone=true` quando: `variant==standard` AND `dist_bps < 14` AND `range60 > 0.15`
+- Base: 23 losses AR em 838 trades — ~12 seriam capturados por esse critério
+- Não bloqueia — apenas sinaliza para análise prospectiva
+- Gate real só após 50+ entradas com `risky_zone=true` confirmadas como losses
+
 ## Parâmetros de risco (não alterar sem confirmação)
 
 - Qty padrão de teste: 6 shares
@@ -100,3 +116,4 @@ Documentação completa: seção 15 de TESTES_ANALISE_EL.md
 - Gate el_vel >= 0.13: só implementar após 100+ trades de dias úteis com WR > 85%
 - EL Flip: não implementar no runner real sem validação nos logs reais
 - **EE stop FAK removido em 2026-05-27** — não reintroduzir sem nova análise de dados reais
+- Gates EE candidatos (n_s180=5, hora=6h UTC): só ir pro real após validação no paper (50+ dias úteis)
