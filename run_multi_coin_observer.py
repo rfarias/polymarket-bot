@@ -79,16 +79,24 @@ MAX_SPOT_HISTORY    = 120    # ~10min @ 5s
 # Spot — batch Binance REST
 # ---------------------------------------------------------------------------
 
-def _fetch_all_spots(symbols: List[str]) -> Dict[str, float]:
-    """Busca múltiplos preços numa única chamada à Binance."""
+def _fetch_one_spot(symbol: str) -> Tuple[str, Optional[float]]:
     try:
-        syms_json = json.dumps(symbols)
-        url = f"https://api.binance.com/api/v3/ticker/price?symbols={syms_json}"
-        r = requests.get(url, timeout=6)
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        r = requests.get(url, timeout=5)
         r.raise_for_status()
-        return {item["symbol"]: float(item["price"]) for item in r.json()}
+        return symbol, float(r.json()["price"])
     except Exception:
-        return {}
+        return symbol, None
+
+
+def _fetch_all_spots(symbols: List[str]) -> Dict[str, float]:
+    """Busca preços Binance em paralelo (uma chamada por símbolo)."""
+    result: Dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=len(symbols)) as ex:
+        for sym, price in ex.map(_fetch_one_spot, symbols):
+            if price is not None:
+                result[sym] = price
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +402,11 @@ def run(run_seconds: int = 21600, poll_secs: float = POLL_DEFAULT) -> None:
                 up_bid   = snap["up_bid"]
                 down_bid = snap["down_bid"]
                 slug     = item["slug"]
-                secs     = item.get("seconds_to_end")
+
+                # secs dinâmico: calculado do epoch do slug (não do cache de 45s)
+                epoch = _extract_epoch_from_slug(slug)
+                step  = 900 if state.timeframe == "15m" else 300
+                secs  = round(epoch + step - snap_ts) if epoch else item.get("seconds_to_end")
 
                 # Regista price_to_beat no início do candle
                 state.register_price_to_beat(slug, secs)
