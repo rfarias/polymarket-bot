@@ -23,46 +23,67 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Exit logic (espelha EE v2 do AR runner)
+  // Exit logic (espelha runner EE v2 — estado 2026-05-28)
+  //
+  // Mudanças vs versão anterior:
+  //   - STOP FAK 0.65 removido: runner não usa mais (fills catastróficos em livro fino)
+  //   - Bug el_bid=0 corrigido: livro zerado + opp>=0.85 → SAÍDA URGENTE (não "SEM DADOS")
+  //   - EE_VEL_MIN 0.08 → 0.13 (gate deployado 2026-05-28)
+  //   - Zona morta 0.50–0.84 secs>35: sinaliza quando sem proteção ativa
   // ---------------------------------------------------------------------------
-  const STOP_LEVEL = 0.65;
-  const PP_BID = 0.88;
+  const PP_BID     = 0.88;
   const PP_SECS_LO = 36;
   const PP_SECS_HI = 70;
-  const WIN_BID = 0.85;
-  const WIN_SECS = 35;
+  const WIN_BID    = 0.85;
+  const WIN_SECS   = 35;
+  const HEDGE_THR  = 0.50;   // ee_hedge_gap: runner tenta hedge abaixo disso
 
   function exitRecommendation(side, bids, secs) {
     const myBid  = side === "UP" ? (bids.up  || 0) : (bids.down || 0);
     const oppBid = side === "UP" ? (bids.down || 0) : (bids.up  || 0);
 
-    if (!myBid) return { action: "SEM DADOS", color: "gray", detail: "aguardando bids" };
+    // Bug fix (2026-05-28): el_bid=0 não é "sem dados" se opp confirma reversão.
+    // Sem este check, perda total garantida quando livro do EL some completamente.
+    if (myBid <= 0) {
+      if (oppBid >= WIN_BID) {
+        return {
+          action: "SAÍDA URGENTE",
+          color: "red",
+          detail: `livro EL zerou + opp=${oppBid.toFixed(3)} ≥ 0.85 — reversão total`,
+          urgent: true,
+        };
+      }
+      if (oppBid > 0) {
+        return {
+          action: "STOP URGENTE",
+          color: "red",
+          detail: `livro EL zerou, opp=${oppBid.toFixed(3)} — hedge se possível`,
+          urgent: true,
+        };
+      }
+      return { action: "SEM DADOS", color: "gray", detail: "aguardando bids" };
+    }
 
-    // Urgente: bid colapsou abaixo de 0.50
-    if (myBid < 0.50 && oppBid > 0) {
+    // Hedge gap: el_bid < 0.50 (runner dispara ee_hedge_gap)
+    if (myBid < HEDGE_THR && oppBid > 0) {
       return {
         action: "STOP URGENTE",
         color: "red",
-        detail: `bid=${myBid.toFixed(3)} < 0.50 — hedge ou stop imediato`,
+        detail: `bid=${myBid.toFixed(3)} < 0.50 — runner: hedge ou stop (ee_hedge_gap)`,
         urgent: true,
       };
     }
-    // Stop loss
-    if (myBid < STOP_LEVEL) {
-      return {
-        action: "STOP LOSS",
-        color: "red",
-        detail: `bid=${myBid.toFixed(3)} < ${STOP_LEVEL} — sair (FAK)`,
-        urgent: true,
-      };
-    }
+
+    // Zona 0.50–0.65: runner NÃO tem stop aqui (FAK removido 2026-05-27)
+    // Zona 0.65–0.84: idem — sem proteção até secs<=35 ou PP window
+
     // Reversal + win final (secs <= 35)
     if (secs !== null && secs <= WIN_SECS) {
       if (oppBid >= WIN_BID) {
         return {
           action: "SAÍDA URGENTE",
           color: "red",
-          detail: `reversão: ${side === "UP" ? "DOWN" : "UP"}=${oppBid.toFixed(3)} >= ${WIN_BID}`,
+          detail: `reversão: ${side === "UP" ? "DOWN" : "UP"}=${oppBid.toFixed(3)} ≥ ${WIN_BID}`,
           urgent: true,
         };
       }
@@ -70,31 +91,40 @@
         return {
           action: "WIN",
           color: "green",
-          detail: `bid=${myBid.toFixed(3)} >= ${WIN_BID} — aguardar resolução`,
+          detail: `bid=${myBid.toFixed(3)} ≥ ${WIN_BID} — aguardar resolução`,
         };
       }
     }
+
     // Profit protect window
     if (secs !== null && secs >= PP_SECS_LO && secs <= PP_SECS_HI && myBid >= PP_BID) {
       return {
         action: "PROFIT PROTECT",
         color: "green",
-        detail: `bid=${myBid.toFixed(3)} >= ${PP_BID} em ${secs}s (janela ${PP_SECS_LO}-${PP_SECS_HI}s) — sair (GTC)`,
+        detail: `bid=${myBid.toFixed(3)} ≥ ${PP_BID} em ${secs}s (janela ${PP_SECS_LO}–${PP_SECS_HI}s) — sair (GTC)`,
       };
     }
 
-    // Holding — show distances
-    const distStop = myBid - STOP_LEVEL;
-    const distPP   = PP_BID - myBid;
-    const inPPWin  = secs !== null && secs >= PP_SECS_LO && secs <= PP_SECS_HI;
-    const ppNote   = inPPWin
+    // Zona morta: 0.50–0.84 com secs > 35 — runner não tem proteção aqui
+    const inDeadZone = myBid < 0.84 && myBid >= HEDGE_THR && (secs === null || secs > 35);
+    const distPP  = PP_BID - myBid;
+    const inPPWin = secs !== null && secs >= PP_SECS_LO && secs <= PP_SECS_HI;
+    const ppNote  = inPPWin
       ? `PP: falta +${distPP.toFixed(3)}`
-      : (secs !== null && secs > PP_SECS_HI ? `PP janela em ${secs - PP_SECS_HI}s` : "PP: janela passou");
+      : (secs !== null && secs > PP_SECS_HI ? `PP em ${secs - PP_SECS_HI}s` : "PP: janela passou");
+
+    if (inDeadZone) {
+      return {
+        action: myBid < 0.70 ? "ZONA MORTA ⚠" : "SEM PROTEÇÃO",
+        color: myBid < 0.70 ? "yellow" : "gray",
+        detail: `bid=${myBid.toFixed(3)} (0.50–0.84, secs>35) — runner aguarda PP ou secs≤35 | ${ppNote}`,
+      };
+    }
 
     return {
       action: "POSICAO ABERTA",
-      color: distStop < 0.05 ? "yellow" : "gray",
-      detail: `stop: -${distStop.toFixed(3)} | ${ppNote} | secs=${secs ?? "?"}`,
+      color: "gray",
+      detail: `bid=${myBid.toFixed(3)} | ${ppNote} | secs=${secs ?? "?"}`,
     };
   }
 
@@ -171,10 +201,10 @@
       <div class="elm-section-title">Posicao — ${esc(pos.side)}</div>
       <div class="elm-pos-exit-badge ${statusClass(rec.color)}">${esc(rec.action)}</div>
       <div class="elm-pos-detail">${esc(rec.detail)}</div>
-      ${elmRow("Bid " + pos.side, fmt(myBid), myBid >= 0.85 ? "ok" : myBid < STOP_LEVEL ? "bad" : "")}
+      ${elmRow("Bid " + pos.side, fmt(myBid), myBid >= 0.85 ? "ok" : myBid < 0.50 ? "bad" : "")}
       ${elmRow("Bid oposto", fmt(oppBid), oppBid >= 0.85 ? "bad" : "")}
-      ${elmRow("Stop (0.65)", myBid > 0 ? `-${(myBid - 0.65).toFixed(3)} (${myBid < 0.65 ? "ATIVAR" : "ok"})` : "-", myBid > 0 && myBid < 0.65 ? "bad" : "ok")}
-      ${elmRow("PP (0.88, 36-70s)", myBid > 0 ? (myBid >= 0.88 ? `DISPONIVEL (${fmt(myBid)})` : `falta +${(0.88 - myBid).toFixed(3)}`) : "-", myBid >= 0.88 ? "ok" : "")}
+      ${elmRow("Hedge gap (<0.50)", myBid > 0 ? `${myBid < 0.50 ? "⚠ ATIVO" : `ok (+${(myBid - 0.50).toFixed(3)})`}` : "-", myBid > 0 && myBid < 0.50 ? "bad" : "ok")}
+      ${elmRow("PP (0.88, 36–70s)", myBid > 0 ? (myBid >= 0.88 ? `DISPONIVEL (${fmt(myBid)})` : `falta +${(0.88 - myBid).toFixed(3)}`) : "-", myBid >= 0.88 ? "ok" : "")}
       <div class="elm-pos-buttons elm-pos-buttons-sm">${btnClear}</div>
     </div>`;
   }
@@ -216,8 +246,8 @@
     const inverted = el.inverted;
 
     const velVal = ee.el_vel != null
-      ? `${ee.el_vel >= 0 ? "+" : ""}${fmt(ee.el_vel)} (min:0.08)` : "-";
-    const velCls = ee.el_vel >= 0.08 ? "ok" : (ee.el_vel > 0 ? "warn" : "");
+      ? `${ee.el_vel >= 0 ? "+" : ""}${fmt(ee.el_vel)} (min:0.13)` : "-";
+    const velCls = ee.el_vel >= 0.13 ? "ok" : (ee.el_vel > 0 ? "warn" : "");
     const contVal = ee.f3_ok === true ? "sim" : ee.f3_ok === false ? "NAO" : "aguardando";
     const contCls = ee.f3_ok === true ? "ok" : ee.f3_ok === false ? "bad" : "";
 
