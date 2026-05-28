@@ -2427,3 +2427,154 @@ como gate adicional ainda — manter apenas gate 0.13 universal.
 | `_sim_ee_runner.py` ou análise manual | Base dos cálculos |
 | `logs/ee_paper_*/ee_paper.jsonl` | Fonte (122 trades) |
 3. Se confirmado: propor gate `range_pos (35-65%) + delta_15m > +5 bps` no runner paper antes do runner real
+
+---
+
+## 23. Melhorias Runner Real EE — Análise de Falhas e Fixes (2026-05-28)
+
+**Contexto:** mesmo com paper mostrando valor, o runner real apresentava stops e perdas
+totais sistematicamente. Esta seção documenta a análise das causas e os fixes aplicados.
+
+---
+
+### 23.1 Três Mecanismos de Falha no Runner Real
+
+**Mecanismo 1 — Bug `el_bid = 0` (crítico)**
+
+A função `_ee_exit_reason` em `live_current_almost_resolved_real_v1.py` retornava `None`
+imediatamente quando `el_bid <= 0`, sem verificar o lado oposto:
+
+```python
+# BUG (antes do fix)
+if el_bid <= 0 or trade.entry_price is None:
+    return None   # ← nenhuma saída disparava; posição segurava até resolução = perda total
+```
+
+Se o livro do EL esvaziava completamente (`el_bid = 0`) mas `opp_bid >= 0.85`, o runner
+não fazia nada. A posição resolvia a 0 → **perda total garantida**.
+
+O paper não sofre este bug porque assume fills instantâneos antes do colapso total.
+
+---
+
+**Mecanismo 2 — Zona morta 0.50–0.84 com secs > 35**
+
+Mapa de proteção antes dos fixes:
+
+```
+secs 36-70  + el_bid >= 0.88        →  profit protect        ✅
+secs <= 35  + el_bid >= 0.85        →  win                   ✅
+secs <= 35  + opp_bid >= 0.85       →  reversal              ✅
+el_bid < 0.50                       →  hedge_gap / stop      ✅
+────────────────────────────────────────────────────────────────
+el_bid entre 0.50 e 0.84, secs > 35 →  NENHUMA PROTEÇÃO     ❌
+```
+
+Se o EL cai de 0.84 para 0.62 com 80 segundos restantes, o runner aguarda sem agir.
+A posição pode deteriorar por mais 45s até o secs chegar em 35, onde a saída pode
+tentar executar a 0.10 com GTC que ninguém compra → **perda total ou próximo disso**.
+
+---
+
+**Mecanismo 3 — GTC em livro fino não preenche**
+
+Quando `ee_reversal` ou `ee_hedge_gap` dispara com `el_bid = 0.01`, o runner posta
+uma ordem GTC a 0.01. Em mercado fino, ninguém compra a esse preço. A ordem fica
+pendente. O candle resolve → **perda total** (posição considerada "perdida" pelo
+`resolution_loss_or_unknown_awaiting_final_balance`).
+
+---
+
+### 23.2 Relação com el_vel
+
+A análise dos 122 trades paper (seções 16 e 22) mostrou que a faixa `el_vel [0.08, 0.13)`
+tem WR ~68% e avg −$0.22/trade. Esses ELs fracos são precisamente os que:
+- Formam com menos convicção
+- Revertem mais facilmente para a zona morta (mecanismo 2)
+- Têm book mais fino na entrada (mecanismo 3)
+
+O gate `el_vel >= 0.13` ataca a **frequência** dos problemas; o bug fix ataca a
+**severidade** quando o problema ocorre.
+
+---
+
+### 23.3 Fixes Aplicados em 2026-05-28
+
+**Fix 1 — `EE_VEL_MIN: 0.08 → 0.13`** (commit `5cc35ea`)
+
+Arquivos alterados:
+- `market/live_current_almost_resolved_real_v1.py` — runner integrado (ativo)
+- `market/live_early_entry_real_v1.py` — runner standalone
+
+Efeito esperado: ~30% menos entradas EE; elimina zona WR 68% / avg −$0.22.
+
+---
+
+**Fix 2 — Bug `el_bid = 0` sem saída** (commit `580c2dc`)
+
+Arquivo principal: `market/live_current_almost_resolved_real_v1.py` — `_ee_exit_reason`:
+
+```python
+# FIX
+if trade.entry_price is None:
+    return None
+if el_bid <= 0:
+    if opp_bid >= 0.85:
+        return "ee_reversal"   # reversão clara; sai a 0.001 em vez de perda total
+    if opp_bid > 0:
+        return "ee_hedge_gap"  # opp tem liquidez; hedge captura parte da perda
+    return None                # ambos os lados sem livro; nada a fazer
+```
+
+Arquivo secundário: `market/live_early_entry_real_v1.py` — bloco `open_position`:
+
+```python
+# Prioridade 3 (nova): livro EL zerou + opp >= 0.85 → reversão confirmada
+elif el_bid <= 0 and opp_bid >= 0.85:
+    _post_ee_exit(..., exit_price=0.001, reason="reversal_book_empty")
+```
+
+**Segurança do fix:** só dispara quando `el_bid == 0` (livro completamente vazio, não dip
+temporário) AND `opp_bid >= 0.85` (reversão confirmada pelo lado oposto). Não é stop cego.
+
+---
+
+### 23.4 O Que Ainda Falta — Zona Morta 0.50–0.84
+
+A zona entre 0.50 e 0.84 com secs > 35 ainda não tem proteção. Um stop suave nessa faixa
+seria: `if el_bid < 0.72 AND opp_bid > 0.72 AND secs > 35 → exit`. Isso capturaria
+reversões estruturais sem ser FAK em dip temporário.
+
+**Pendente:** precisamos de dados reais do outro PC com os gates atuais ativos para:
+1. Confirmar se a zona 0.50–0.84 ainda causa perdas após o gate 0.13
+2. Calibrar o threshold de reversão antecipada (0.72? 0.75?)
+3. Só então implementar o stop suave
+
+---
+
+### 23.5 Procedimento de Atualização no PC de Casa
+
+```powershell
+# 1. Puxar mudanças (inclui os 7 commits de 2026-05-28)
+git pull
+
+# 2. Reiniciar o runner com os novos parâmetros (watchdog reinicia automaticamente)
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -ArmEE -Qty 6 -RunSeconds 1800 -PollSeconds 0.5 -Continuous
+```
+
+O runner carregará automaticamente:
+- `EE_VEL_MIN = 0.13` (era 0.08)
+- Fix do bug `el_bid = 0`
+
+Monitorar nos primeiros dias: campo `entry_blocked` com reason `vel<X` deve aparecer
+mais (~30% das entradas EE filtradas). Se não aparecer, verificar se o arquivo correto
+está sendo carregado.
+
+---
+
+### 23.6 Arquivos Modificados
+
+| Arquivo | Mudança | Commit |
+|---------|---------|--------|
+| `market/live_current_almost_resolved_real_v1.py` | `EE_VEL_MIN 0.08→0.13` + fix `el_bid=0` | `5cc35ea`, `580c2dc` |
+| `market/live_early_entry_real_v1.py` | `EE_VEL_MIN 0.08→0.13` + fix `reversal_book_empty` | `5cc35ea`, `580c2dc` |

@@ -51,38 +51,55 @@ Nunca iniciar runner real diretamente com `python run_live_*.py --seconds <longo
 
 ## Estado da pesquisa EE (Early Entry)
 
-Fase atual: **Monitoramento e ajuste fino** (desde 2026-05-27)
+Fase atual: **Melhorias de execução ativas** (2026-05-28)
 
-Gates deployados em 2026-05-27 (`market/live_current_almost_resolved_real_v1.py`):
-- `n_s180 < 3` → bloqueia entrada (WR 44% → 83%)
-- `secs > 155` → bloqueia entrada (faixa tardia WR 47%)
-- Stop FAK removido (todos os 14 stops anteriores eram falsos; fill em livro fino)
-- Proteção de reversão real: `ee_reversal` quando opp_bid >= 0.85 em secs <= 35
+### Gates deployados no runner real (acumulados)
 
-Pendente: validar efetividade dos gates com 50+ trades diurnos (semana de 2026-05-28).
-- Gate candidato `el_vel >= 0.13`: só implementar após 100+ trades com WR > 85%
-- Paper local (este PC): coleta seg-sex para validar o gate
-- Logs reais ficam no outro PC em `logs/ee_real_*/ee_real.jsonl`
+`market/live_current_almost_resolved_real_v1.py`:
 
-Gates candidatos novos implementados no paper local em 2026-05-28 (`market/live_early_entry_paper_v1.py`):
-- `n_s180 < 3` — replicado do real para alinhar comportamento paper/real
-- `n_s180 == 5` — WR 56.2% (pior faixa pós-gates), validar com 50+ dias úteis antes de ir pro real
-- `hora UTC == 6` — WR 42.9% (pior horário), validar consistência (pode ser sazonalidade fim-de-semana)
-- Todos logados como `entry_blocked` com reason específico
+| Gate / Fix | Data | Base |
+|------------|------|------|
+| `n_s180 < 3` → bloqueia entrada | 2026-05-27 | WR 44% → 83% |
+| `secs > 155` → bloqueia entrada | 2026-05-27 | faixa tardia WR 47% |
+| Stop FAK removido | 2026-05-27 | 14/14 stops eram falsos; fill catastrófico |
+| `ee_reversal` opp_bid >= 0.85 em secs <= 35 | 2026-05-27 | proteção de reversão genuína |
+| **`EE_VEL_MIN 0.08 → 0.13`** | **2026-05-28** | **WR 68%→86% / avg −$0.22→+$0.44** |
+| **Fix bug `el_bid=0` sem saída** | **2026-05-28** | **perda total quando livro EL esvaziava** |
 
-Documentação completa: `ANALISE_REGIME_MERCADO.md`
+### Aplicar no PC de casa (git pull pendente)
 
-Para analisar logs reais no outro PC após `git pull`:
+```powershell
+git pull
+.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -ArmEE -Qty 6 -RunSeconds 1800 -PollSeconds 0.5 -Continuous
+```
+
+Confirmar após reinício: `entry_blocked` com reason `vel<0.13` deve aparecer (~30% das
+entradas filtradas). Documentação completa: `TESTES_ANALISE_EL.md` seção 23.
+
+### Gates candidatos no paper local (este PC)
+
+`market/live_early_entry_paper_v1.py`:
+- `n_s180 < 3` — replicado do real
+- `n_s180 == 5` — WR 56.2%, validar 50+ dias úteis
+- `hora UTC == 6` — WR 42.9%, validar consistência
+
+### Pendente — zona morta 0.50–0.84 com secs > 35
+
+Posições nessa faixa ainda não têm proteção. Fix planejado (stop suave se
+`el_bid < 0.72 AND opp_bid > 0.72`), mas aguarda dados reais com os gates atuais
+ativos. Não implementar sem análise dos logs reais pós-pull.
+
+### Para analisar logs reais no outro PC após `git pull`
+
 ```powershell
 .\_run_real_analysis.ps1 -Push   # roda todos os scripts + commita resultados
 ```
 
-Scripts de análise disponíveis (todos aceitam `--logs "logs/ee_real_*/ee_real.jsonl"`):
-- `_sim_el_flip.py` — simulação de inversão do EL (TESTE E — novo)
+Scripts disponíveis (aceitam `--logs "logs/ee_real_*/ee_real.jsonl"`):
+- `_sim_el_flip.py` — simulação de inversão do EL
 - `_sim_full_universe.py` — universo completo de candidatos EE
 - `_sim_el_bid_stability.py` — estabilidade do bid antes da entrada
 - `_sim_3gates.py` — gates de estabilidade (dip, mono, opp)
-- `_sim_dip_strategies.py` — impacto de bloquear vs esperar dip
 - `_sim_btc_momentum.py` — paradoxo adverso BTC
 
 ## Análise EL Flip (nova — 2026-05-25)
@@ -113,7 +130,8 @@ Campo `regime_diagnostics` adicionado ao evento `enter` do AR paper (`diagnostic
 - Não avançar para 50 ou 100 shares sem validação nos logs reais
 - `passive_capture_only` só alterar após comparar sessions reais vs paper
 - Stop, target e hold_to_resolution são definidos pelo sinal — não sobrescrever no runner
-- Gate el_vel >= 0.13: só implementar após 100+ trades de dias úteis com WR > 85%
+- **`EE_VEL_MIN = 0.13` deployado em 2026-05-28** — não baixar sem nova análise
 - EL Flip: não implementar no runner real sem validação nos logs reais
 - **EE stop FAK removido em 2026-05-27** — não reintroduzir sem nova análise de dados reais
 - Gates EE candidatos (n_s180=5, hora=6h UTC): só ir pro real após validação no paper (50+ dias úteis)
+- Stop suave zona 0.50–0.84: não implementar sem análise dos logs reais pós-pull
