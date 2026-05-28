@@ -18,50 +18,71 @@
   function clearPosition() { localStorage.removeItem(LS_KEY); }
 
   // ---------------------------------------------------------------------------
-  // Win probability — baseada em estatisticas reais dos trades (2026-05-28)
+  // Win probability — baseada em estatisticas reais (2026-05-28)
   //
-  // Fontes:
-  //   EE zona morta pos-FAK-removal: 20 wins / 24 trades = 83% (bid>=0.80, secs>35)
-  //   PP window (bid>=0.88, secs 36-70): ~91% (profit protect historico)
-  //   Near win (bid>=0.85, secs<=35): ~94% (quase todos resolvem a favor)
-  //   EE entry gate vel>=0.13: WR 86% (CLAUDE.md — gate deployado 2026-05-28)
-  //   EE entry gate vel<0.13:  WR 68% (abaixo do gate, nao entra)
+  // EE zona morta pos-FAK-removal: 20w/4s em bid>=0.80 = 83%
+  // PP window (bid>=0.88, secs 36-70): ~91%
+  // Near win (bid>=0.85, secs<=35): ~94%
+  // EE entry gate vel>=0.13: WR 86% (gate deployado 2026-05-28)
+  // AR: baseado em bid atual (quanto mais perto de 1.0, maior chance)
   // ---------------------------------------------------------------------------
-  function calcWinProb(side, bids, secs, ee) {
+  function calcWinProbEE(side, bids, secs) {
     const myBid  = side ? (side === "UP" ? (bids.up  || 0) : (bids.down || 0)) : 0;
     const oppBid = side ? (side === "UP" ? (bids.down || 0) : (bids.up  || 0)) : 0;
     if (!side) return null;
 
-    // Reversao total: livro EL zerou + opp domina
-    if (myBid <= 0 && oppBid >= 0.85) return { pct: 5,  label: "reversao total", color: "red" };
-    if (myBid <= 0 && oppBid > 0)     return { pct: 15, label: "livro EL zerou", color: "red" };
+    if (myBid <= 0 && oppBid >= 0.85) return { pct: 5,  label: "reversao total",      color: "red" };
+    if (myBid <= 0 && oppBid > 0)     return { pct: 15, label: "livro EL zerou",       color: "red" };
     if (myBid <= 0)                   return null;
 
-    // Near win: secs <= 35
     if (secs !== null && secs <= 35) {
       if (oppBid >= 0.85) return { pct: 8,  label: "reversao secs<=35",      color: "red" };
       if (myBid  >= 0.85) return { pct: 94, label: "near win bid>=0.85",     color: "green" };
       if (myBid  >= 0.75) return { pct: 82, label: "secs<=35 bid 0.75-0.85", color: "yellow" };
     }
 
-    // Profit protect window (secs 36-70, bid >= 0.88)
     if (secs !== null && secs >= 36 && secs <= 70 && myBid >= 0.88)
       return { pct: 91, label: "PP window bid>=0.88", color: "green" };
 
-    // Hedge gap
     if (myBid < 0.50 && oppBid > 0) return { pct: 22, label: "bid<0.50 hedge gap", color: "red" };
 
-    // Zona morta (secs > 35 ou desconhecido, bid 0.50-0.84)
-    // Estatistica pos-FAK-removal: 20w/4s em bid>=0.80 = 83%
-    if (myBid >= 0.80) return { pct: 83, label: "zona morta bid>=0.80",      color: "yellow" };
-    if (myBid >= 0.73) return { pct: 73, label: "zona morta bid 0.73-0.80",  color: "yellow" };
-    if (myBid >= 0.65) return { pct: 55, label: "zona morta bid 0.65-0.73",  color: "orange" };
-    if (myBid >= 0.50) return { pct: 38, label: "zona morta bid 0.50-0.65",  color: "red" };
-
+    // Zona morta: pos-FAK-removal: 20/24 = 83% bid>=0.80
+    if (myBid >= 0.80) return { pct: 83, label: "zona morta bid>=0.80",     color: "yellow" };
+    if (myBid >= 0.73) return { pct: 73, label: "zona morta bid 0.73-0.80", color: "yellow" };
+    if (myBid >= 0.65) return { pct: 55, label: "zona morta bid 0.65-0.73", color: "orange" };
+    if (myBid >= 0.50) return { pct: 38, label: "zona morta bid 0.50-0.65", color: "red" };
     return null;
   }
 
-  // Win prob para sinal de entrada (sem posicao aberta)
+  function calcWinProbAR(ep, currentBid) {
+    // AR: chance de win baseada no bid atual (distancia de 1.0)
+    // Dados: ep 0.95-0.96 avg=-0.014 (break even), ep 0.97-0.98 avg=+0.06
+    // Gate bloqueia ep>=0.97 (standard), variante gate>=0.985 — so chegamos aqui com ep 0.95-0.96
+    const bid = currentBid || ep;
+    if (bid >= 0.995) return { pct: 98, label: "AR bid>=0.995 resolucao",   color: "green" };
+    if (bid >= 0.98)  return { pct: 93, label: "AR bid>=0.98",              color: "green" };
+    if (bid >= 0.96)  return { pct: 86, label: "AR bid>=0.96",              color: "green" };
+    if (bid >= 0.94)  return { pct: 76, label: "AR bid>=0.94",              color: "yellow" };
+    if (bid >= 0.90)  return { pct: 63, label: "AR bid>=0.90",              color: "yellow" };
+    if (bid >= ep)    return { pct: 50, label: "AR bid>=ep neutro",          color: "orange" };
+    return             { pct: 28, label: "AR bid<ep contra posicao",        color: "red" };
+  }
+
+  function calcWinProb(side, bids, secs, runner) {
+    if (!side) return null;
+    if (runner && runner.mode === "open_position") {
+      const variant = runner.setup_variant || "";
+      if (variant === "early_entry") {
+        // EE: usa bid atual da extensao (mais fresco que o runner state file)
+        return calcWinProbEE(side, bids, secs);
+      }
+      // AR: usa current_bid do runner (bid do mercado da posicao aberta)
+      return calcWinProbAR(runner.ep || 0, runner.current_bid || 0);
+    }
+    // Posicao manual sem runner: EE logic
+    return calcWinProbEE(side, bids, secs);
+  }
+
   function calcEntryProb(ee) {
     const vel = ee.el_vel;
     const n180 = ee.n_s180 || 0;
@@ -74,7 +95,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Exit logic
+  // Exit logic (espelha runner v2 2026-05-28)
   // ---------------------------------------------------------------------------
   const PP_BID     = 0.88;
   const PP_SECS_LO = 36;
@@ -136,6 +157,11 @@
     if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
     return Number(v).toFixed(d);
   }
+  function fmtPnl(v) {
+    if (v === null || v === undefined) return "-";
+    const n = Number(v);
+    return (n >= 0 ? "+" : "") + n.toFixed(2);
+  }
   function esc(v) {
     return String(v ?? "")
       .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -192,9 +218,117 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Position section HTML
+  // Runner section — estado do runner real
   // ---------------------------------------------------------------------------
-  function positionHtml(pos, state) {
+  const RUNNER_MODE_LABELS = {
+    idle:                 ["IDLE",           "gray"],
+    pending_entry:        ["ENTRANDO",        "yellow"],
+    open_position:        ["POSICAO ABERTA", "green"],
+    pending_exit:         ["SAINDO",          "yellow"],
+    exit_pending_confirm: ["AGUARD. CONFIRM", "yellow"],
+    awaiting_redeem:      ["AGUARD. REDEEM",  "orange"],
+  };
+
+  function runnerSectionHtml(runner, bids, secs) {
+    if (!runner) {
+      return `<div class="elm-section elm-runner-section">
+        <div class="elm-section-title">Runner</div>
+        <div class="elm-runner-offline">sem dados (runner parado ou outro PC)</div>
+      </div>`;
+    }
+
+    const mode = runner.mode || "idle";
+    const [modeLabel, modeColor] = RUNNER_MODE_LABELS[mode] || [mode.toUpperCase(), "gray"];
+    const variant = runner.setup_variant || "";
+    const isEE = variant === "early_entry";
+    const isAR = !isEE && mode !== "idle";
+    const side = runner.side || "";
+    const ep = runner.ep || 0;
+    const qty = runner.qty || 0;
+    const remQty = runner.remaining_qty || qty;
+    const rBid = runner.current_bid || 0;
+    const unreal = runner.unrealized_pnl;
+    const rsecs = runner.current_secs;
+
+    // Win probability: para posicao aberta
+    let wp = null;
+    if (mode === "open_position" && side) {
+      if (isEE) {
+        wp = calcWinProbEE(side, bids, rsecs != null ? rsecs : secs);
+      } else {
+        wp = calcWinProbAR(ep, rBid);
+      }
+    }
+
+    // AR signal
+    const arSig = runner.ar_signal || {};
+    const arAllow = arSig.allow;
+    const arReason = arSig.reason || "";
+    const arVariant = arSig.variant || "";
+    const arEp = arSig.ep;
+
+    // EE gates
+    const ee = runner.ee || {};
+    const vel = ee.el_vel;
+    const n180 = ee.n_s180 || 0;
+    const velOk = vel != null && vel >= 0.13;
+    const n180Ok = n180 >= 3;
+    const eeSignal = ee.signal_ok;
+
+    const modeColorCss = { green:"green", yellow:"yellow", orange:"orange", gray:"gray", red:"red" }[modeColor] || "gray";
+
+    let posHtml = "";
+    if (mode === "open_position" || mode === "pending_exit" || mode === "exit_pending_confirm") {
+      const pnlCls = unreal === null ? "" : (unreal >= 0 ? "ok" : "bad");
+      const variantShort = isEE ? "EE" : (variant || "AR").toUpperCase().slice(0,8);
+      posHtml = `
+        ${winProbHtml(wp)}
+        ${elmRow("Lado / Variant", `${side} [${variantShort}]`, side ? "ok" : "")}
+        ${elmRow("Entry price",    fmt(ep), "")}
+        ${elmRow("Qty restante",   `${remQty} / ${qty}`, "")}
+        ${elmRow("Bid atual",      rBid > 0 ? fmt(rBid) : "-", rBid >= ep ? "ok" : rBid > 0 ? "warn" : "")}
+        ${elmRow("PnL nao real.",  fmtPnl(unreal), pnlCls)}
+        ${rsecs != null ? elmRow("Secs (runner)", `${secsDisplay(rsecs)}`, "") : ""}
+      `;
+    } else if (mode === "awaiting_redeem") {
+      posHtml = `
+        ${elmRow("Lado", side || "-", "")}
+        ${elmRow("Entry price", fmt(ep), "")}
+        ${elmRow("Motivo", runner.last_reason || "-", "")}
+      `;
+    }
+
+    // AR signal row
+    let arHtml = "";
+    if (mode === "idle") {
+      const arCls = arAllow ? "ok" : "warn";
+      const arText = arAllow
+        ? `SINAL: ${arSig.side || "?"} ep=${fmt(arEp, 3)} [${arVariant}]`
+        : `bloqueado: ${arReason.slice(0, 35)}`;
+      arHtml = elmRow("AR sinal", arText, arCls);
+    }
+
+    // EE gates row
+    const velTxt = vel != null ? `${vel >= 0 ? "+" : ""}${vel.toFixed(3)} ${velOk ? "ok" : "baixo"}` : "-";
+    const eeSigTxt = eeSignal ? "SINAL EE ativo" : (vel != null && vel >= 0.13 ? "fora da janela" : "aguardando");
+    const eeSigCls = eeSignal ? "ok" : "";
+
+    return `<div class="elm-section elm-runner-section">
+      <div class="elm-section-title">Runner</div>
+      <div class="elm-runner-badge elm-runner-${modeColorCss}">${modeLabel}</div>
+      ${posHtml}
+      ${arHtml}
+      <div class="elm-section-title" style="margin-top:5px">EE Gates</div>
+      ${elmRow("EL vel", velTxt, velOk ? "ok" : vel != null ? "warn" : "")}
+      ${elmRow("n_s180", `${n180} ${n180Ok ? "ok" : n180 > 0 ? "(baixo)" : "-"}`, n180Ok ? "ok" : n180 > 0 ? "warn" : "")}
+      ${elmRow("EE sinal", eeSigTxt, eeSigCls)}
+    </div>`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Manual position section
+  // ---------------------------------------------------------------------------
+  function positionHtml(pos, state, runner) {
     const bids = state.bids || {};
     const secs = state.secs_to_end;
     const ee   = state.ee || {};
@@ -204,10 +338,9 @@
     const btnClear = pos.side ? `<button class="elm-btn-clear">Sair / Limpar</button>` : "";
 
     if (!pos.side) {
-      // Sem posicao: mostrar % de win do sinal de entrada atual
       const entryProb = calcEntryProb(ee);
       return `<div class="elm-section elm-position-section">
-        <div class="elm-section-title">Posicao</div>
+        <div class="elm-section-title">Posicao manual</div>
         ${entryProb ? winProbHtml(entryProb) : ""}
         <div class="elm-pos-buttons">${btnUp}${btnDn}</div>
       </div>`;
@@ -215,16 +348,14 @@
 
     const rec = exitRecommendation(pos.side, bids, secs);
     const myBid  = pos.side === "UP" ? (bids.up  || 0) : (bids.down || 0);
-    const oppBid = pos.side === "UP" ? (bids.down || 0) : (bids.up  || 0);
-    const wp = calcWinProb(pos.side, bids, secs, ee);
+    const wp = calcWinProb(pos.side, bids, secs, runner);
 
     return `<div class="elm-section elm-position-section elm-position-active">
-      <div class="elm-section-title">Posicao -- ${esc(pos.side)}</div>
+      <div class="elm-section-title">Posicao manual -- ${esc(pos.side)}</div>
       <div class="elm-pos-exit-badge ${statusClass(rec.color)}">${esc(rec.action)}</div>
       <div class="elm-pos-detail">${esc(rec.detail)}</div>
       ${winProbHtml(wp)}
       ${elmRow("Bid " + pos.side, fmt(myBid), myBid >= 0.85 ? "ok" : myBid < 0.50 ? "bad" : "")}
-      ${elmRow("Bid oposto", fmt(oppBid), oppBid >= 0.85 ? "bad" : "")}
       ${elmRow("PP (0.88, 36-70s)", myBid > 0 ? (myBid >= 0.88 ? `DISPONIVEL (${fmt(myBid)})` : `falta +${(0.88 - myBid).toFixed(3)}`) : "-", myBid >= 0.88 ? "ok" : "")}
       <div class="elm-pos-buttons elm-pos-buttons-sm">${btnClear}</div>
     </div>`;
@@ -261,6 +392,7 @@
     const bids   = state.bids || {};
     const ee     = state.ee || {};
     const el     = state.el || {};
+    const runner = state.runner || null;
     const pos    = loadPosition();
 
     const elSide = ee.early_side || null;
@@ -292,10 +424,12 @@
         ${bidBox("DOWN", bids.down, elSide === "DOWN")}
       </div>
 
-      ${positionHtml(pos, state)}
+      ${runnerSectionHtml(runner, bids, secs)}
+
+      ${positionHtml(pos, state, runner)}
 
       <div class="elm-section">
-        <div class="elm-section-title">Early Leader EE</div>
+        <div class="elm-section-title">Early Leader EE (servidor)</div>
         ${elmRow("Lado",         elSide ? elSide : "nao detectado", elSide ? "ok" : "")}
         ${elmRow("bid_240",      fmt(ee.el_bid_240))}
         ${elmRow("bid_180",      fmt(ee.el_bid_180))}
@@ -331,14 +465,14 @@
   function renderError(msg) {
     render({
       slug: null, secs_to_end: null, action: "SEM CONEXAO", color: "error",
-      detail: msg, bids: {}, ee: {}, el: {},
+      detail: msg, bids: {}, ee: {}, el: {}, runner: null,
       criteria: [{ label: "Servidor local", value: "falhou", ok: false,
         detail: "rode: python run_el_monitor_server.py" }],
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Fetch — direto primeiro (sem overhead de service worker), fallback via background
+  // Fetch — direto primeiro (sem overhead de service worker)
   // ---------------------------------------------------------------------------
   async function fetchDirect() {
     const urls = [lastWorkingUrl, ...STATE_URLS.filter((u) => u !== lastWorkingUrl)];
@@ -354,11 +488,8 @@
   }
 
   async function fetchState() {
-    // Tenta fetch direto primeiro (mais rapido — sem round-trip via service worker)
     const direct = await fetchDirect();
     if (direct) return direct;
-
-    // Fallback: via background service worker
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
       try {
         const resp = await chrome.runtime.sendMessage({ type: "pm_el_monitor_state" });

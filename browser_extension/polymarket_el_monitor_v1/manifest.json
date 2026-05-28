@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Polymarket EL Monitor V1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Monitora Early Leader e sinal EE em tempo real na página da Polymarket.",
   "background": {
     "service_worker": "background.js"

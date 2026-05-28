@@ -102,6 +102,58 @@ def _state_path() -> Path:
     return Path("logs") / "current_almost_resolved_real_state.json"
 
 
+def _live_state_path() -> Path:
+    return Path("logs") / "current_almost_resolved_real_live.json"
+
+
+def _write_live_state(
+    path: Path,
+    trade: "LiveCurrentAlmostResolvedTradeState",
+    ee_tracker,
+    current_secs: Optional[int],
+    active_bid: float,
+    signal: dict,
+    now: float,
+    session_id: str,
+) -> None:
+    try:
+        ep = _safe_float(trade.entry_price, 0.0)
+        qty = _safe_float(trade.entry_qty_filled, 0.0)
+        remaining = trade.remaining_position_qty
+        unreal_pnl = round((active_bid - ep) * remaining, 4) if active_bid > 0 and ep > 0 and remaining > 0 else None
+        state = {
+            "ts": now,
+            "session_id": session_id,
+            "mode": trade.mode or "idle",
+            "slug": trade.event_slug or "",
+            "side": trade.side or "",
+            "ep": ep,
+            "qty": qty,
+            "remaining_qty": remaining,
+            "setup_variant": trade.setup_variant or "",
+            "last_reason": str(trade.last_reason or ""),
+            "created_at": trade.created_at,
+            "current_bid": round(active_bid, 4),
+            "unrealized_pnl": unreal_pnl,
+            "current_secs": current_secs,
+            "ar_signal": {
+                "allow": bool(signal.get("allow")),
+                "reason": str(signal.get("reason") or ""),
+                "setup": str(signal.get("setup") or ""),
+                "side": signal.get("side"),
+                "ep": signal.get("ep"),
+                "variant": str(signal.get("variant") or ""),
+                "d_bps": signal.get("d_bps"),
+            },
+            "ee": ee_tracker.state_dict() if ee_tracker is not None else {},
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
 def _counter_reversal_state_path() -> Path:
     return Path("logs") / "counter_reversal_real_state.json"
 
@@ -1646,6 +1698,16 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 "ee_tracker": _ee_tracker.state_dict() if ee_enabled else None,
             }
             _append_jsonl(log_path, snapshot)
+            _write_live_state(
+                _live_state_path(),
+                trade,
+                _ee_tracker if ee_enabled else None,
+                current_secs,
+                active_bid,
+                signal,
+                now,
+                session_id,
+            )
             print(
                 f"[CURRENT_ALMOST_RESOLVED_REAL] current_secs={current_secs} allow={signal.get('allow')} "
                 f"side={signal.get('side')} mode={trade.mode} qty={trade.entry_qty_filled}/{trade.remaining_position_qty}"

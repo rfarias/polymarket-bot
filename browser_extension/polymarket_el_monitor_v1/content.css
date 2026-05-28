@@ -385,6 +385,53 @@ html.pm-el-monitor-right-dock-active body {
   background: #253347;
 }
 
+/* Runner section */
+#pm-el-monitor-ext .elm-runner-section {
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+#pm-el-monitor-ext .elm-runner-badge {
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+#pm-el-monitor-ext .elm-runner-green {
+  background: rgba(34, 197, 94, 0.15);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.5);
+}
+
+#pm-el-monitor-ext .elm-runner-yellow {
+  background: rgba(234, 179, 8, 0.12);
+  color: #fde68a;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+
+#pm-el-monitor-ext .elm-runner-orange {
+  background: rgba(249, 115, 22, 0.12);
+  color: #fdba74;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
+#pm-el-monitor-ext .elm-runner-gray {
+  background: rgba(100, 116, 139, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+#pm-el-monitor-ext .elm-runner-offline {
+  font-size: 10px;
+  color: #4a6fa5;
+  font-style: italic;
+  padding: 3px 0;
+}
+
 /* Win probability bar */
 #pm-el-monitor-ext .elm-win-prob {
   margin-bottom: 7px;

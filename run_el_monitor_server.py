@@ -15,11 +15,28 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, Optional
+
+RUNNER_LIVE_STATE_PATH = pathlib.Path("logs/current_almost_resolved_real_live.json")
+RUNNER_STALE_SECS = 10.0
+
+
+def _read_runner_state() -> Optional[dict]:
+    try:
+        if not RUNNER_LIVE_STATE_PATH.exists():
+            return None
+        data = RUNNER_LIVE_STATE_PATH.read_text(encoding="utf-8")
+        s = json.loads(data)
+        if time.time() - float(s.get("ts", 0)) > RUNNER_STALE_SECS:
+            return None
+        return s
+    except Exception:
+        return None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -35,7 +52,7 @@ from market.rest_5m_shadow_public_v5 import (
 # ---------------------------------------------------------------------------
 EE_EL_MIN = 0.55
 EE_CONT_MIN = 0.70
-EE_VEL_MIN = 0.08
+EE_VEL_MIN = 0.13
 EE_ENTRY_LO = 0.82
 EE_ENTRY_HI = 0.86
 EE_MAX_ENTRY_SECS = 180
@@ -318,6 +335,7 @@ def _build_state(
         "active_price": round(el_bid, 3) if in_bid else None,
         "opp_bid": round(opp_bid, 4),
         "el_bid": round(el_bid, 4),
+        "runner": _read_runner_state(),
     }
 
 
