@@ -205,6 +205,30 @@ def load_trades(pattern: str) -> list[dict]:
                 elif t == "exit":
                     ev["_file"] = f
                     all_exits.append(ev)
+                elif t == "trade_closed":
+                    # Formato real: campos planos, sem sub-objeto trade
+                    ep  = float(ev.get("entry_price") or 0)
+                    xp  = float(ev.get("exit_price") or 0)
+                    qty = float(ev.get("qty") or 0)
+                    lr  = ev.get("last_reason") or ""
+                    parts = lr.split(":")
+                    reason = parts[1] if len(parts) > 1 else lr
+                    if reason == "near_win_exit":
+                        reason = "target"
+                    ev["trade"] = {
+                        "created_at":    ev.get("ts"),
+                        "side":          ev.get("side", ""),
+                        "entry_price":   ep,
+                        "exit_price":    xp,
+                        "event_slug":    ev.get("entry_slug", ""),
+                        "pnl_ticks":     round((xp - ep) * 100, 1),
+                        "pnl_quote":     ev.get("pnl_usd", 0.0),
+                        "exit_reason":   reason,
+                        "setup_variant": "",
+                        "source":        ev.get("source", ""),
+                    }
+                    ev["_file"] = f
+                    all_exits.append(ev)
         all_snaps_by_file[f] = snaps
 
     global_timeline.sort()
@@ -263,7 +287,7 @@ def load_trades(pattern: str) -> list[dict]:
         dt = datetime.fromtimestamp(ts, tz=TZ_LOCAL) if ts else None
         hour = dt.hour if dt else None
 
-        slug = snap.get("current_slug") or sig.get("current_slug") or ""
+        slug = snap.get("current_slug") or sig.get("current_slug") or trade.get("event_slug") or ""
 
         ref_price = ref.get("reference_price") or sc.get("reference_price")
 
