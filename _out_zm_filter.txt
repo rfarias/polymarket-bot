@@ -1,0 +1,73 @@
+ANALISE: FILTROS ZONA MORTA (EE) + AR GTC ep>=0.97
+Data: 2026-05-28
+====================================================
+
+1. AR GTC ep>=0.97
+------------------
+PROBLEMA: Uma saida catastrofica (-$5.94, source=startup_reconcile, ep=0.99, side=DOWN,
+           exit_price=0.0) dominou o bucket ep 0.99+.
+
+DIAGNOSTICO:
+  - Trade entrou com ep=0.99, runner reiniciou e encontrou posicao em resolution_loss
+  - ep 0.97-0.98: n=14, total=+$0.84 (saudavel, sem risco real)
+  - ep 0.99+: n=9, total=-$5.81 (todo vindo desse 1 evento)
+
+CONCLUSAO: PROBLEMA JA RESOLVIDO
+  Gates deployados em 2026-05-27:
+    - variant_gate:standard: bloqueia ep >= 0.97
+    - variant_gate:dual_rich_late_limit: bloqueia ep >= 0.985
+  O outlier nao pode mais ocorrer com epocas altas. Nenhuma acao adicional necessaria.
+
+====================================================
+
+2. ZONA MORTA EE (el_bid_180 em [0.50, 0.84], secs > 35)
+---------------------------------------------------------
+33 trades passaram pela zona morta:
+  Wins:  20 (61%)
+  Stops: 13 (39%)
+
+CAUSA PRINCIPAL DOS STOPS:
+  - FAK stops: 9/13 stops (69%) -> ja removidos em 2026-05-27!
+    exit_posted:ee_stop:fak (avg aprox -$1.7/stop)
+  - Structural stop_loss_pending_exit: 4/13 stops (31%)
+    (avg aprox -$1.3/stop — risco residual)
+
+ANALISE DE FILTROS (por limiares de el_bid e opp_bid):
+
+  Filtro zm_min_el < 0.70:
+    Para stops: 2/13 capturados (15% — fraco)
+    Para wins:  0/20 mortos
+    -> Muito pouco impacto positivo para implementar
+
+  Filtro zm_min_el < 0.72, 0.73, 0.74... (progressivo):
+    Comeca a matar wins (ex: 0.70 = +$0.42 win) antes de capturar stops relevantes
+    Sem separacao limpa entre wins e stops nessa faixa
+
+  Filtro zm_max_opp >= 0.55:
+    Para stops: 5/13 capturados
+    Para wins:  12/20 MORTOS (WR cai de 61% para 50%)
+    -> Pior que nao ter filtro — o opp_bid alto e comum em wins tambem
+
+CONCLUSAO: NAO IMPLEMENTAR FILTRO DE ZONA MORTA AGORA
+  Razoes:
+  1. A maior parte do dano (FAK stops: 9/13) ja foi eliminada em 2026-05-27
+  2. Nenhum filtro simples (el_bid ou opp_bid) separa wins de stops de forma util
+  3. O filtro opp_bid >= 0.55 prejudicaria 60% dos wins sem resolver o problema
+  4. O filtro zm_min_el < 0.70 capta apenas 2 stops (residual)
+
+  Acao recomendada:
+  - Acumular 50+ trades com configuracao atual (EE_VEL_MIN=0.13, sem FAK stops)
+  - Re-analisar zona morta com dados novos: provavelmente WR > 70% sem FAK stops
+  - Gate el_vel >= 0.13 ja filtra 30% das entradas de baixa qualidade
+
+====================================================
+
+3. RESUMO EXECUTIVO
+-------------------
+  AR GTC ep>=0.97: RESOLVIDO (gate ja ativo)
+  Zona morta FAK stops: RESOLVIDO (FAK removido em 2026-05-27)
+  Zona morta residual: Sem filtro viavel por ora — aguardar dados novos
+
+Proximos passos:
+  - Monitorar 50+ trades EE com config atual (semana de 2026-05-28)
+  - Re-avaliar zona morta quando houver dados sem FAK stops
