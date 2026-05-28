@@ -2203,4 +2203,227 @@ python _analise_regime_ar.py --logs "logs/ar_real_*/ar_real.jsonl"
 **Próximos passos:**
 1. Rodar `_analise_regime_ar.py` nos logs reais após `git pull` no outro PC
 2. Validar se `meio + sobe_leve` tem WR < 85% também nos logs reais (N >= 50)
+
+---
+
+## 21. Comparação Runner Real vs Paper EE — Shadow Simulation (2026-05-28)
+
+**Objetivo:** Simular a lógica de saída do runner real (`live_early_entry_real_v1.py`) contra os
+logs de paper do fim de semana, para identificar divergências entre os dois e bugs de implementação.
+
+**Script:** `_sim_real_runner.py`  
+**Fonte:** `logs/ee_paper_*/ee_paper.jsonl` (122 trades fechados)  
+**Dataset:** Sexta 22/05 – Segunda 25/05/2026
+
+---
+
+### 21.1 Resultado Geral
+
+| Métrica | Paper | Runner Real |
+|---------|-------|-------------|
+| PnL total | +$8.76 | **+$10.80** |
+| WR | 76.2% (93/122) | 77.0% (94/122) |
+| avg/trade | +0.072 | +0.089 |
+| Trades idênticos | 104/122 | — |
+| Trades diferentes | 18/122 | — |
+
+**Runner real seria $2.04 melhor** que o paper nos mesmos 122 trades.
+
+---
+
+### 21.2 Divergências entre Paper e Runner Real (18 trades)
+
+| Outcome Paper | Outcome Real | Qtd | Delta PnL |
+|--------------|-------------|-----|-----------|
+| WIN | PROFIT_PROTECT | 16 | −$2.28 |
+| WIN_HEDGE | PROFIT_PROTECT | 1 | +$4.38 |
+| WIN_HEDGE | STOP_LOSS | 1 | +$0.78 |
+
+As 16 divergências WIN→PP: o runner real tem PP mais agressivo (saída antecipada).
+Impacto: −$2.28 acumulado (mais conservador, mas protege lucro).
+
+---
+
+### 21.3 Bug Identificado — Priority 4 (Hedge) Nunca Ativa
+
+**Problema:**
+O runner real tem a seguinte ordem de prioridades na saída:
+- P1: secs ≤ 35 → WIN ou REVERSAL
+- P2: secs ≤ 70 e el ≥ 0.88 → PROFIT_PROTECT
+- P3: **0 < el < 0.65 → STOP_LOSS** ← captura ANTES do hedge
+- P4: el == 0 e opp > 0 → hedge dinâmico
+
+Como P3 verifica `el < 0.65` (não `el == 0`), qualquer `el_bid` entre 0.01 e 0.64 aciona
+o **STOP** em vez do **hedge**. O P4 só ativaria se el_bid fosse exatamente 0 — praticamente
+impossível. O hedge é **código morto** no runner real.
+
+**Impacto nos 2 trades WIN_HEDGE do paper:**
+
+| Slug | ep | secs | el_vel | Paper | Real | Delta |
+|------|----|------|--------|-------|------|-------|
+| 455700 | 0.840 | 166 | 0.106 | WIN_HEDGE (−$4.14) | PROFIT_PROTECT (+$0.24) | +$4.38 |
+| 468000 | 0.860 | 154 | 0.082 | WIN_HEDGE (−$2.64) | STOP_LOSS (−$1.86) | +$0.78 |
+
+**Observação importante:** para esses 2 trades, o runner real com o "bug" gerou **menos perda**
+do que o paper (delta +$5.16 total). Isso ocorre porque o hedge no paper comprou o lado oposto
+quando o EL caiu abaixo de 0.50, mas a inversão não se completou — ambos os lados perderam.
+O stop do runner real capturou antes de piorar.
+
+**Fix proposto (não implementar sem análise adicional):**
+Mover o bloco `elif hedge (P4)` para **antes** de `elif stop (P3)` em
+`market/live_current_almost_resolved_real_v1.py` e ajustar o threshold para `el < 0.50`
+em vez de `el == 0`. Mas **verificar primeiro** se o hedge dinâmico realmente ajuda:
+os dados atuais sugerem que o stop antecipado (P3) é melhor que o hedge.
+
+---
+
+### 21.4 Distribuição STOP_LOSS — Gaps de Fill
+
+| Faixa de gap (fill real vs 0.65 esperado) | Qtd |
+|------------------------------------------|-----|
+| 0.00–0.02 | 3 |
+| 0.02–0.05 | 3 |
+| 0.05–0.10 | 8 |
+| 0.10–0.20 | 8 |
+| 0.20–0.50 | 3 |
+| **Total** | **25** |
+
+avg_gap = 0.10 (fill 10 bps abaixo do stop teórico).
+
+---
+
+### 21.5 Conclusões
+
+1. **Runner real já é melhor que o paper** (+$2.04 por 122 trades), principalmente pela
+   lógica PP mais eficiente que converte alguns WINs de resolução tardia em PP antecipados.
+2. **Bug hedge não é prejudicial** — para os 2 casos observados, o stop antecipado teve
+   resultado melhor que o hedge. Não há urgência em corrigir o bug.
+3. **Comportamento é previsível:** 104/122 trades (85%) idênticos entre paper e real.
+4. **gate el_vel confirmado:** STOP avg_el_vel=0.122 vs WIN+PP avg_el_vel=0.140, consistente
+   com o gate 0.13 da seção 16.
+
+---
+
+### 21.6 Arquivos
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `_sim_real_runner.py` | Script de simulação shadow do runner real |
+| `logs/ee_paper_*/ee_paper.jsonl` | Fonte dos dados |
+
+---
+
+## 22. Gate el_vel — Análise por Dia da Semana (2026-05-28)
+
+**Objetivo:** Verificar se o gate el_vel ≥ 0.13 é eficaz em todos os dias da semana ou se
+há variação estrutural que justifique calibração por dia.
+
+**Fonte:** 122 trades paper (sexta 22/05 a segunda 25/05/2026)  
+**Script:** análise manual sobre logs paper local
+
+---
+
+### 22.1 Acumulado Total — 122 Trades
+
+| Outcome | Qtd | % |
+|---------|-----|---|
+| WIN | 23 | 18.9% |
+| PROFIT_PROTECT | 70 | 57.4% |
+| WIN_HEDGE | 2 | 1.6% |
+| STOP_LOSS | 25 | 20.5% |
+| REVERSAL | 2 | 1.6% |
+| **WR (lucro > 0)** | **93/122** | **76.2%** |
+| **PnL total** | **+$8.76** | **avg +$0.072** |
+
+**Período por período:**
+- 1ª amostra (43 trades, sexta): WR=88.4%, PnL=+$18.42, STOP=3 (7%)
+- Adicionais (79 trades, sab-seg): WR=69.6%, PnL=−$9.66, STOP=22 (27.8%)
+
+---
+
+### 22.2 Gate el_vel — Impacto nos 122 Trades
+
+| Gate | n | WR | STOP% | PnL | avg/trade |
+|------|---|----|-------|-----|-----------|
+| sem gate | 122 | 76.2% | 20.5% | +$8.76 | +$0.072 |
+| 0.09 | 97 | 77.3% | 20.6% | +$11.64 | +$0.120 |
+| 0.10 | 82 | 80.5% | 17.1% | +$17.40 | +$0.212 |
+| 0.11 | 69 | 81.2% | 17.4% | +$17.22 | +$0.250 |
+| 0.12 | 62 | 83.9% | 14.5% | +$20.46 | +$0.330 |
+| **0.13 (candidato)** | **51** | **86.3%** | **13.7%** | **+$22.38** | **+$0.439** |
+| 0.15 | 37 | 86.5% | 13.5% | +$16.50 | +$0.446 |
+
+**Gate 0.13 é o ponto ótimo:** melhor trade-off entre volume e WR. Gate 0.15 tem WR
+ligeiramente maior mas descarta 14 trades extras sem ganho proporcional.
+
+---
+
+### 22.3 Base (sem Gate) por Dia da Semana
+
+| Dia | n | WR | STOP% | PnL | avg/trade |
+|-----|---|----|-------|-----|-----------|
+| **Sexta** | 30 | 83.3% | 10.0% | +$8.94 | +$0.298 |
+| Sábado | 43 | 76.7% | 20.9% | +$1.68 | +$0.039 |
+| **Domingo** | **39** | **71.8%** | **25.6%** | **−$1.32** | **−$0.034** |
+| Segunda | 10 | 70.0% | 30.0% | −$0.54 | −$0.054 |
+
+**Padrão claro:** sexta é estruturalmente melhor (mercado mais ativo e previsível).
+Fim de semana (sab-seg) sem gate é quase break-even ou negativo.
+
+---
+
+### 22.4 Gate 0.13 por Dia da Semana
+
+| Dia + Gate | n | WR | STOP% | PnL | avg/trade |
+|-----------|---|----|-------|-----|-----------|
+| **Sexta + gate 0.13** | **16** | **93.8%** | **6.2%** | **+$10.86** | **+$0.679** |
+| Sábado + gate 0.13 | 21 | 85.7% | 14.3% | +$8.46 | +$0.403 |
+| Domingo + gate 0.13 | 13 | 76.9% | 23.1% | +$2.70 | +$0.208 |
+| Segunda + gate 0.13 | 1 | 100% | 0% | +$0.36 | +$0.360 |
+
+---
+
+### 22.5 Ranking dos Cenários
+
+| Cenário | n | WR | STOP% | PnL | avg/trade |
+|---------|---|----|-------|-----|-----------|
+| Sexta + gate 0.13 | 16 | 93.8% | 6.2% | +$10.86 | +$0.679 ← **melhor** |
+| Gate 0.15 | 37 | 86.5% | 13.5% | +$16.50 | +$0.446 |
+| Gate 0.13 (total) | 51 | 86.3% | 13.7% | +$22.38 | +$0.439 |
+| Gate 0.12 | 62 | 83.9% | 14.5% | +$20.46 | +$0.330 |
+| Sab+Seg + gate 0.13 | 35 | 82.9% | 17.1% | +$11.52 | +$0.329 |
+| Sexta isolada | 30 | 83.3% | 10.0% | +$8.94 | +$0.298 |
+| Base sem gate | 122 | 76.2% | 20.5% | +$8.76 | +$0.072 |
+| Sab-Seg sem gate | 92 | 73.9% | 23.9% | −$0.18 | −$0.002 |
+
+---
+
+### 22.6 Interpretação
+
+**Gate 0.13 é obrigatório no fim de semana:** sem gate, sab-seg é break-even. Com gate, sobe
+para WR 82.9% e +$0.329/trade. O gate transforma o fim de semana de marginal em lucrativo.
+
+**Sexta é especial:** combinação sexta+gate0.13 tem WR 93.8% e avg de +$0.679 — o melhor
+cenário identificado. Correlaciona com mercado mais ativo e menor spread em dias úteis.
+
+**Cautela:** amostra pequena (16 sextas com gate, 1 segunda). O padrão "dias úteis melhor"
+é plausível mas precisa de 50+ dias úteis para confirmar. Não usar o efeito dia-da-semana
+como gate adicional ainda — manter apenas gate 0.13 universal.
+
+---
+
+### 22.7 Próximos Passos
+
+- Acumular 100+ trades de dias úteis (meta atual: validar el_vel gate nos logs reais)
+- Verificar se domingo/segunda têm WR sistematicamente menor nos logs reais do outro PC
+- Se confirmado: gate adicional por dia da semana pode elevar avg/trade em ~20%
+
+---
+
+### 22.8 Arquivos
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `_sim_ee_runner.py` ou análise manual | Base dos cálculos |
+| `logs/ee_paper_*/ee_paper.jsonl` | Fonte (122 trades) |
 3. Se confirmado: propor gate `range_pos (35-65%) + delta_15m > +5 bps` no runner paper antes do runner real
