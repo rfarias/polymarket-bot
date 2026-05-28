@@ -385,6 +385,58 @@ html.pm-el-monitor-right-dock-active body {
   background: #253347;
 }
 
+/* Win probability bar */
+#pm-el-monitor-ext .elm-win-prob {
+  margin-bottom: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(99, 160, 220, 0.05);
+  border: 1px solid rgba(99, 160, 220, 0.15);
+}
+
+#pm-el-monitor-ext .elm-win-prob-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+#pm-el-monitor-ext .elm-win-prob-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #4a6fa5;
+}
+
+#pm-el-monitor-ext .elm-win-prob-pct {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+#pm-el-monitor-ext .elm-win-prob-bar-bg {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(100, 116, 139, 0.25);
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+
+#pm-el-monitor-ext .elm-win-prob-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.15s ease, background 0.15s ease;
+}
+
+#pm-el-monitor-ext .elm-win-prob-basis {
+  font-size: 9px;
+  color: #4a6fa5;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
 @media (max-width: 760px) {
   html.pm-el-monitor-right-dock-active body {
     margin-right: 0 !important;
