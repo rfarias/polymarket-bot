@@ -1261,6 +1261,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
     auto_redeem_enabled = _env_bool("POLY_CURRENT_ALMOST_RESOLVED_AUTO_REDEEM_ENABLED", False)
     dust_archive_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_DUST_ARCHIVE_QTY", 0.01)
     loss_writeoff_timeout_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_LOSS_WRITEOFF_TIMEOUT_SECS", 3600.0)
+    win_writeoff_timeout_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_WIN_WRITEOFF_TIMEOUT_SECS", 14400.0)
     exit_repost_secs = _env_float("POLY_CURRENT_ALMOST_RESOLVED_EXIT_REPOST_SECS", 1.0)
     flatten_deadline_secs = _env_int("POLY_CURRENT_ALMOST_RESOLVED_FLATTEN_DEADLINE_SECS", 2)
     min_limit_exit_qty = _env_float("POLY_CURRENT_ALMOST_RESOLVED_MIN_LIMIT_EXIT_QTY", 5.0)
@@ -2847,6 +2848,34 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                         )
                         _append_jsonl(log_path, {"type": "trade_closed", "ts": now, "session_id": session_id, "source": "resolution_loss_writeoff", "side": trade.side, "entry_price": _wo_ep, "exit_price": 0.0, "qty": _wo_qty, "pnl_usd": _wo_pnl, "entry_slug": trade.event_slug, "last_reason": str(trade.last_reason or "")})
                         if trade.event_slug and _safe_float(trade.entry_qty_filled) > 0:
+                            _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
+                        trade = LiveCurrentAlmostResolvedTradeState()
+                        _clear_state(state_path)
+                    elif not _loss_reason and _secs_since_res >= win_writeoff_timeout_secs:
+                        # Tokens ainda em carteira após timeout de win: mercado não liquidou
+                        # ou detecção de resolução foi falso positivo. Arquiva sem PnL.
+                        _ww_ep = _safe_float(trade.entry_price, 0.0)
+                        _ww_qty = _safe_float(trade.entry_qty_filled, 0.0)
+                        _append_jsonl(log_path, {
+                            "type": "win_writeoff",
+                            "ts": now, "session_id": session_id,
+                            "token_balance_qty": token_balance_qty,
+                            "collateral_balance_usd": collateral_balance,
+                            "secs_since_resolution": round(_secs_since_res, 1),
+                            "win_writeoff_timeout_secs": win_writeoff_timeout_secs,
+                            "exit_price": None,
+                            "pnl_usd": None,
+                            "trade": _trade_summary(trade),
+                        })
+                        _append_jsonl(log_path, {
+                            "type": "trade_closed", "ts": now, "session_id": session_id,
+                            "source": "win_writeoff",
+                            "side": trade.side, "entry_price": _ww_ep,
+                            "exit_price": None, "qty": _ww_qty, "pnl_usd": None,
+                            "entry_slug": trade.event_slug,
+                            "last_reason": str(trade.last_reason or ""),
+                        })
+                        if trade.event_slug and _ww_qty > 0:
                             _reentry_blocked_until[str(trade.event_slug)] = now + reentry_cooldown_secs
                         trade = LiveCurrentAlmostResolvedTradeState()
                         _clear_state(state_path)
