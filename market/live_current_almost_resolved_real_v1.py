@@ -833,8 +833,16 @@ def _ee_exit_reason(
     secs_to_end: Optional[int],
 ) -> Optional[str]:
     """Lógica de saída para trades early_entry (v2: stop 0.65, PP 0.88@secs<=70)."""
-    if el_bid <= 0 or trade.entry_price is None:
+    if trade.entry_price is None:
         return None
+    # Livro EL zerou completamente: não ignorar — verifica se opp confirma reversão.
+    # Sem este check, el_bid=0 retornava None e a posição segurava até perda total.
+    if el_bid <= 0:
+        if opp_bid >= 0.85:
+            return "ee_reversal"   # reversão clara; sai a 0.001 em vez de perda total
+        if opp_bid > 0:
+            return "ee_hedge_gap"  # opp tem liquidez; hedge captura parte da perda
+        return None                # ambos os lados sem livro; nada a fazer
     if secs_to_end is not None and secs_to_end <= 35:
         if el_bid >= 0.85:
             return "ee_win"

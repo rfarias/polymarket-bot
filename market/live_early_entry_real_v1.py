@@ -773,10 +773,22 @@ def run_early_entry_real_v1(
                     )
                     _save_state(state_path, trade)
 
-                # Prioridade 3: stop FAK removido — causava fills catastróficos (0.42–0.61)
+                # Prioridade 3: livro EL zerou + opp >= 0.85 → reversão confirmada
+                # Sem este check, el_bid=0 não disparava nenhuma saída (era coberto
+                # apenas pelo P1 em secs<=35). Aqui cobrimos secs > 35 também.
+                elif el_bid <= 0 and opp_bid >= 0.85:
+                    trade = _post_ee_exit(
+                        broker or _MockBroker(), trade,
+                        log_path=log_path, session_id=session_id,
+                        exit_price=0.001,
+                        reason="reversal_book_empty", now=now, real_posts=real_posts,
+                    )
+                    _save_state(state_path, trade)
+
+                # Prioridade 4: stop FAK removido — causava fills catastróficos (0.42–0.61)
                 # em livro fino quando o bid temporariamente cai abaixo de 0.65 e depois
                 # se recupera. Paper não para e vence 89% dos casos. A proteção de
-                # reversão genuína é coberta pelo check opp_bid >= 0.85 em secs <= 35.
+                # reversão genuína é coberta pelo check opp_bid >= 0.85.
 
             # ── Modo pending_exit: aguardar fill de saída ─────────────────────
             elif trade.mode == "pending_exit":
