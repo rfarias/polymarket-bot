@@ -2578,3 +2578,177 @@ está sendo carregado.
 |---------|---------|--------|
 | `market/live_current_almost_resolved_real_v1.py` | `EE_VEL_MIN 0.08→0.13` + fix `el_bid=0` | `5cc35ea`, `580c2dc` |
 | `market/live_early_entry_real_v1.py` | `EE_VEL_MIN 0.08→0.13` + fix `reversal_book_empty` | `5cc35ea`, `580c2dc` |
+
+---
+
+## Seção 24 — Recálculo de Win Probabilities: Todos os Slugs Observados (Logs Reais)
+
+**Data:** 2026-05-28  
+**Script:** `_sim_win_prob_all_slugs.py` (source="real")  
+**Base:** 778 dirs de logs reais → 3716 slugs únicos → **1368 analisados**  
+(1943 sem EL detectado, 405 sem resolução clara no final da janela)
+
+---
+
+### 24.1 Base Rate do EL Original
+
+**WR geral do EL: 962/1368 = 70%**
+
+Universo de referência para comparar qualquer segmento.
+
+---
+
+### 24.2 WR por Força Inicial do EL (el_bid_240 / early_bid)
+
+| el_bid inicial | EL WR |  n   |
+|----------------|-------|------|
+| 0.55 – 0.60    |  56%  |  360 |
+| 0.60 – 0.65    |  64%  |  259 |
+| 0.65 – 0.70    |  72%  |  247 |
+| 0.70 – 0.75    |  74%  |  181 |
+| 0.75 – 0.80    |  84%  |  133 |
+| ≥ 0.80         |  90%  |  188 |
+
+EL acima de 0.75 já resolve em 84-90% dos casos.  
+EL fraco (0.55-0.60) ainda ganha em 56% — relevante pois muitas janelas começam assim.
+
+---
+
+### 24.3 WR por opp_bid Máximo Observado Durante a Janela
+
+Tabela principal para a extensão — calibrada em 1368 slugs reais:
+
+| opp_bid_max    | EL WR | Reversal WR |  n   | Interpretação               |
+|----------------|-------|-------------|------|-----------------------------|
+| < 0.30         | 100%  |   0%        |   10 | EL absoluto                 |
+| 0.30 – 0.40    |  98%  |   2%        |   53 | EL dominante                |
+| 0.40 – 0.50    |  99%  |   1%        |  265 | EL dominante                |
+| 0.50 – 0.60    |  98%  |   2%        |  406 | EL dominante (zona normal)  |
+| 0.60 – 0.70    |  98%  |   2%        |  158 | EL ainda dominante          |
+| 0.70 – 0.80    |  78%  |  22%        |   78 | Zona de aviso               |
+| ≥ 0.80         |   6%  |  94%        |  398 | **Reversão dominante**      |
+
+**Limiar crítico confirmado: opp_bid ≥ 0.80 → 94% reversão**
+
+Nota: opp_bid 0.60-0.70 ainda é 98% EL WR — as inversões moderadas são
+majoritariamente temporárias. A queda é abrupta apenas após 0.80.
+
+---
+
+### 24.4 Inversão Detectada (campo early_leader.inverted)
+
+Quando o tracker do AR detecta crossover sustentado:
+
+| Cenário                          | EL WR | Reversal WR |  n   |
+|----------------------------------|-------|-------------|------|
+| **SEM inversão**                 |  98%  |    2%       |  783 |
+| **COM inversão** (qualquer)      |  34%  |   66%       |  585 |
+| — inv FORTE (bid ≥ 0.72)         |  22%  |   78%       |  181 |
+| — inv moderada (bid < 0.72)      |  39%  |   61%       |  404 |
+
+**A detecção de inversão pelo tracker é um sinal forte**: passa de 98% EL WR para
+66% reversal WR (34% EL WR). Inversão forte sobe para 78% reversal.
+
+#### Por nível de bid no pico da inversão:
+
+| inv_bid_max    | Reversal WR | EL orig WR |  n   |
+|----------------|-------------|------------|------|
+| 0.55 – 0.62    |    57%      |    43%     |  237 |
+| 0.62 – 0.68    |    65%      |    35%     |  110 |
+| 0.68 – 0.73    |    71%      |    29%     |   73 |
+| 0.73 – 0.80    |    78%      |    22%     |   63 |
+| ≥ 0.80         |    78%      |    22%     |  102 |
+
+Progressão clara: quanto maior o bid do novo líder no pico, maior a chance de reversão.
+
+**Nota importante (comparação com EL Flip Sim):**
+O `_sim_el_flip.py` (seção 15) mostrou 81-96% reversal WR para a estratégia EL Flip.  
+A diferença se deve a: o sim usa a entrada no momento do crossover com gap específico,  
+enquanto estes números incluem TODOS os slugs onde `el.inverted=True` em algum momento  
+(incluindo inversões mais fracas e temporárias).  
+A extensão usa `el.inverted` do tracker → os números corretos são os desta seção (57-78%).
+
+---
+
+### 24.5 Slugs com Entrada EE Realizada vs Não Realizada
+
+| Cenário                          | EL WR |  n    |
+|----------------------------------|-------|-------|
+| Com entrada EE (gate aprovado)   |  85%  |   73  |
+| Sem entrada (gate bloqueou)      |  69%  | 1295  |
+
+Gate EE agrega +16pp de WR. 73 slugs analisados com entrada (vs 82 eventos  
+`ee_real_entry` no log — diferença por slugs sem resolução clara).
+
+---
+
+### 24.6 Reversal (EL Flip) por faixa de opp_bid_max ≥ 0.55
+
+Perspectiva da estratégia flip — entra no novo líder quando opp_bid ≥ threshold:
+
+| opp_bid_max    | Reversal WR | EL orig WR |  n   |
+|----------------|-------------|------------|------|
+| 0.55 – 0.62    |     3%      |    97%     |  182 |
+| 0.62 – 0.68    |     1%      |    99%     |  101 |
+| 0.68 – 0.73    |    14%      |    86%     |   44 |
+| 0.73 – 0.80    |    24%      |    76%     |   51 |
+| ≥ 0.80         |    94%      |     6%     |  398 |
+| **TOTAL ≥ 0.55** |  **51%**  |   49%     |  776 |
+
+**Conclusão crítica:** opp_bid_max (toque máximo) abaixo de 0.80 é majoritariamente
+falso sinal de flip. O único limiar confiável para entrada reversal é **opp_bid ≥ 0.80**
+com WR de 94%. Abaixo disso, o EL original ainda ganha em 76-99%.
+
+Isso é distinto de `el.inverted=True` (seção 24.4), que detecta crossovers sustentados
+e já mostra 57-78% reversal mesmo com bid < 0.80.
+
+---
+
+### 24.7 Análise Combinada: Força do EL + opp_bid_max
+
+| EL inicial     | Base WR | opp < 0.45 | opp 0.45-0.55 | opp 0.55-0.65 | opp ≥ 0.65 |
+|----------------|---------|------------|---------------|---------------|------------|
+| EL fraco 0.55-0.65 |  59%  |  100% (n=11) |  97% (n=150) |  98% (n=121) | 28% (n=337) |
+| EL médio 0.65-0.75 |  73%  |   98% (n=40) |  99% (n=163) |  96% (n=79) | 25% (n=146) |
+| EL forte ≥ 0.75    |  88%  |   99% (n=86) | 100% (n=142) | 100% (n=41) | 27% (n=52)  |
+
+Independente da força inicial do EL, se opp_bid atingiu ≥ 0.65 a chance cai para
+~25-28% EL WR. O **limiar de 0.65** nesta tabela combinada antecipa a queda.
+
+---
+
+### 24.8 Calibração para a Extensão (v1.3.3+)
+
+**Funções a atualizar:**
+
+`calcWinProb()` — opp_bid thresholds (faixa secs > 35):
+```
+opp >= 0.80 → EL  6% (era 14%) | Reversal 94%
+opp 0.70-0.80 → EL 78% (era 39%) — zona de aviso, NÃO reversão dominante
+```
+
+`calcWinProbInversion()` — quando el.inverted=True:
+```
+inv FORTE (bid >= 0.72) → Reversal 78% (era 96%)
+inv moderada → por faixa:
+  bid 0.68-0.73 → Reversal 71% (era 94%)
+  bid 0.62-0.68 → Reversal 65%
+  bid 0.55-0.62 → Reversal 57% (era 89%)
+```
+
+**Nota:** Os números do EL Flip sim (89-96%) eram baseados em paper e usavam
+critério de gap no momento de entrada. Os números reais por `el.inverted` são
+menores mas mais representativos do que o tracker sinaliza na extensão.
+
+---
+
+### 24.9 Para Replicar no PC de Casa
+
+```powershell
+# Após git pull, rodar sobre os logs maiores:
+python _sim_win_prob_all_slugs.py  # source="real" por padrão
+```
+
+Os resultados deverão ter mais slugs (aqui: 1368 analisados sobre 778 dirs).
+Os números desta seção são referência; comparar com os do outro PC para confirmar.
+

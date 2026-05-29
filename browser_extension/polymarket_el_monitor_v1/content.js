@@ -11,7 +11,7 @@
 
   // ---------------------------------------------------------------------------
   // Win probability — baseada em estatisticas reais
-  // 310 slugs observados (2026-05-28) + 88 trades EE paper
+  // 1368 slugs reais observados (2026-05-28) — sec 24 TESTES_ANALISE_EL.md
   // ---------------------------------------------------------------------------
   function calcWinProb(side, bids, secs) {
     const myBid  = side === "UP" ? (bids.up  || 0) : (bids.down || 0);
@@ -22,12 +22,13 @@
       return null;
     }
 
-    // Opp bid dominante: inversao confirmada (dados: opp>=0.80 -> EL 14%; opp 0.70-0.80 -> EL 61%)
+    // Opp bid dominante — limiar 0.80 confirmado em 1368 slugs reais
+    // opp>=0.80: EL 6% | opp 0.70-0.80: EL 78% (zona de risco, monitorar)
     if (secs === null || secs > 35) {
       if (oppBid >= 0.80)
-        return { pct: 14, label: "opp>=0.80: reversao dominante (86% rev hist)", color: "red" };
+        return { pct: 6,  label: "opp>=0.80: reversao dominante (94% rev real)", color: "red" };
       if (oppBid >= 0.70)
-        return { pct: 39, label: "opp>=0.70: inversao forte (39% rev hist)",     color: "red" };
+        return { pct: 78, label: "opp 0.70-0.80: zona de risco (78% EL real)",   color: "orange" };
     }
 
     if (secs !== null && secs <= 35) {
@@ -52,34 +53,42 @@
 
   // ---------------------------------------------------------------------------
   // Probabilidade de inversao — perspectiva dupla (posicao atual vs novo lider)
-  // Baseado em EL Flip sim (97 trades, 93.8% reversal WR) + dados 310 slugs
+  // Calibrado em 585 slugs COM inversao detectada — 1368 slugs reais (sec 24.4)
   // ---------------------------------------------------------------------------
   function calcWinProbInversion(invBid, invStrong, secs) {
     // Retorna { el: {pct, label, color}, reversal: {pct, label, color} }
     let elPct, revPct, label;
-    const gap = invBid - (1 - invBid);  // aprox gap entre os dois lados
+
+    if (invStrong) {
+      // bid >= 0.72 (campo inversion_strong): 22% EL, 78% reversal (real n=181)
+      elPct  = 22;
+      revPct = 78;
+      label  = `inversao forte bid=${fmt(invBid)}`;
+    } else if (invBid >= 0.68) {
+      // bid 0.68-0.72: 71% reversal (real n=73)
+      elPct  = 29;
+      revPct = 71;
+      label  = `inversao solida bid=${fmt(invBid)}`;
+    } else if (invBid >= 0.62) {
+      // bid 0.62-0.68: 65% reversal (real n=110)
+      elPct  = 35;
+      revPct = 65;
+      label  = `inversao media bid=${fmt(invBid)}`;
+    } else {
+      // bid 0.55-0.62: 57% reversal (real n=237)
+      elPct  = 43;
+      revPct = 57;
+      label  = `inversao inicial bid=${fmt(invBid)}`;
+    }
 
     if (secs !== null && secs <= 60) {
-      // Perto do fim: reversao quase irreversivel se opp esta dominante
-      elPct  = invStrong ? 4  : 6;
-      revPct = invStrong ? 96 : 94;
-      label  = `secs<=${secs} inversao confirmada`;
-    } else if (invStrong) {
-      // bid >= 0.72: gap > 0.35 (segmento dominante EL Flip: 95.7% reversal)
-      elPct  = 4;
-      revPct = 96;
-      label  = `inversao forte bid=${fmt(invBid)} gap=${gap.toFixed(2)}`;
-    } else if (invBid >= 0.65) {
-      // bid 0.65-0.72: gap 0.20-0.35 (EL Flip gap>=0.20: 93.8% reversal)
-      elPct  = 6;
-      revPct = 94;
-      label  = `inversao solida bid=${fmt(invBid)} gap=${gap.toFixed(2)}`;
-    } else {
-      // bid 0.60-0.65: gap 0.10-0.20 (EL Flip gap>=0.10: 88.9% reversal)
-      elPct  = 11;
-      revPct = 89;
-      label  = `inversao inicial bid=${fmt(invBid)} gap=${gap.toFixed(2)}`;
+      // Perto do fim: inversao ja estabelecida tem menos tempo para reverter
+      // boost conservador de ~5pp na direção da reversão
+      revPct = Math.min(95, revPct + 5);
+      elPct  = 100 - revPct;
+      label  = label + ` secs<=${secs}`;
     }
+
     return {
       el:      { pct: elPct,  label: `lado atual: ${label}`,    color: "red" },
       reversal:{ pct: revPct, label: `novo lider: ${label}`,    color: "green" },

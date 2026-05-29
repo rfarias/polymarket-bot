@@ -1,6 +1,6 @@
 """
 _sim_win_prob_all_slugs.py — Recalcula probabilidades sobre TODOS os slugs
-observados (com ou sem entrada), usando snapshots dos logs de paper EE.
+observados (com ou sem entrada), usando snapshots dos logs reais e de paper EE.
 
 Para cada slug:
 - EL side detectado (early_leader.early_side no pico)
@@ -9,6 +9,11 @@ Para cada slug:
 - OPP bid maximo visto durante o slug
 
 Computa WR do EL original, WR do novo lider, por faixa de opp_bid.
+
+Fontes (em ordem de prioridade):
+  - logs/current_almost_resolved_real_*/current_almost_resolved_real.jsonl (logs reais)
+  - logs/ee_paper_*/ee_paper.jsonl (paper)
+  - logs/ee_real_adapted.jsonl (real adaptado)
 """
 from __future__ import annotations
 import json, glob, os
@@ -17,34 +22,58 @@ from collections import defaultdict
 RESOLVE_THR = 0.10   # abaixo disso, lado "perdeu" no final
 
 
-def load_all_snapshots():
-    """Carrega snapshots de todos os logs ee_paper e ee_real_adapted."""
-    slugs: dict[str, list[dict]] = defaultdict(list)  # slug -> snapshots
+def get_bids(r):
+    """Extrai up_bid/down_bid de snapshot — tenta current_exec e current_scalp_context."""
+    exec_ = r.get("current_exec") or {}
+    ub = exec_.get("up_bid")
+    db = exec_.get("down_bid")
+    if ub is not None or db is not None:
+        return float(ub or 0), float(db or 0)
+    ctx = r.get("current_scalp_context") or {}
+    ub = ctx.get("up_bid")
+    db = ctx.get("down_bid")
+    return float(ub or 0), float(db or 0)
 
-    def process_rows(rows):
+
+def load_all_snapshots(source="real"):
+    """
+    Carrega snapshots. source='real' usa logs reais; 'paper' usa paper; 'all' usa ambos.
+    Retorna dict: slug -> lista de snapshots.
+    """
+    slugs: dict[str, list[dict]] = defaultdict(list)
+    entry_slugs: set[str] = set()  # slugs onde houve entrada real
+
+    def process_file(fn):
+        try:
+            with open(fn, encoding="utf-8") as f:
+                rows = [json.loads(l) for l in f if l.strip()]
+        except Exception:
+            return
         for r in rows:
-            if r.get("type") != "snapshot":
-                continue
+            t = r.get("type") or r.get("event")
             slug = r.get("current_slug") or r.get("slug")
-            if slug:
+            if t == "snapshot" and slug:
                 slugs[slug].append(r)
+            elif t in ("enter", "ee_paper_entry", "ee_real_entry") and slug:
+                entry_slugs.add(slug)
 
-    fn = "logs/ee_real_adapted.jsonl"
-    if os.path.exists(fn):
-        with open(fn, encoding="utf-8") as f:
-            process_rows([json.loads(l) for l in f if l.strip()])
+    if source in ("real", "all"):
+        for fn in sorted(glob.glob(
+            "logs/current_almost_resolved_real_*/current_almost_resolved_real.jsonl"
+        )):
+            process_file(fn)
 
-    for d in sorted(glob.glob("logs/ee_paper_*")):
-        if d.endswith(".log"):
-            continue
-        for fn in sorted(glob.glob(os.path.join(d, "*.jsonl"))):
-            try:
-                with open(fn, encoding="utf-8") as f:
-                    process_rows([json.loads(l) for l in f if l.strip()])
-            except Exception:
-                pass
+    if source in ("paper", "all"):
+        fn = "logs/ee_real_adapted.jsonl"
+        if os.path.exists(fn):
+            process_file(fn)
+        for d in sorted(glob.glob("logs/ee_paper_*")):
+            if d.endswith(".log"):
+                continue
+            for fn in sorted(glob.glob(os.path.join(d, "*.jsonl"))):
+                process_file(fn)
 
-    return slugs
+    return slugs, entry_slugs
 
 
 def analyze_slug(snaps: list[dict]):
@@ -52,21 +81,30 @@ def analyze_slug(snaps: list[dict]):
     # Ordena por secs decrescente (240 -> 0)
     snaps = sorted(snaps, key=lambda r: r.get("current_secs", 0), reverse=True)
 
-    # EL side: usa snap com mais amostras (secs ~240)
+    # EL side: usa snap mais cedo (secs alto) com early_side preenchido
+    # paper: n_s240/el_bid_240; real: early_bid/early_secs
     el_side = None
     el_bid_240 = 0.0
     for r in snaps:
         el = r.get("early_leader") or {}
-        if el.get("early_side") and (el.get("n_s240", 0) or 0) >= 3:
-            el_side = el["early_side"]
-            el_bid_240 = el.get("el_bid_240", 0.0)
+        es = el.get("early_side")
+        if not es:
+            continue
+        n = el.get("n_s240", 0) or 0
+        if n >= 3:  # paper: tem n_s240
+            el_side = es
+            el_bid_240 = float(el.get("el_bid_240") or 0.0)
+            break
+        if el.get("early_bid") is not None:  # real: tem early_bid
+            el_side = es
+            el_bid_240 = float(el.get("early_bid") or 0.0)
             break
     if not el_side:
-        # Tenta qualquer snap com early_side
         for r in snaps:
             el = r.get("early_leader") or {}
             if el.get("early_side"):
                 el_side = el["early_side"]
+                el_bid_240 = float(el.get("el_bid_240") or el.get("early_bid") or 0.0)
                 break
 
     if not el_side:
@@ -76,9 +114,7 @@ def analyze_slug(snaps: list[dict]):
     final_snaps = [r for r in snaps if r.get("current_secs", 99) <= 15]
     winner = None
     for r in reversed(final_snaps):
-        exec_ = r.get("current_exec") or {}
-        ub = exec_.get("up_bid", 0.5)
-        db = exec_.get("down_bid", 0.5)
+        ub, db = get_bids(r)
         if ub < RESOLVE_THR:
             winner = "DOWN"
             break
@@ -100,13 +136,13 @@ def analyze_slug(snaps: list[dict]):
 
     for r in snaps:
         secs_r = r.get("current_secs", 0)
-        exec_ = r.get("current_exec") or {}
+        ub, db = get_bids(r)
         if el_side == "UP":
-            el_b = exec_.get("up_bid", 0)
-            opp_b = exec_.get("down_bid", 0)
+            el_b = ub
+            opp_b = db
         else:
-            el_b = exec_.get("down_bid", 0)
-            opp_b = exec_.get("up_bid", 0)
+            el_b = db
+            opp_b = ub
 
         # Exclui snapshots finais de resolucao (bids ja estao 0/1)
         # para nao confundir bid de resolucao com movimento durante a janela
@@ -160,8 +196,9 @@ def seg_stats(slugs, label=""):
 
 def main():
     print("Carregando snapshots...")
-    slug_snaps = load_all_snapshots()
+    slug_snaps, entry_slugs = load_all_snapshots(source="real")
     print(f"  Slugs com snapshots: {len(slug_snaps)}")
+    print(f"  Slugs com entrada EE: {len(entry_slugs)}")
 
     all_slugs = []
     no_el = 0
@@ -176,6 +213,7 @@ def main():
                 no_el += 1
             continue
         r["slug"] = slug
+        r["entry_made"] = slug in entry_slugs
         all_slugs.append(r)
 
     n_total = len(all_slugs)
