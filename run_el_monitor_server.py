@@ -19,8 +19,57 @@ import pathlib
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
+
+import requests as _requests
+
+# ---------------------------------------------------------------------------
+# Fast bid fetch — 2 chamadas paralelas ao CLOB /price (UP + DOWN bid)
+# Substitui _fetch_slot_state() que fazia 18+ chamadas HTTP sequenciais.
+# Session persistente reutiliza conexão TCP/TLS: ~100-300ms por ciclo.
+# ---------------------------------------------------------------------------
+_CLOB = "https://clob.polymarket.com"
+_http = _requests.Session()
+_http.headers.update({"Accept": "application/json"})
+
+
+def _fast_bid(token_id: str) -> float:
+    try:
+        r = _http.get(
+            f"{_CLOB}/price",
+            params={"token_id": token_id, "side": "BUY"},
+            timeout=3.0,
+        )
+        r.raise_for_status()
+        val = r.json().get("price")
+        return float(val) if val is not None else 0.0
+    except Exception:
+        return 0.0
+
+
+def _fast_fetch_bids(up_token_id: str, down_token_id: str) -> Tuple[float, float]:
+    """2 GETs em paralelo — único gargalo de rede por ciclo."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        up_f = pool.submit(_fast_bid, up_token_id)
+        dn_f = pool.submit(_fast_bid, down_token_id)
+        return up_f.result(), dn_f.result()
+
+
+def _token_ids_from_bundle(slot_bundle: dict) -> Tuple[str, str]:
+    """Extrai token IDs de UP e DOWN do slot atual (dados já cacheados no bundle)."""
+    current_slot = (slot_bundle.get("slots") or {}).get("current") or {}
+    meta = current_slot.get("meta") or {}
+    token_mapping = meta.get("token_mapping") or []
+    up_id = next(
+        (t["token_id"] for t in token_mapping if str(t.get("outcome", "")).lower() == "up"), ""
+    )
+    dn_id = next(
+        (t["token_id"] for t in token_mapping if str(t.get("outcome", "")).lower() == "down"), ""
+    )
+    return up_id, dn_id
+
 
 RUNNER_LIVE_STATE_PATH = pathlib.Path("logs/current_almost_resolved_real_live.json")
 RUNNER_STALE_SECS = 10.0
@@ -40,12 +89,7 @@ def _read_runner_state() -> Optional[dict]:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from market.rest_5m_shadow_public_v5 import (
-    _build_slot_bundle,
-    _compute_executable_metrics,
-    _fetch_slot_state,
-    _slot_snapshot,
-)
+from market.rest_5m_shadow_public_v5 import _build_slot_bundle
 
 # ---------------------------------------------------------------------------
 # Parâmetros EE v2 (idênticos ao AR runner)
@@ -349,27 +393,41 @@ _state_lock = threading.Lock()
 def _poll_loop(poll_secs: float) -> None:
     ee_tracker = _EarlyLeaderTrackerEE()
     ar_tracker = _EarlyLeaderTrackerAR()
+    _last_bundle_ts = 0.0
+    _cached_bundle: dict = {}
+    _cached_up_id = ""
+    _cached_dn_id = ""
+    BUNDLE_TTL = 5.0  # remontar bundle a cada 5s (slug muda a cada 5min)
 
     while True:
+        t0 = time.time()
         try:
-            slot_bundle = _build_slot_bundle()
-            current_item = slot_bundle["queue"].get("current") if slot_bundle.get("queue") else None
+            # Rebuild bundle apenas quando TTL expirar (evita chamadas Gamma API frequentes)
+            if t0 - _last_bundle_ts >= BUNDLE_TTL or not _cached_bundle:
+                _cached_bundle = _build_slot_bundle()
+                _last_bundle_ts = t0
+                _cached_up_id, _cached_dn_id = _token_ids_from_bundle(_cached_bundle)
+
+            current_item = _cached_bundle.get("queue", {}).get("current")
             if not current_item:
                 with _state_lock:
-                    _state.update({"status": "no_market", "ts": time.time(), "slug": None, "secs_to_end": None})
+                    _state.update({"status": "no_market", "ts": t0, "slug": None, "secs_to_end": None})
                 time.sleep(poll_secs)
                 continue
 
             slug = str(current_item.get("slug") or "")
+            # Ajusta secs com base no tempo decorrido desde o bundle
             secs_raw = current_item.get("seconds_to_end")
-            secs = int(secs_raw) if secs_raw is not None else None
+            if secs_raw is not None:
+                secs = max(0, int(secs_raw) - int(t0 - _last_bundle_ts))
+            else:
+                secs = None
 
-            slot_state = _fetch_slot_state(slot_bundle)
-            snap = _slot_snapshot(slot_state, "current")
-            exec_metrics, _ = _compute_executable_metrics(snap)
-
-            up_bid = _sf((exec_metrics or {}).get("up_bid"))
-            down_bid = _sf((exec_metrics or {}).get("down_bid"))
+            # Fast path: 2 GETs em paralelo em vez de 18+ chamadas sequenciais
+            if _cached_up_id and _cached_dn_id:
+                up_bid, down_bid = _fast_fetch_bids(_cached_up_id, _cached_dn_id)
+            else:
+                up_bid, down_bid = 0.0, 0.0
 
             if slug and secs is not None and up_bid > 0 and down_bid > 0:
                 ee_tracker.update(slug, secs, up_bid, down_bid)
@@ -382,9 +440,13 @@ def _poll_loop(poll_secs: float) -> None:
 
         except Exception as exc:
             with _state_lock:
-                _state.update({"status": "error", "ts": time.time(), "error": str(exc), "slug": _state.get("slug")})
+                _state.update({"status": "error", "ts": t0, "error": str(exc), "slug": _state.get("slug")})
 
-        time.sleep(poll_secs)
+        # Mantém cadência: dorme o restante do intervalo desejado
+        elapsed = time.time() - t0
+        remaining = poll_secs - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 # ---------------------------------------------------------------------------
