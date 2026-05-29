@@ -884,7 +884,11 @@ def _ee_exit_reason(
     opp_bid: float,
     secs_to_end: Optional[int],
 ) -> Optional[str]:
-    """Lógica de saída para trades early_entry (v2: stop 0.65, PP 0.88@secs<=70)."""
+    """Lógica de saída para trades early_entry (v3: hold-to-resolution, hedge em 0.50, reversal em secs<=35).
+
+    PP removido em 2026-05-29: saída em 0.88 cortava wins em 60-80% vs hold (sim: +$0.38 → +$0.72/trade com hedge).
+    Stop já removido anteriormente (FAK em livro fino gerava fills catastróficos).
+    """
     if trade.entry_price is None:
         return None
     # Livro EL zerou completamente: não ignorar — verifica se opp confirma reversão.
@@ -900,11 +904,7 @@ def _ee_exit_reason(
             return "ee_win"
         if opp_bid >= 0.85:
             return "ee_reversal"
-    if secs_to_end is not None and 36 <= secs_to_end <= EE_PROFIT_PROTECT_SECS and el_bid >= EE_PROFIT_PROTECT_BID:
-        return "ee_profit_protect"
-    # ee_stop removido: FAK em livro fino gerava fills catastróficos (0.42–0.61)
-    # em dips temporários onde o bid se recupera (paper WR 89% sem stop).
-    # Proteção de reversão genuína via ee_reversal em secs_to_end <= 35.
+    # PP removido: não sair em 0.88 — hold to resolution maximiza gain (90%+ WR com F3+vel>=0.13).
     if el_bid < EE_HEDGE_THR and opp_bid > 0:
         return "ee_hedge_gap"
     return None
@@ -2172,7 +2172,7 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                             "entry_price": _ee_bid,
                             "setup_variant": "early_entry",
                             "stop_price": EE_STOP_LEVEL,
-                            "exit_price": EE_PROFIT_PROTECT_BID,
+                            "exit_price": 1.0,  # hold to resolution
                         }
                         try:
                             trade = _post_entry_order(
@@ -2658,17 +2658,6 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                                     "reason": ee_reason, "trade": _trade_summary(trade),
                                 })
                                 print(f"[EE_REAL] {ee_reason.upper()}  el_bid={active_bid:.3f}  secs={current_secs}")
-                            elif ee_reason == "ee_profit_protect":
-                                trade = _post_exit_order(
-                                    broker, trade, exit_price=active_bid, now=now,
-                                    reason=ee_reason, min_limit_exit_qty=min_limit_exit_qty,
-                                )
-                                _save_state(state_path, trade)
-                                _append_jsonl(log_path, {
-                                    "type": "exit_posted", "ts": now, "session_id": session_id,
-                                    "reason": ee_reason, "trade": _trade_summary(trade),
-                                })
-                                print(f"[EE_REAL] PROFIT_PROTECT  el_bid={active_bid:.3f}  secs={current_secs}")
                             elif ee_reason == "ee_hedge_gap":
                                 _h_ep  = _safe_float(trade.entry_price, 0.0)
                                 _h_qty = _safe_float(trade.entry_qty_filled, 0.0)
