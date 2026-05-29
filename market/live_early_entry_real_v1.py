@@ -659,9 +659,15 @@ def run_early_entry_real_v1(
             _n_s180         = len(elt._s180)
             _n_s180_blocked = (_n_s180 < 3)
             _secs_blocked   = (secs is not None and secs > 155)
-            _entry_blocked  = _n_s180_blocked or _secs_blocked
+            # Gate spread>=0.70: mercado excessivamente assimétrico na entrada
+            # 26 trades reais: WR 58%, avg -$0.70 — concentra REVERSAL/WIN_HEDGE
+            _spread         = round(el_bid - opp_bid, 4) if el_side else 0.0
+            _spread_blocked = (_spread >= 0.70)
+            _entry_blocked  = _n_s180_blocked or _secs_blocked or _spread_blocked
             _gate_reason    = (
-                f"n_s180:{_n_s180}<3" if _n_s180_blocked else f"secs:{secs}>155"
+                f"n_s180:{_n_s180}<3"    if _n_s180_blocked else
+                f"secs:{secs}>155"       if _secs_blocked   else
+                f"spread:{_spread:.3f}>=0.70"
             ) if _entry_blocked else ""
 
             # ── Modo idle: procurar entrada ───────────────────────────────────

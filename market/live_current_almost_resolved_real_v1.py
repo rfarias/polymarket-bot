@@ -2102,14 +2102,21 @@ def monitor_live_current_almost_resolved_real_v1(duration_seconds: Optional[int]
                 _ee_up  = _safe_float((current_exec or {}).get("up_bid"), 0.0)
                 _ee_dn  = _safe_float((current_exec or {}).get("down_bid"), 0.0)
                 _ee_sl  = _ee_tracker.early_leader
-                _ee_bid = (_ee_up if _ee_sl == "UP" else _ee_dn) if _ee_sl else 0.0
-                # Gates de entrada baseados em análise dos logs reais (33 trades)
+                _ee_bid     = (_ee_up if _ee_sl == "UP" else _ee_dn) if _ee_sl else 0.0
+                _ee_opp_bid = (_ee_dn if _ee_sl == "UP" else _ee_up) if _ee_sl else 0.0
+                # Gates de entrada baseados em análise dos logs reais
                 _ee_n_s180         = len(_ee_tracker._s180)
                 _ee_n_s180_blocked = (_ee_n_s180 < 3)
                 _ee_secs_blocked   = (current_secs is not None and current_secs > 155)
-                _ee_entry_blocked  = _ee_n_s180_blocked or _ee_secs_blocked
+                # Gate spread>=0.70: mercado excessivamente assimétrico na entrada
+                # 26 trades reais: WR 58%, avg -$0.70 — concentra REVERSAL/WIN_HEDGE
+                _ee_spread         = round(_ee_bid - _ee_opp_bid, 4) if _ee_sl else 0.0
+                _ee_spread_blocked = (_ee_spread >= 0.70)
+                _ee_entry_blocked  = _ee_n_s180_blocked or _ee_secs_blocked or _ee_spread_blocked
                 _ee_gate_reason    = (
-                    f"n_s180:{_ee_n_s180}<3" if _ee_n_s180_blocked else f"secs:{current_secs}>155"
+                    f"n_s180:{_ee_n_s180}<3"      if _ee_n_s180_blocked else
+                    f"secs:{current_secs}>155"     if _ee_secs_blocked   else
+                    f"spread:{_ee_spread:.3f}>=0.70"
                 ) if _ee_entry_blocked else ""
                 if (
                     _ee_tracker.signal_ok
