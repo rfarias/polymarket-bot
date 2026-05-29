@@ -10,21 +10,30 @@
   let lastWorkingUrl = STATE_URLS[0];
 
   // ---------------------------------------------------------------------------
-  // Win probability — baseada em estatisticas reais (2026-05-28)
+  // Win probability — baseada em estatisticas reais
+  // 310 slugs observados (2026-05-28) + 88 trades EE paper
   // ---------------------------------------------------------------------------
   function calcWinProb(side, bids, secs) {
     const myBid  = side === "UP" ? (bids.up  || 0) : (bids.down || 0);
     const oppBid = side === "UP" ? (bids.down || 0) : (bids.up  || 0);
     if (!side || myBid <= 0) {
-      if (side && oppBid >= 0.85) return { pct: 5,  label: "reversao total",      color: "red" };
-      if (side && oppBid > 0)     return { pct: 15, label: "livro EL zerou",       color: "red" };
+      if (side && oppBid >= 0.85) return { pct: 5,  label: "reversao total",  color: "red" };
+      if (side && oppBid > 0)     return { pct: 15, label: "livro EL zerou",  color: "red" };
       return null;
     }
 
+    // Opp bid dominante: inversao confirmada (dados: opp>=0.80 -> EL 14%; opp 0.70-0.80 -> EL 61%)
+    if (secs === null || secs > 35) {
+      if (oppBid >= 0.80)
+        return { pct: 14, label: "opp>=0.80: reversao dominante (86% rev hist)", color: "red" };
+      if (oppBid >= 0.70)
+        return { pct: 39, label: "opp>=0.70: inversao forte (39% rev hist)",     color: "red" };
+    }
+
     if (secs !== null && secs <= 35) {
-      if (oppBid >= 0.85) return { pct: 8,  label: "reversao secs<=35",       color: "red" };
-      if (myBid  >= 0.85) return { pct: 94, label: "near win bid>=0.85",      color: "green" };
-      if (myBid  >= 0.75) return { pct: 82, label: "secs<=35 bid 0.75-0.85",  color: "yellow" };
+      if (oppBid >= 0.85) return { pct: 8,  label: "reversao secs<=35",      color: "red" };
+      if (myBid  >= 0.85) return { pct: 94, label: "near win bid>=0.85",     color: "green" };
+      if (myBid  >= 0.75) return { pct: 82, label: "secs<=35 bid 0.75-0.85", color: "yellow" };
     }
 
     if (secs !== null && secs >= 36 && secs <= 70 && myBid >= 0.88)
@@ -39,6 +48,42 @@
     if (myBid >= 0.65) return { pct: 55, label: "zona morta bid 0.65-0.73", color: "orange" };
     if (myBid >= 0.50) return { pct: 38, label: "zona morta bid 0.50-0.65", color: "red" };
     return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Probabilidade de inversao — perspectiva dupla (posicao atual vs novo lider)
+  // Baseado em EL Flip sim (97 trades, 93.8% reversal WR) + dados 310 slugs
+  // ---------------------------------------------------------------------------
+  function calcWinProbInversion(invBid, invStrong, secs) {
+    // Retorna { el: {pct, label, color}, reversal: {pct, label, color} }
+    let elPct, revPct, label;
+    const gap = invBid - (1 - invBid);  // aprox gap entre os dois lados
+
+    if (secs !== null && secs <= 60) {
+      // Perto do fim: reversao quase irreversivel se opp esta dominante
+      elPct  = invStrong ? 4  : 6;
+      revPct = invStrong ? 96 : 94;
+      label  = `secs<=${secs} inversao confirmada`;
+    } else if (invStrong) {
+      // bid >= 0.72: gap > 0.35 (segmento dominante EL Flip: 95.7% reversal)
+      elPct  = 4;
+      revPct = 96;
+      label  = `inversao forte bid=${fmt(invBid)} gap=${gap.toFixed(2)}`;
+    } else if (invBid >= 0.65) {
+      // bid 0.65-0.72: gap 0.20-0.35 (EL Flip gap>=0.20: 93.8% reversal)
+      elPct  = 6;
+      revPct = 94;
+      label  = `inversao solida bid=${fmt(invBid)} gap=${gap.toFixed(2)}`;
+    } else {
+      // bid 0.60-0.65: gap 0.10-0.20 (EL Flip gap>=0.10: 88.9% reversal)
+      elPct  = 11;
+      revPct = 89;
+      label  = `inversao inicial bid=${fmt(invBid)} gap=${gap.toFixed(2)}`;
+    }
+    return {
+      el:      { pct: elPct,  label: `lado atual: ${label}`,    color: "red" },
+      reversal:{ pct: revPct, label: `novo lider: ${label}`,    color: "green" },
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -164,10 +209,36 @@
   // Secao automatica: usa o lado do Early Leader como posicao assumida.
   // Reseta sozinha quando o slug muda (novo mercado 5min).
   // ---------------------------------------------------------------------------
+  function inversionDualHtml(invBid, invStrong, invSide, secs) {
+    const { el, reversal } = calcWinProbInversion(invBid, invStrong, secs);
+    const barColor = { green: "#22c55e", yellow: "#eab308", orange: "#f97316", red: "#ef4444" };
+    const elBar   = barColor[el.color]      || "#64748b";
+    const revBar  = barColor[reversal.color] || "#64748b";
+    return `<div class="elm-section elm-inversion-dual">
+      <div class="elm-section-title">Inversao: ${esc(invSide)} ${invStrong ? "(FORTE)" : "(moderada)"}</div>
+      <div class="elm-inversion-row">
+        <span class="elm-inv-label">Posicao atual</span>
+        <span class="elm-inv-pct" style="color:${elBar}">${el.pct}%</span>
+      </div>
+      <div class="elm-win-prob-bar-bg" style="margin-bottom:4px">
+        <div class="elm-win-prob-bar" style="width:${el.pct}%;background:${elBar}"></div>
+      </div>
+      <div class="elm-inversion-row">
+        <span class="elm-inv-label">Novo lider (${esc(invSide)})</span>
+        <span class="elm-inv-pct" style="color:${revBar}">${reversal.pct}%</span>
+      </div>
+      <div class="elm-win-prob-bar-bg" style="margin-bottom:4px">
+        <div class="elm-win-prob-bar" style="width:${reversal.pct}%;background:${revBar}"></div>
+      </div>
+      <div class="elm-win-prob-basis">${esc(el.label)}</div>
+    </div>`;
+  }
+
   function autoPositionHtml(state) {
     const bids  = state.bids || {};
     const secs  = state.secs_to_end;
     const ee    = state.ee  || {};
+    const el    = state.el  || {};
     const side  = ee.early_side || null;
 
     if (!side) {
@@ -183,18 +254,28 @@
     const oppBid = side === "UP" ? (bids.down || 0) : (bids.up  || 0);
 
     const myBidCls  = myBid  >= 0.85 ? "ok" : myBid  < 0.50 ? "bad" : "";
-    const oppBidCls = oppBid >= 0.85 ? "bad" : "";
+    const oppBidCls = oppBid >= 0.70 ? "bad" : "";
     const ppVal = myBid > 0
       ? (myBid >= PP_BID ? `DISPONIVEL (${fmt(myBid)})` : `falta +${(PP_BID - myBid).toFixed(3)}`)
       : "-";
+
+    // Inversao: mostra probabilidade dupla quando detectada pelo AR tracker
+    const inverted     = el.inverted || false;
+    const invBid       = el.inversion_bid || 0;
+    const invStrong    = el.inversion_strong || false;
+    const invSide      = el.inversion_side || "";
+    const invHtml = (inverted && invSide && invSide !== side)
+      ? inversionDualHtml(invBid, invStrong, invSide, secs)
+      : "";
 
     return `<div class="elm-section elm-auto-pos-section">
       <div class="elm-section-title">Probabilidade (leader: ${esc(side)})</div>
       ${winProbHtml(wp)}
       <div class="elm-pos-exit-badge ${statusClass(rec.color)}">${esc(rec.action)}</div>
       <div class="elm-pos-detail">${esc(rec.detail)}</div>
+      ${invHtml}
       ${elmRow("Bid " + side + " (leader)", fmt(myBid),  myBidCls)}
-      ${elmRow("Bid oposto",               fmt(oppBid), oppBidCls)}
+      ${elmRow("Bid oposto " + (inverted ? "[!]" : ""), fmt(oppBid), oppBidCls)}
       ${elmRow("PP (0.88, 36-70s)",        ppVal, myBid >= PP_BID ? "ok" : "")}
     </div>`;
   }
@@ -240,11 +321,7 @@
     const contVal = ee.f3_ok === true ? "sim" : ee.f3_ok === false ? "NAO" : "aguardando";
     const contCls = ee.f3_ok === true ? "ok" : ee.f3_ok === false ? "bad" : "";
 
-    const invHtml = inverted ? `<div class="elm-section">
-      <div class="elm-section-title">Inversao detectada</div>
-      ${elmRow("Novo lider", `${el.inversion_side} bid=${fmt(el.inversion_bid)}`)}
-      ${elmRow("Forca", el.inversion_strong ? "FORTE (>=0.72)" : "moderada (<0.72)", el.inversion_strong ? "ok" : "warn")}
-    </div>` : "";
+    // invHtml integrado ao autoPositionHtml (probabilidade dupla)
 
     panel.innerHTML = `
       <div class="elm-head">
@@ -271,8 +348,6 @@
         ${elmRow("Continuidade", contVal, contCls)}
         ${elmRow("Amostras",     `${ee.n_s240 || 0}@240 / ${ee.n_s180 || 0}@180`)}
       </div>
-
-      ${invHtml}
 
       ${criteriaHtml(state.criteria)}
 

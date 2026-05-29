@@ -397,6 +397,31 @@ html.pm-el-monitor-right-dock-active body {
   padding: 3px 0;
 }
 
+/* Inversao dual probability */
+#pm-el-monitor-ext .elm-inversion-dual {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+#pm-el-monitor-ext .elm-inversion-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 3px;
+}
+
+#pm-el-monitor-ext .elm-inv-label {
+  font-size: 10px;
+  color: #cbd5e1;
+}
+
+#pm-el-monitor-ext .elm-inv-pct {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
 /* Win probability bar */
 #pm-el-monitor-ext .elm-win-prob {
   margin-bottom: 7px;
