@@ -68,9 +68,9 @@ INV_MAX_ENTRY_ASK   = 0.65   # conservador: só entra se ask <= 0.65
 INV_MIN_SECS        = 15
 INV_MAX_SECS        = 60
 
-SPOT_REFRESH_SECS   = 5.0    # spot a cada 5s para historico adequado
-QUEUE_REFRESH_SECS  = 45.0
-POLL_DEFAULT        = 1.5
+SPOT_REFRESH_SECS   = 15.0   # spot a cada 15s (mercados finos — reduz carga API)
+QUEUE_REFRESH_SECS  = 60.0
+POLL_DEFAULT        = 5.0    # 5s: 60 polls/candle 5m, suficiente para detectar EL
 MAX_BID_HISTORY     = 120    # ~3min @ 1.5s
 MAX_SPOT_HISTORY    = 120    # ~10min @ 5s
 
