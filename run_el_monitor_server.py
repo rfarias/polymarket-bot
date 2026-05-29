@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
 import requests as _requests
@@ -29,10 +29,12 @@ import requests as _requests
 # Fast bid fetch — 2 chamadas paralelas ao CLOB /price (UP + DOWN bid)
 # Substitui _fetch_slot_state() que fazia 18+ chamadas HTTP sequenciais.
 # Session persistente reutiliza conexão TCP/TLS: ~100-300ms por ciclo.
+# Executor persistente evita criar/destruir threads a cada ciclo (300ms).
 # ---------------------------------------------------------------------------
 _CLOB = "https://clob.polymarket.com"
 _http = _requests.Session()
 _http.headers.update({"Accept": "application/json"})
+_bid_executor = ThreadPoolExecutor(max_workers=2)
 
 
 def _fast_bid(token_id: str) -> float:
@@ -51,10 +53,9 @@ def _fast_bid(token_id: str) -> float:
 
 def _fast_fetch_bids(up_token_id: str, down_token_id: str) -> Tuple[float, float]:
     """2 GETs em paralelo — único gargalo de rede por ciclo."""
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        up_f = pool.submit(_fast_bid, up_token_id)
-        dn_f = pool.submit(_fast_bid, down_token_id)
-        return up_f.result(), dn_f.result()
+    up_f = _bid_executor.submit(_fast_bid, up_token_id)
+    dn_f = _bid_executor.submit(_fast_bid, down_token_id)
+    return up_f.result(timeout=5.0), dn_f.result(timeout=5.0)
 
 
 def _token_ids_from_bundle(slot_bundle: dict) -> Tuple[str, str]:
@@ -384,6 +385,65 @@ def _build_state(
 
 
 # ---------------------------------------------------------------------------
+# Três threads independentes — cada uma com responsabilidade única:
+#   _bundle_refresh_loop : atualiza slug/token_ids a cada 15s
+#   _bid_fetch_loop      : busca bids continuamente, sem cadência fixa
+#   _poll_loop           : lê tudo da memória, atualiza trackers EE/AR, serve estado
+#
+# O handler HTTP só lê _state — nenhum I/O no caminho da resposta.
+# ---------------------------------------------------------------------------
+
+_bundle_lock = threading.Lock()
+_bnd: dict = {}
+_bnd_up_id: str = ""
+_bnd_dn_id: str = ""
+_bnd_ts: float = 0.0
+
+
+def _bundle_refresh_loop(interval_secs: float) -> None:
+    global _bnd, _bnd_up_id, _bnd_dn_id, _bnd_ts
+    while True:
+        t0 = time.time()
+        try:
+            new_bnd = _build_slot_bundle()
+            up_id, dn_id = _token_ids_from_bundle(new_bnd)
+            with _bundle_lock:
+                _bnd = new_bnd
+                _bnd_up_id = up_id
+                _bnd_dn_id = dn_id
+                _bnd_ts = t0
+        except Exception:
+            pass
+        elapsed = time.time() - t0
+        remaining = interval_secs - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+
+_bids_lock = threading.Lock()
+_live_up_bid: float = 0.0
+_live_dn_bid: float = 0.0
+_live_bids_ts: float = 0.0
+
+
+def _bid_fetch_loop() -> None:
+    """Busca bids em loop contínuo; atualiza _live_*bid sem bloquear nada."""
+    global _live_up_bid, _live_dn_bid, _live_bids_ts
+    while True:
+        with _bundle_lock:
+            up_id = _bnd_up_id
+            dn_id = _bnd_dn_id
+        if up_id and dn_id:
+            up, dn = _fast_fetch_bids(up_id, dn_id)
+            with _bids_lock:
+                _live_up_bid = up
+                _live_dn_bid = dn
+                _live_bids_ts = time.time()
+        else:
+            time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
 # Estado compartilhado
 # ---------------------------------------------------------------------------
 _state: Dict[str, Any] = {"status": "starting", "ts": time.time()}
@@ -391,24 +451,26 @@ _state_lock = threading.Lock()
 
 
 def _poll_loop(poll_secs: float) -> None:
+    """Lê bids e bundle da memória — zero I/O; atualiza trackers e estado."""
     ee_tracker = _EarlyLeaderTrackerEE()
     ar_tracker = _EarlyLeaderTrackerAR()
-    _last_bundle_ts = 0.0
-    _cached_bundle: dict = {}
-    _cached_up_id = ""
-    _cached_dn_id = ""
-    BUNDLE_TTL = 5.0  # remontar bundle a cada 5s (slug muda a cada 5min)
 
     while True:
         t0 = time.time()
         try:
-            # Rebuild bundle apenas quando TTL expirar (evita chamadas Gamma API frequentes)
-            if t0 - _last_bundle_ts >= BUNDLE_TTL or not _cached_bundle:
-                _cached_bundle = _build_slot_bundle()
-                _last_bundle_ts = t0
-                _cached_up_id, _cached_dn_id = _token_ids_from_bundle(_cached_bundle)
+            with _bundle_lock:
+                bundle = _bnd
+                bundle_ts = _bnd_ts
 
-            current_item = _cached_bundle.get("queue", {}).get("current")
+            with _bids_lock:
+                up_bid = _live_up_bid
+                down_bid = _live_dn_bid
+
+            if not bundle:
+                time.sleep(poll_secs)
+                continue
+
+            current_item = bundle.get("queue", {}).get("current")
             if not current_item:
                 with _state_lock:
                     _state.update({"status": "no_market", "ts": t0, "slug": None, "secs_to_end": None})
@@ -416,18 +478,11 @@ def _poll_loop(poll_secs: float) -> None:
                 continue
 
             slug = str(current_item.get("slug") or "")
-            # Ajusta secs com base no tempo decorrido desde o bundle
             secs_raw = current_item.get("seconds_to_end")
             if secs_raw is not None:
-                secs = max(0, int(secs_raw) - int(t0 - _last_bundle_ts))
+                secs = max(0, int(secs_raw) - int(t0 - bundle_ts))
             else:
                 secs = None
-
-            # Fast path: 2 GETs em paralelo em vez de 18+ chamadas sequenciais
-            if _cached_up_id and _cached_dn_id:
-                up_bid, down_bid = _fast_fetch_bids(_cached_up_id, _cached_dn_id)
-            else:
-                up_bid, down_bid = 0.0, 0.0
 
             if slug and secs is not None and up_bid > 0 and down_bid > 0:
                 ee_tracker.update(slug, secs, up_bid, down_bid)
@@ -442,7 +497,6 @@ def _poll_loop(poll_secs: float) -> None:
             with _state_lock:
                 _state.update({"status": "error", "ts": t0, "error": str(exc), "slug": _state.get("slug")})
 
-        # Mantém cadência: dorme o restante do intervalo desejado
         elapsed = time.time() - t0
         remaining = poll_secs - elapsed
         if remaining > 0:
@@ -464,6 +518,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -479,9 +534,28 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def run_el_monitor_server(port: int = 8766, poll_secs: float = 0.5) -> None:
+    # 1) Bundle refresh: slug/token_ids a cada 15s
+    bt = threading.Thread(target=_bundle_refresh_loop, args=(15.0,), daemon=True)
+    bt.start()
+    # Aguarda primeiro bundle (max 15s) antes de iniciar as demais threads
+    print("[EL Monitor] Aguardando bundle inicial...")
+    deadline = time.time() + 15.0
+    while time.time() < deadline:
+        with _bundle_lock:
+            if _bnd:
+                break
+        time.sleep(0.2)
+
+    # 2) Bid fetch: loop contínuo, 2 GETs paralelos, sem cadência fixa
+    bft = threading.Thread(target=_bid_fetch_loop, daemon=True)
+    bft.start()
+    time.sleep(0.5)  # Aguarda primeiro bid antes de iniciar poll loop
+
+    # 3) Poll loop: só lê memória, zero I/O
     t = threading.Thread(target=_poll_loop, args=(poll_secs,), daemon=True)
     t.start()
-    server = HTTPServer(("127.0.0.1", port), _Handler)
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     print(f"[EL Monitor] Servidor em http://127.0.0.1:{port}/state | poll={poll_secs}s")
     print("[EL Monitor] Ctrl+C para parar")
     try:
