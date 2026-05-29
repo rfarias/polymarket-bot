@@ -430,16 +430,19 @@ def _bid_fetch_loop() -> None:
     """Busca bids em loop contínuo; atualiza _live_*bid sem bloquear nada."""
     global _live_up_bid, _live_dn_bid, _live_bids_ts
     while True:
-        with _bundle_lock:
-            up_id = _bnd_up_id
-            dn_id = _bnd_dn_id
-        if up_id and dn_id:
-            up, dn = _fast_fetch_bids(up_id, dn_id)
-            with _bids_lock:
-                _live_up_bid = up
-                _live_dn_bid = dn
-                _live_bids_ts = time.time()
-        else:
+        try:
+            with _bundle_lock:
+                up_id = _bnd_up_id
+                dn_id = _bnd_dn_id
+            if up_id and dn_id:
+                up, dn = _fast_fetch_bids(up_id, dn_id)
+                with _bids_lock:
+                    _live_up_bid = up
+                    _live_dn_bid = dn
+                    _live_bids_ts = time.time()
+            else:
+                time.sleep(0.5)
+        except Exception:
             time.sleep(0.5)
 
 
