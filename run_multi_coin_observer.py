@@ -269,14 +269,22 @@ def _fetch_slot_snap(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         token_ids = [tid for tid, _ in mapping]
         raw_books = fetch_books_for_tokens(token_ids)
 
-        prices: Dict[str, float] = {}
+        bids: Dict[str, float] = {}
+        asks: Dict[str, float] = {}
         for tid, outcome in mapping:
             book = next((b for b in raw_books if str(b.get("asset_id")) == str(tid)), None)
             if book:
-                bids = book.get("bids") or []
-                prices[outcome] = float(bids[0]["price"]) if bids else 0.0
+                bid_list = book.get("bids") or []
+                ask_list = book.get("asks") or []
+                bids[outcome] = float(bid_list[0]["price"]) if bid_list else 0.0
+                asks[outcome] = float(ask_list[0]["price"]) if ask_list else 0.0
 
-        return {"up_bid": prices.get("UP", 0.0), "down_bid": prices.get("DOWN", 0.0)}
+        return {
+            "up_bid":   bids.get("UP",   0.0),
+            "down_bid": bids.get("DOWN", 0.0),
+            "up_ask":   asks.get("UP",   0.0),
+            "down_ask": asks.get("DOWN", 0.0),
+        }
     except Exception:
         return None
 
@@ -295,7 +303,10 @@ class _CoinState:
         # por slug
         self.bid_hist:   Dict[str, _BidHistory]        = {}
         self.el_tracker: Dict[str, _ELInversionTracker] = {}
-        self.price_to_beat: Dict[str, Optional[float]] = {}   # slug → beat price
+        self.price_to_beat: Dict[str, Optional[float]] = {}   # slug → spot no início
+        self.spot_at_last_snap: Dict[str, Optional[float]] = {}  # slug → último spot visto
+        # para detectar transição de candle (current)
+        self.current_slug: Optional[str] = None
         # spot history partilhada por coin
         self.spot_hist: _SpotHistory = _SpotHistory()
         self.spot_ref:  Optional[float] = None
@@ -401,15 +412,67 @@ def run(run_seconds: int = 21600, poll_secs: float = POLL_DEFAULT) -> None:
 
                 up_bid   = snap["up_bid"]
                 down_bid = snap["down_bid"]
+                up_ask   = snap.get("up_ask",   0.0)
+                down_ask = snap.get("down_ask", 0.0)
                 slug     = item["slug"]
 
-                # secs dinâmico: calculado do epoch do slug (não do cache de 45s)
+                # secs dinâmico
                 epoch = _extract_epoch_from_slug(slug)
                 step  = 900 if state.timeframe == "15m" else 300
                 secs  = round(epoch + step - snap_ts) if epoch else item.get("seconds_to_end")
 
+                # ── Detecta transição de candle (current slot) ──────────────
+                if slot_name == "current" and state.current_slug and state.current_slug != slug:
+                    prev_slug = state.current_slug
+                    ptb  = state.price_to_beat.get(prev_slug)
+                    spot = state.spot_at_last_snap.get(prev_slug) or state.spot_ref
+                    # Resolução via spot vs price_to_beat (oracle-based)
+                    if ptb and spot:
+                        resolution = "UP" if spot > ptb else ("DOWN" if spot < ptb else None)
+                    else:
+                        resolution = None
+                    # Fallback: bids do snap anterior se um lado estava dominante
+                    if resolution is None:
+                        prev_elt = state.el_tracker.get(prev_slug)
+                        prev_bh  = state.bid_hist.get(prev_slug)
+                        if prev_bh:
+                            hist_up = prev_bh._up
+                            hist_dn = prev_bh._down
+                            last_up = hist_up[-1][1] if hist_up else 0
+                            last_dn = hist_dn[-1][1] if hist_dn else 0
+                            if last_up >= 0.90:   resolution = "UP"
+                            elif last_dn >= 0.90: resolution = "DOWN"
+                    closed_event: Dict[str, Any] = {
+                        "type":           "candle_closed",
+                        "ts":             round(snap_ts, 3),
+                        "coin":           state.coin,
+                        "tf":             state.timeframe,
+                        "slug":           prev_slug,
+                        "resolution":     resolution,
+                        "price_to_beat":  ptb,
+                        "spot_at_close":  round(spot, 4) if spot else None,
+                        "el_leader":      (state.el_tracker.get(prev_slug) or _ELInversionTracker()).el_leader,
+                        "el_bid_240":     (state.el_tracker.get(prev_slug) or _ELInversionTracker()).el_bid_240,
+                        "inv":            (state.el_tracker.get(prev_slug) or _ELInversionTracker()).inv,
+                        "inv_new_leader": (state.el_tracker.get(prev_slug) or _ELInversionTracker()).inv_new_leader,
+                        "inv_bid":        (state.el_tracker.get(prev_slug) or _ELInversionTracker()).inv_bid,
+                        "flip_gap":       (state.el_tracker.get(prev_slug) or _ELInversionTracker()).flip_gap,
+                    }
+                    _log_snap(log_fp, closed_event)
+                    res_s = resolution or "?"
+                    print(f"  >>> CANDLE CLOSED  {state.coin.upper()}-{state.timeframe}"
+                          f"  ..{prev_slug[-12:]}  resolution={res_s}"
+                          f"  ptb={ptb}  spot={spot:.2f}" if spot else "")
+
+                if slot_name == "current":
+                    state.current_slug = slug
+
                 # Regista price_to_beat no início do candle
                 state.register_price_to_beat(slug, secs)
+
+                # Actualiza spot do último snap para resolução futura
+                if state.spot_ref is not None:
+                    state.spot_at_last_snap[slug] = state.spot_ref
 
                 # Bid history + velocidade
                 bh = state.bid_hist.setdefault(slug, _BidHistory())
@@ -432,8 +495,8 @@ def run(run_seconds: int = 21600, poll_secs: float = POLL_DEFAULT) -> None:
                 # Contexto spot
                 beat = state.price_to_beat.get(slug)
                 sh   = state.spot_hist
-                dist_beat   = sh.distance_beat_bps(beat)
-                recent_vol  = sh.recent_vol_bps(window_secs=60.0)
+                dist_beat    = sh.distance_beat_bps(beat)
+                recent_vol   = sh.recent_vol_bps(window_secs=60.0)
                 beat_crosses = sh.beat_crosses_60s(beat, window_secs=60.0)
 
                 record: Dict[str, Any] = {
@@ -444,9 +507,11 @@ def run(run_seconds: int = 21600, poll_secs: float = POLL_DEFAULT) -> None:
                     "slot":    slot_name,
                     "slug":    slug,
                     "secs":    secs,
-                    # livro
-                    "up_bid":      round(up_bid, 4),
-                    "down_bid":    round(down_bid, 4),
+                    # livro (bid + ask para modelar custo de entrada real)
+                    "up_bid":   round(up_bid,   4),
+                    "down_bid": round(down_bid, 4),
+                    "up_ask":   round(up_ask,   4),
+                    "down_ask": round(down_ask, 4),
                     "leader":      leader,
                     "leader_bid":  round(leader_bid, 4) if leader_bid else 0.0,
                     "bid_vel_30s": round(bid_vel, 5),
@@ -454,27 +519,27 @@ def run(run_seconds: int = 21600, poll_secs: float = POLL_DEFAULT) -> None:
                     "el_leader":   elt.el_leader,
                     "el_bid_240":  elt.el_bid_240,
                     # inversão
-                    "inv":         elt.inv,
+                    "inv":            elt.inv,
                     "inv_new_leader": elt.inv_new_leader,
-                    "inv_bid":     elt.inv_bid,
-                    "flip_gap":    elt.flip_gap,
+                    "inv_bid":        elt.inv_bid,
+                    "flip_gap":       elt.flip_gap,
                     # spot context
-                    "spot_ref":       state.spot_ref,
-                    "price_to_beat":  beat,
-                    "dist_beat_bps":  dist_beat,
-                    "recent_vol_bps": recent_vol,
+                    "spot_ref":         state.spot_ref,
+                    "price_to_beat":    beat,
+                    "dist_beat_bps":    dist_beat,
+                    "recent_vol_bps":   recent_vol,
                     "beat_crosses_60s": beat_crosses,
                 }
                 _log_snap(log_fp, record)
 
                 # Display
-                inv_s = f"  *** INV {elt.inv_new_leader}@{elt.inv_bid:.3f} gap={elt.flip_gap:.3f}" if elt.inv else ""
+                inv_s = f"  INV {elt.inv_new_leader}@{elt.inv_bid:.3f}" if elt.inv else ""
                 el_s  = f" EL={elt.el_leader}" if elt.el_leader else ""
                 vel_s = f" vel={bid_vel:+.4f}" if abs(bid_vel) > 0.0001 else ""
                 print(
                     f"  {state.coin.upper():3s}-{state.timeframe:3s}"
                     f" {slot_name:7s}  secs={str(secs or '?'):>5}"
-                    f"  up={up_bid:.3f} dn={down_bid:.3f}"
+                    f"  up={up_bid:.3f}/{up_ask:.3f} dn={down_bid:.3f}/{down_ask:.3f}"
                     f"{el_s}{vel_s}{inv_s}"
                 )
 
