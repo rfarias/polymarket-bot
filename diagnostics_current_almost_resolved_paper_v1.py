@@ -721,6 +721,14 @@ def main() -> int:
             signal["allow"] = False
             signal["reason"] = f"passive_capture_only_skipped_{signal.get('setup_variant') or 'none'}"
 
+        # Gate EV: standard acima de 0.96 tem EV negativo (WR 93-95% vs preço 0.96-0.97)
+        if signal.get("allow") and str(signal.get("setup_variant") or "") == "standard":
+            _ep = _safe_float(signal.get("entry_price"), 0.0)
+            if _ep > 0.960:
+                signal = dict(signal)
+                signal["allow"] = False
+                signal["reason"] = f"standard_price_above_0.96_ev_negative_{round(_ep, 3)}"
+
         gray_ready = False
         gray_side = ""
         gray_reason = ""

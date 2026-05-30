@@ -41,7 +41,7 @@ from market.current_scalp_signal_v1 import (
 
 EE_EL_MIN    = 0.55   # bid mínimo para detectar early leader em secs 181-240
 EE_CONT_MIN  = 0.70   # bid mínimo de continuidade em secs 121-180
-EE_VEL_MIN   = 0.08   # crescimento mínimo do bid EL (bid_180 - bid_240)
+EE_VEL_MIN   = 0.17   # crescimento mínimo do bid EL (bid_180 - bid_240)
 EE_ENTRY_LO  = 0.82   # faixa de entrada: mínimo
 EE_ENTRY_HI  = 0.86   # faixa de entrada: máximo
 EE_HEDGE_THR           = 0.50   # fallback de hedge (raramente atingido com stop ativo)
