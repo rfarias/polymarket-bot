@@ -334,21 +334,21 @@ def run_early_entry_paper_v1(
             opp_bid = (down_bid if el_side == "UP"  else up_bid)   if el_side else 0.0
 
             # --- Sinal de entrada EE ---
-            # Gates de regime derivados de análise de 216 trades paper (87 sessões, 2026-05-28):
-            #   ep>=0.86 + vel<0.13 → WR=62%, avg=-$0.08
-            #   leader_spread>=0.70 → WR=58%, avg=-$0.70 (cobre REVERSAL e WIN_HEDGE)
+            # Gates de regime:
             #   n_s180 < 3  → deployado no runner real em 2026-05-27 (WR=44%→83%)
-            #   n_s180 == 5 → candidato novo: WR=56.2%, PnL=-$4.68 (16 trades paper)
-            #   hora == 6 UTC → candidato novo: WR=42.9% (7 trades paper, pior horário)
+            #   ep>=0.86 + vel<0.13 → WR=62%, avg=-$0.08
+            #   n_s180 == 5 → candidato: WR=56.2% (16 trades históricos)
+            #   hora == 6 UTC → candidato: WR=42.9% (7 trades históricos)
+            #   spread>=0.70 → REMOVIDO (2026-06-01): com vel>=0.17 o gate
+            #     não filtra perdas — simulação 2529 slugs mostrou WR idêntica
+            #     com ou sem ele (88.7%); bloqueia 18 trades bons por sessão
             _utc_hour        = datetime.datetime.utcnow().hour
             _n180            = len(elt._s180)
-            _leader_spread   = round(el_bid - opp_bid, 4) if el_side else 0.0
             _ep_vel_blocked  = (el_bid >= 0.86 and elt.el_vel < 0.13)
-            _spread_blocked  = (_leader_spread >= 0.70)
             _n180_lt3_blocked = (_n180 < 3)
             _n180_5_blocked  = (_n180 == 5)
             _hora_6_blocked  = (_utc_hour == 6)
-            _regime_blocked  = (_ep_vel_blocked or _spread_blocked
+            _regime_blocked  = (_ep_vel_blocked
                                 or _n180_lt3_blocked or _n180_5_blocked or _hora_6_blocked)
             if _n180_lt3_blocked:
                 _regime_reason = f"n180_lt3:n_s180={_n180}<3"
@@ -358,8 +358,6 @@ def run_early_entry_paper_v1(
                 _regime_reason = f"hora_06utc:hora={_utc_hour}"
             elif _ep_vel_blocked:
                 _regime_reason = f"ep_vel:ep={el_bid:.3f}>=0.86,vel={elt.el_vel:.4f}<0.13"
-            elif _spread_blocked:
-                _regime_reason = f"spread:spread={_leader_spread:.3f}>=0.70"
             else:
                 _regime_reason = ""
 
