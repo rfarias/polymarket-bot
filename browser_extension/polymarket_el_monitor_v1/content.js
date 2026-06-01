@@ -38,7 +38,7 @@
     }
 
     if (secs !== null && secs >= 36 && secs <= 70 && myBid >= 0.88)
-      return { pct: 91, label: "PP window bid>=0.88", color: "green" };
+      return { pct: 91, label: "bid>=0.88 secs 36-70 — hold to resolution", color: "green" };
 
     if (myBid < 0.50 && oppBid > 0)
       return { pct: 22, label: "bid<0.50 hedge gap", color: "red" };
@@ -96,11 +96,8 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Exit logic (espelha runner v2 2026-05-28)
+  // Exit logic — EE: hold to resolution (PP removido 2026-05-27, negativo vs hold)
   // ---------------------------------------------------------------------------
-  const PP_BID     = 0.88;
-  const PP_SECS_LO = 36;
-  const PP_SECS_HI = 70;
   const WIN_BID    = 0.85;
   const WIN_SECS   = 35;
   const HEDGE_THR  = 0.50;
@@ -132,24 +129,15 @@
           detail: `bid=${myBid.toFixed(3)} >= ${WIN_BID} -- aguardar resolucao` };
     }
 
-    if (secs !== null && secs >= PP_SECS_LO && secs <= PP_SECS_HI && myBid >= PP_BID)
-      return { action: "PROFIT PROTECT", color: "green",
-        detail: `bid=${myBid.toFixed(3)} >= ${PP_BID} em ${secs}s (${PP_SECS_LO}-${PP_SECS_HI}s) -- sair GTC` };
-
     const inDeadZone = myBid < 0.84 && myBid >= HEDGE_THR && (secs === null || secs > 35);
-    const distPP = PP_BID - myBid;
-    const inPPWin = secs !== null && secs >= PP_SECS_LO && secs <= PP_SECS_HI;
-    const ppNote = inPPWin
-      ? `PP: falta +${distPP.toFixed(3)}`
-      : (secs !== null && secs > PP_SECS_HI ? `PP em ${secs - PP_SECS_HI}s` : "PP: janela passou");
 
     if (inDeadZone)
       return { action: myBid < 0.70 ? "ZONA MORTA" : "SEM PROTECAO",
         color: myBid < 0.70 ? "yellow" : "gray",
-        detail: `bid=${myBid.toFixed(3)} | ${ppNote}` };
+        detail: `bid=${myBid.toFixed(3)} — hold to resolution` };
 
     return { action: "POSICAO ABERTA", color: "gray",
-      detail: `bid=${myBid.toFixed(3)} | ${ppNote} | secs=${secs ?? "?"}` };
+      detail: `bid=${myBid.toFixed(3)} | secs=${secs ?? "?"}` };
   }
 
   // ---------------------------------------------------------------------------
@@ -264,10 +252,6 @@
 
     const myBidCls  = myBid  >= 0.85 ? "ok" : myBid  < 0.50 ? "bad" : "";
     const oppBidCls = oppBid >= 0.70 ? "bad" : "";
-    const ppVal = myBid > 0
-      ? (myBid >= PP_BID ? `DISPONIVEL (${fmt(myBid)})` : `falta +${(PP_BID - myBid).toFixed(3)}`)
-      : "-";
-
     // Inversao: mostra probabilidade dupla quando detectada pelo AR tracker
     const inverted     = el.inverted || false;
     const invBid       = el.inversion_bid || 0;
@@ -285,7 +269,6 @@
       ${invHtml}
       ${elmRow("Bid " + side + " (leader)", fmt(myBid),  myBidCls)}
       ${elmRow("Bid oposto " + (inverted ? "[!]" : ""), fmt(oppBid), oppBidCls)}
-      ${elmRow("PP (0.88, 36-70s)",        ppVal, myBid >= PP_BID ? "ok" : "")}
     </div>`;
   }
 
