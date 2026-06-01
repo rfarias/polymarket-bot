@@ -43,7 +43,7 @@ EE_EL_MIN    = 0.55   # bid mínimo para detectar early leader em secs 181-240
 EE_CONT_MIN  = 0.70   # bid mínimo de continuidade em secs 121-180
 EE_VEL_MIN   = 0.17   # crescimento mínimo do bid EL (bid_180 - bid_240)
 EE_ENTRY_LO  = 0.82   # faixa de entrada: mínimo
-EE_ENTRY_HI  = 0.86   # faixa de entrada: máximo
+EE_ENTRY_HI  = 0.85   # faixa de entrada: máximo (0.86 removido: WR=58%, _sim_new_setups 2026-06-01)
 EE_HEDGE_THR           = 0.50   # fallback de hedge (raramente atingido com stop ativo)
 EE_MAX_SECS            = 180    # secs máximo para entrada EE
 EE_STOP_LEVEL          = 0.65   # stop loss: saída se bid EL cair abaixo deste nível
@@ -357,25 +357,19 @@ def run_early_entry_paper_v1(
 
             # --- Sinal de entrada EE ---
             # Gates de regime:
-            #   n_s180 < 3  → deployado no runner real em 2026-05-27 (WR=44%→83%)
-            #   ep>=0.86 + vel<0.13 → WR=62%, avg=-$0.08
-            #   n_s180 == 5 → candidato: WR=56.2% (16 trades históricos)
+            #   n_s180 < 6  → n_s180=3-5 tem WR=65-67%; n_s180=7 tem WR=95% (_sim_new_setups 2026-06-01)
+            #   ep>=0.86    → REMOVIDO do EE_ENTRY_HI (WR=58%, EV=-0.277; _sim_new_setups 2026-06-01)
+            #   ep_vel_blocked (ep>=0.86+vel<0.13) → redundante pós EE_ENTRY_HI=0.85, mantido por segurança
             #   hora == 6 UTC → candidato: WR=42.9% (7 trades históricos)
-            #   spread>=0.70 → REMOVIDO (2026-06-01): com vel>=0.17 o gate
-            #     não filtra perdas — simulação 2529 slugs mostrou WR idêntica
-            #     com ou sem ele (88.7%); bloqueia 18 trades bons por sessão
-            _utc_hour        = datetime.datetime.utcnow().hour
-            _n180            = len(elt._s180)
-            _ep_vel_blocked  = (el_bid >= 0.86 and elt.el_vel < 0.13)
-            _n180_lt3_blocked = (_n180 < 3)
-            _n180_5_blocked  = (_n180 == 5)
-            _hora_6_blocked  = (_utc_hour == 6)
-            _regime_blocked  = (_ep_vel_blocked
-                                or _n180_lt3_blocked or _n180_5_blocked or _hora_6_blocked)
-            if _n180_lt3_blocked:
-                _regime_reason = f"n180_lt3:n_s180={_n180}<3"
-            elif _n180_5_blocked:
-                _regime_reason = f"n180_5:n_s180={_n180}"
+            #   spread>=0.70 → REMOVIDO (2026-06-01)
+            _utc_hour         = datetime.datetime.utcnow().hour
+            _n180             = len(elt._s180)
+            _ep_vel_blocked   = (el_bid >= 0.86 and elt.el_vel < 0.13)
+            _n180_lt6_blocked = (_n180 < 6)
+            _hora_6_blocked   = (_utc_hour == 6)
+            _regime_blocked   = (_ep_vel_blocked or _n180_lt6_blocked or _hora_6_blocked)
+            if _n180_lt6_blocked:
+                _regime_reason = f"n180_lt6:n_s180={_n180}<6"
             elif _hora_6_blocked:
                 _regime_reason = f"hora_06utc:hora={_utc_hour}"
             elif _ep_vel_blocked:
