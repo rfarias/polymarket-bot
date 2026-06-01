@@ -290,6 +290,78 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Posição assumida — stop / hedge por variante
+  // Assumido: usuário entrou no 1º sinal detectado para o slug atual.
+  // EE: sem stop (FAK removido); hedge em 0.50.
+  // AR: stop em entry−0.03 (3 ticks, stop_ticks=3 do runner real);
+  //     saída imediata se bid <= 0.50 (mid_book_reversal).
+  // ---------------------------------------------------------------------------
+  function positionGuidanceHtml(pos, bids, secs) {
+    if (!pos || !pos.side) return "";
+
+    const side    = pos.side;
+    const variant = pos.variant || "";
+    const entry   = typeof pos.entry_price === "number" ? pos.entry_price : 0;
+    const myBid   = side === "UP" ? (bids.up  || 0) : (bids.down || 0);
+    const oppBid  = side === "UP" ? (bids.down || 0) : (bids.up  || 0);
+    const stopLvl = entry > 0 ? Math.round((entry - 0.03) * 1000) / 1000 : 0;
+    const isEE    = variant === "EE";
+
+    let action, color, detail;
+
+    // Livro EL zerou
+    if (myBid <= 0 && oppBid >= 0.85) {
+      action = "SAIDA URGENTE";  color = "red";
+      detail = `livro EL zerou + opp=${fmt(oppBid)} — reversão total`;
+    } else if (myBid <= 0 && oppBid > 0) {
+      action = isEE ? "HEDGE URGENTE" : "SAIDA IMEDIATA"; color = "red";
+      detail = `livro EL zerou, opp=${fmt(oppBid)} — ${isEE ? "hedge oposto" : "exit"}`;
+    // bid cruzou 0.50 — mid_book
+    } else if (myBid > 0 && myBid <= 0.50 && oppBid > 0) {
+      action = isEE ? "HEDGE URGENTE" : "SAIDA IMEDIATA"; color = "red";
+      detail = `bid=${fmt(myBid)} <= 0.50 — ${isEE ? "comprar lado oposto" : "mid_book reversal"}`;
+    // EE: sem stop, lógica de win/reversão
+    } else if (isEE) {
+      if (secs !== null && secs <= 35 && myBid >= 0.85) {
+        action = "WIN"; color = "green";
+        detail = `bid=${fmt(myBid)} >= 0.85, secs=${secs}s — aguardar resolução`;
+      } else if (secs !== null && secs <= 35 && oppBid >= 0.85) {
+        action = "SAIDA URGENTE"; color = "red";
+        detail = `reversão: opp=${fmt(oppBid)} >= 0.85, secs=${secs}s`;
+      } else {
+        action = "HOLD — sem stop"; color = "gray";
+        detail = `EE: não usar stop; hedge só se bid < 0.50`;
+      }
+    // AR: stop em entry−3ticks
+    } else if (stopLvl > 0 && myBid <= stopLvl) {
+      action = "STOP"; color = "red";
+      detail = `bid=${fmt(myBid)} <= ${fmt(stopLvl)} (entrada ${fmt(entry)} −3 ticks)`;
+    } else if (variant === "extreme_99") {
+      action = myBid >= 0.97 ? "WIN próximo" : "HOLD"; color = myBid >= 0.97 ? "green" : "gray";
+      detail = `extreme_99 — min risco; stop se bid <= ${fmt(stopLvl)}`;
+    } else {
+      const gaining = entry > 0 && myBid > entry;
+      action = myBid >= 0.97 ? "WIN próximo" : (gaining ? "HOLD — ganhando" : "HOLD");
+      color  = myBid >= 0.97 ? "green" : gaining ? "yellow" : "gray";
+      detail = `stop em ${fmt(stopLvl)} | bid atual ${fmt(myBid)}`;
+    }
+
+    const pnl      = entry > 0 && myBid > 0 ? myBid - entry : null;
+    const pnlStr   = pnl !== null ? (pnl >= 0 ? `+${fmt(pnl)}` : fmt(pnl)) : "—";
+    const pnlColor = pnl === null ? "#64748b" : pnl > 0 ? "#22c55e" : pnl < 0 ? "#ef4444" : "#64748b";
+
+    return `<div class="elm-section elm-position-section">
+      <div class="elm-section-title">Posição: ${esc(variant)} ${esc(side)} @ ${fmt(entry)}</div>
+      <div class="elm-row" style="margin-bottom:4px">
+        <span class="elm-row-label">P&amp;L/share</span>
+        <span class="elm-row-val" style="color:${pnlColor}">${esc(pnlStr)}</span>
+      </div>
+      <div class="elm-pos-exit-badge ${statusClass(color)}">${esc(action)}</div>
+      <div class="elm-pos-detail">${esc(detail)}</div>
+    </div>`;
+  }
+
+  // ---------------------------------------------------------------------------
   // Panel
   // ---------------------------------------------------------------------------
   function ensurePanel() {
@@ -347,6 +419,8 @@
       </div>
 
       ${autoPositionHtml(state)}
+
+      ${positionGuidanceHtml(state.position, bids, secs)}
 
       <div class="elm-section">
         <div class="elm-section-title">Early Leader EE</div>

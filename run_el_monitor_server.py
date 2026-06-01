@@ -107,8 +107,18 @@ EE_STOP_LEVEL = 0.65
 EE_PROFIT_PROTECT_BID = 0.88
 EE_PROFIT_PROTECT_SECS = 70
 EE_HEDGE_THR = 0.50
-AR_BID_MIN = 0.87         # AR: bid mínimo do líder para sinal AR
-AR_SECS_MAX = 70          # AR: janela de secs para quase-resolução
+# AR variantes — faixas de bid alinhadas com gates do runner real
+AR_STANDARD_MIN   = 0.90
+AR_STANDARD_MAX   = 0.96   # gate runner real: ep>=0.97 bloqueado (EV negativo)
+AR_CTRL_LATE_MIN  = 0.93
+AR_CTRL_LATE_MAX  = 0.99
+AR_CTRL_LATE_SECS = 55     # controlled_late_max_secs
+AR_DUAL_RICH_MIN  = 0.97
+AR_DUAL_RICH_MAX  = 0.984  # gate runner real: ep>=0.985 bloqueado
+AR_DUAL_RICH_SECS = 55     # dual_rich_late_window_secs
+AR_EXTREME_MIN    = 0.99
+AR_EXTREME_OPP    = 0.03   # opp_bid máximo para extreme_99
+AR_SECS_MAX       = 70     # janela máxima para qualquer variante AR
 
 
 def _sf(v: Any, d: float = 0.0) -> float:
@@ -116,6 +126,21 @@ def _sf(v: Any, d: float = 0.0) -> float:
         return float(v)
     except Exception:
         return float(d)
+
+
+def _ar_detect(el_bid: float, opp_bid: float, secs: Optional[int]):
+    """Detecta variante AR mais específica por bid/opp/secs (aprox, sem avaliar todas as
+    condições do runner). Prioridade: extreme_99 > dual_rich > ctrl_late > standard.
+    Retorna (variant_label, range_lo, range_hi) ou (None, 0.0, 0.0)."""
+    if el_bid >= AR_EXTREME_MIN and opp_bid <= AR_EXTREME_OPP:
+        return "extreme_99", AR_EXTREME_MIN, AR_EXTREME_MIN
+    if AR_DUAL_RICH_MIN <= el_bid <= AR_DUAL_RICH_MAX and secs is not None and secs <= AR_DUAL_RICH_SECS:
+        return "dual_rich", AR_DUAL_RICH_MIN, AR_DUAL_RICH_MAX
+    if el_bid >= AR_CTRL_LATE_MIN and secs is not None and secs <= AR_CTRL_LATE_SECS:
+        return "ctrl_late", AR_CTRL_LATE_MIN, AR_CTRL_LATE_MAX
+    if AR_STANDARD_MIN <= el_bid <= AR_STANDARD_MAX:
+        return "standard", AR_STANDARD_MIN, AR_STANDARD_MAX
+    return None, 0.0, 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -294,15 +319,16 @@ def _build_state(
     n180_ok  = n_s180 >= EE_N180_MIN
     signal_ok = ee_d["signal_ok"] and in_secs and in_bid and n180_ok
 
-    # AR: EL estabelecido, bid acima da janela EE, mercado quase resolvido
-    ar_signal = (
+    # AR: detecta variante pelo bid atual (aprox, sem avaliar todas as condições do runner)
+    _ar_base = (
         el_side is not None
         and secs is not None
         and EE_MIN_ENTRY_SECS <= secs <= AR_SECS_MAX
-        and el_bid >= AR_BID_MIN
         and opp_bid < 0.30
         and not ar_d.get("inversion_strong")
     )
+    ar_variant, ar_lo, ar_hi = _ar_detect(el_bid, opp_bid, secs) if _ar_base else (None, 0.0, 0.0)
+    ar_signal = ar_variant is not None
 
     criteria = [
         {
@@ -353,12 +379,14 @@ def _build_state(
     vel_pct = int(round(ee_d["el_vel"] * 100)) if ee_d["el_vel"] else 0
     if signal_ok:
         price_c = int(round(el_bid * 100))
-        action  = f"EE vel {vel_pct}. comprar {el_side.lower()} a {price_c},00"
+        action  = f"EE vel {vel_pct}. comprar {el_side.lower()} a {price_c},00 (faixa {int(EE_ENTRY_LO*100)}-{int(EE_ENTRY_HI*100)})"
         color   = "green"
         detail  = f"n_s180={n_s180} | secs={secs}s | gates: vel>={EE_VEL_MIN}, n>={EE_N180_MIN}"
     elif ar_signal:
-        price_c = int(round(el_bid * 100))
-        action  = f"AR standard: comprar {el_side.lower()} a {price_c},00"
+        price_c     = int(round(el_bid * 100))
+        lo_c, hi_c  = int(round(ar_lo * 100)), int(round(ar_hi * 100))
+        faixa       = str(lo_c) if lo_c == hi_c else f"{lo_c}-{hi_c}"
+        action  = f"AR {ar_variant}: comprar {el_side.lower()} a {price_c},00 (faixa {faixa})"
         color   = "green"
         detail  = f"secs={secs}s | bid={el_bid:.3f} | opp={opp_bid:.3f}"
     elif ar_d.get("inverted") and ar_d.get("inversion_strong"):
@@ -414,6 +442,7 @@ def _build_state(
         "el": ar_d,
         "signal_ok": signal_ok,
         "ar_signal": ar_signal,
+        "ar_variant": ar_variant,
         "action": action,
         "color": color,
         "detail": detail,
@@ -501,6 +530,7 @@ def _bid_fetch_loop() -> None:
 # ---------------------------------------------------------------------------
 _state: Dict[str, Any] = {"status": "starting", "ts": time.time()}
 _state_lock = threading.Lock()
+_position_state: Dict[str, Any] = {"position": None, "slug": ""}
 
 
 def _poll_loop(poll_secs: float) -> None:
@@ -542,6 +572,27 @@ def _poll_loop(poll_secs: float) -> None:
                 ar_tracker.update(slug, secs, up_bid, down_bid)
 
             new_state = _build_state(slug, secs, up_bid, down_bid, ee_tracker, ar_tracker)
+
+            # ── Posição assumida: registra quando sinal dispara pela 1ª vez no slug ──
+            _sig_active  = bool(new_state.get("signal_ok")) or bool(new_state.get("ar_signal"))
+            _sig_variant = "EE" if new_state.get("signal_ok") else (new_state.get("ar_variant") or "")
+            _el_side     = (new_state.get("ee") or {}).get("early_side")
+            _el_bid_now  = (up_bid if _el_side == "UP" else down_bid) if _el_side else 0.0
+
+            if slug != _position_state["slug"]:
+                _position_state["position"] = None
+                _position_state["slug"] = slug
+
+            if _sig_active and _position_state["position"] is None and _el_side and _el_bid_now > 0:
+                _position_state["position"] = {
+                    "variant": _sig_variant,
+                    "side": _el_side,
+                    "entry_price": round(_el_bid_now, 4),
+                    "entry_secs": secs,
+                }
+
+            new_state["position"] = _position_state["position"]
+
             with _state_lock:
                 _state.clear()
                 _state.update(new_state)
