@@ -3,33 +3,31 @@ _sim_realista.py
 
 Simulação realista com os problemas de execução identificados no runner real.
 
-Problemas modelados (documentados em TESTES_ANALISE_EL.md):
+Problemas modelados (documentados em TESTES_ANALISE_EL.md + observações runner):
 
-  EE:
-  1. Seleção adversa na entrada:
-       - Trades vencedores: EL se movia rápido → livro fino → fill parcial (~75%)
-       - Trades perdedores: mercado lento / reversão → fill completo (100%)
-  2. Stop fill degradado:
-       - Stop FAK removido (14/14 fails). Se usado novamente, fill em ~0.20 (user obs.)
-       - Sem stop: hold até resolução → perda total (0.0)
-  3. PP (Profit Protect @ 0.88):
-       - Livro fino a 0.88 → fill parcial (~65%)
-       - 35% restante: hold até resolução (recebe 1.0 se ganhar, 0 se reverter)
+  EE — problema central: SELEÇÃO ADVERSA NA ENTRADA
+    Wins: EL sobe rápido → livro de vendas some → fill parcial (~75%)
+    Losses: EL prestes a reverter → vendedores abundantes → fill completo (100%)
+    Custo: -68% do PnL potencial nos wins
 
-  AR:
-  4. Entradas: mercado líquido, fill ~95% sempre
-  5. Wins: hold to resolution → 100% fill a 1.0 (binário)
-  6. Stops estruturais/timeout: gap pequeno, fill ~85% do preço
+  Stop fill degradado (corrigido):
+    Spread grande + liquidez pequena → fill em ~0.45–0.50 (não 0.65)
+    midpoint usado: 0.47
 
-Cenários:
-  P  — Paper idealizado (100% fill, stop a 0.65, PP a 0.88 @ 100%)
-  H  — Hold to resolution (atual runner: sem stop, sem PP, com seleção adversa)
-  PP — Com PP a 0.88 (fill parcial 65%, seleção adversa)
-  ST — Com stop a 0.20 (fill completo, seleção adversa)
-  CO — Combinado: PP + stop a 0.20
+  PP removido corretamente:
+    Com fill parcial 65%, PP piora wins em -$32 sem compensar nos stops.
+    Hold to resolution é claramente superior.
+
+Cenários EE:
+  P   — Paper idealizado (100% fill, stop a 0.65)
+  H   — Hold (atual runner): sem stop, sem PP, seleção adversa
+  ST  — Stop a 0.47 + hold wins: ideal identificado (sem PP)
+  SA1 — SA reduzida: entrada precoce secs>160 → fill 90% wins
+  SA2 — SA reduzida: bid passivo ep-0.01 → fill 88% wins
+  SA3 — SA reduzida: qty 4 (fill 95%), menos exposição nos losses
 
 Uso:
-  python _sim_realista.py            # mostra todos os cenários
+  python _sim_realista.py            # todos os cenários EE + AR
   python _sim_realista.py --qty 6    # default
 """
 from __future__ import annotations
@@ -49,24 +47,24 @@ QTY_PAPER_AR = 50.0
 # Parâmetros de execução realistas
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Seleção adversa na ENTRADA (EE):
-#   Se mercado vai virar a favor do EL, o livro de vendas a 0.83–0.86 some rápido.
-#   Baseado na observação: wins preenchem parcial, losses preenchem completo.
-EE_WIN_ENTRY_FILL  = 0.75  # 75% de qty: trading em mercado que já move
-EE_LOSS_ENTRY_FILL = 1.00  # 100%: reversão — vendedores querem sair
+# ── Seleção adversa na ENTRADA (EE) ─────────────────────────────────────────
+# Wins: EL em aceleração → livro de vendas ralo → fill parcial
+# Losses: reversão se aproxima → vendedores abundantes → fill completo
+EE_WIN_ENTRY_FILL  = 0.75   # 75% de qty preenchida nos wins (baseline)
+EE_LOSS_ENTRY_FILL = 1.00   # 100% fill nos losses (seleção adversa clássica)
 
-# Stop real (fill degradado):
-#   Baseado em: gap médio = 0.10 (seção 21.4), user obs "próximo de 0.20"
-#   STOP FAK foi 0/14 → removido. Modela novo stop com GTC.
-STOP_FILL_PRICE    = 0.20  # fill real quando stop ativa
-STOP_FIRES_RATE    = 0.80  # 80% dos stops disparam antes de resolve completo
+# ── Stop real (corrigido 2026-06-01) ─────────────────────────────────────────
+# Spread grande + liquidez pequena → fill em ~0.45–0.50, não 0.65
+# midpoint 0.47 = ponto central da faixa observada
+STOP_LEVEL         = 0.65   # preço que dispara o stop
+STOP_FILL_PRICE    = 0.47   # fill real após slippage/spread (0.45–0.50)
+STOP_FIRES_RATE    = 0.85   # 85% dos stops disparam (vs FAK que era 0%)
+# Poupança vs hold: (0.47 - 0.0) por share → +$0.47×qty por stop ativado
 
-# PP (Profit Protect @ 0.88):
-#   Livro de compra a 0.88 é fino quando EL está subindo.
-#   Baseado em: WINs → PP perdem $0.17/trade por fill parcial (seção 21).
+# ── PP (removido do runner real, mantido apenas para comparação) ──────────────
 PP_BID         = 0.88
-PP_FILL_RATE   = 0.65      # apenas 65% de qty sai a 0.88
-PP_REM_WIN_P   = 0.90      # prob de os 35% restantes resolverem WIN (EL continua)
+PP_FILL_RATE   = 0.65       # fill parcial 65% a 0.88
+PP_REM_WIN_P   = 0.90       # prob restante 35% resolver WIN
 
 # AR Standard: mercado mais líquido, execution melhor
 AR_ENTRY_FILL      = 0.95  # 95% fill nas entradas
@@ -169,64 +167,99 @@ def load_ar_exits(qty: float, from_date: str = "20260526") -> list[dict]:
 # Aplicação dos cenários de execução
 # ─────────────────────────────────────────────────────────────────────────────
 
-def apply_scenario_ee(trade: dict, scenario: str, qty: float) -> float:
-    """Retorna PnL realista para um trade EE dado o cenário de execução."""
-    ep  = trade["ep"]
-    out = trade["outcome"]   # WIN, STOP, PP (da simulação idealizada)
+def _ee_pnl(ep: float, out: str, qty: float,
+            win_fill: float, stop_fill: float, stop_fire: float,
+            use_pp: bool = False) -> float:
+    """Núcleo do cálculo de PnL EE com parâmetros de execução explícitos."""
+    filled = qty * (win_fill if out == "WIN" else EE_LOSS_ENTRY_FILL)
 
-    # Seleção adversa na entrada: qty real pode ser menor
-    if scenario == "P":
-        filled_qty = qty
-    else:
-        filled_qty = qty * (EE_WIN_ENTRY_FILL if out == "WIN" else EE_LOSS_ENTRY_FILL)
-
-    if scenario == "P":
-        # ── Paper: PP a 0.88 @ 100% fill, stop a 0.65 @ 100%
-        if out == "WIN":
-            return round((0.97 - ep) * filled_qty, 4)  # avg exit WIN
-        elif out == "STOP":
-            return round((0.65 - ep) * filled_qty, 4)  # stop a 0.65
+    if out == "WIN":
+        if use_pp:
+            pf  = filled * PP_FILL_RATE
+            rem = filled * (1 - PP_FILL_RATE)
+            return round((PP_BID - ep) * pf + (1.0 - ep) * rem, 4)
         else:
-            return round((PP_BID - ep) * filled_qty, 4)
+            return round((1.0 - ep) * filled, 4)
+    else:
+        # Loss: stop tenta sair a STOP_LEVEL, fill real = stop_fill
+        fired   = (stop_fill  - ep) * filled
+        nofired = (0.0        - ep) * filled
+        return round(stop_fire * fired + (1 - stop_fire) * nofired, 4)
+
+
+def apply_scenario_ee(trade: dict, scenario: str, qty: float) -> float:
+    """Retorna PnL realista para um trade EE dado o cenário de execução.
+
+    Cenários:
+      P    — Paper idealizado: 100% fill, stop a 0.65, sem seleção adversa
+      H    — Hold (atual runner): sem stop, sem PP, seleção adversa 75%/100%
+      ST   — Stop a 0.47 (sem PP): ideal identificado
+      SA1  — SA reduzida via entrada precoce (secs>160): fill 90%
+      SA2  — SA reduzida via bid passivo ep-0.01: fill 88%
+      SA3  — SA reduzida via qty=4 (sempre ~95% fill): qty fixo 4
+      PP   — PP 0.88 fill parcial (mantido só para comparação)
+    """
+    ep  = trade["ep"]
+    out = trade["outcome"]
+
+    if scenario == "P":
+        # Paper: fill 100%, stop funciona a 0.65
+        if out == "WIN":
+            return round((1.0 - ep) * qty, 4)
+        else:
+            return round((0.65 - ep) * qty, 4)
 
     elif scenario == "H":
-        # ── Hold to Resolution: sem stop, sem PP, hold binário
-        if out == "WIN":
-            return round((1.0 - ep) * filled_qty, 4)
-        else:
-            # loss: full reversal (STOP ou PP abortado → resolve a 0)
-            return round((0.0 - ep) * filled_qty, 4)
-
-    elif scenario == "PP":
-        # ── PP a 0.88 com fill parcial; seleção adversa na entrada
-        if out == "WIN":
-            pp_filled   = filled_qty * PP_FILL_RATE
-            pp_rem      = filled_qty * (1 - PP_FILL_RATE)
-            pnl_pp      = (PP_BID - ep) * pp_filled
-            pnl_rem     = (1.0 - ep) * pp_rem  # resto resolve via binário
-            return round(pnl_pp + pnl_rem, 4)
-        else:
-            return round((0.0 - ep) * filled_qty, 4)
+        # Hold to resolution: seleção adversa baseline, sem stop
+        return _ee_pnl(ep, out, qty,
+                       win_fill=EE_WIN_ENTRY_FILL,
+                       stop_fill=0.0, stop_fire=0.0)
 
     elif scenario == "ST":
-        # ── Stop a 0.20 (com seleção adversa na entrada)
-        if out == "WIN":
-            return round((1.0 - ep) * filled_qty, 4)
-        else:
-            fired_pnl    = (STOP_FILL_PRICE - ep) * filled_qty
-            nofired_pnl  = (0.0 - ep) * filled_qty
-            return round(STOP_FIRES_RATE * fired_pnl + (1 - STOP_FIRES_RATE) * nofired_pnl, 4)
+        # Ideal: sem PP, stop a 0.47 (fill real do spread largo)
+        return _ee_pnl(ep, out, qty,
+                       win_fill=EE_WIN_ENTRY_FILL,
+                       stop_fill=STOP_FILL_PRICE,
+                       stop_fire=STOP_FIRES_RATE)
 
-    elif scenario == "CO":
-        # ── Combinado: PP a 0.88 (parcial) + stop a 0.20 nos losses
+    elif scenario == "SA1":
+        # Entrada precoce (secs 160-180): mercado menos resolvido → mais vendedores
+        # Melhora fill win de 75% → 90%
+        return _ee_pnl(ep, out, qty,
+                       win_fill=0.90,
+                       stop_fill=STOP_FILL_PRICE,
+                       stop_fire=STOP_FIRES_RATE)
+
+    elif scenario == "SA2":
+        # Bid passivo a ep-0.01: fica na fila de compra, preenche quando mercado recua 1 tick
+        # Melhora fill win de 75% → 88%; custo: entrada a ep-0.01 (preço melhor!)
+        ep_adj = ep - 0.01  # entra 1 tick abaixo → benefício adicional nos wins
+        filled = qty * (0.88 if out == "WIN" else EE_LOSS_ENTRY_FILL)
         if out == "WIN":
-            pp_filled = filled_qty * PP_FILL_RATE
-            pp_rem    = filled_qty * (1 - PP_FILL_RATE)
-            return round((PP_BID - ep) * pp_filled + (1.0 - ep) * pp_rem, 4)
+            return round((1.0 - ep_adj) * filled, 4)
         else:
-            fired_pnl   = (STOP_FILL_PRICE - ep) * filled_qty
-            nofired_pnl = (0.0 - ep) * filled_qty
-            return round(STOP_FIRES_RATE * fired_pnl + (1 - STOP_FIRES_RATE) * nofired_pnl, 4)
+            fired   = (STOP_FILL_PRICE - ep_adj) * filled
+            nofired = (0.0 - ep_adj)             * filled
+            return round(STOP_FIRES_RATE * fired + (1 - STOP_FIRES_RATE) * nofired, 4)
+
+    elif scenario == "SA3":
+        # Qty=4 fixo: fill quase 100% mesmo nos wins; losses menores
+        qty4  = 4.0
+        fill4 = 0.95
+        filled = qty4 * (fill4 if out == "WIN" else EE_LOSS_ENTRY_FILL)
+        if out == "WIN":
+            return round((1.0 - ep) * filled, 4)
+        else:
+            fired   = (STOP_FILL_PRICE - ep) * filled
+            nofired = (0.0 - ep)             * filled
+            return round(STOP_FIRES_RATE * fired + (1 - STOP_FIRES_RATE) * nofired, 4)
+
+    elif scenario == "PP":
+        # PP fill parcial — comparação apenas
+        return _ee_pnl(ep, out, qty,
+                       win_fill=EE_WIN_ENTRY_FILL,
+                       stop_fill=0.0, stop_fire=0.0,
+                       use_pp=True)
 
     return 0.0
 
@@ -356,11 +389,13 @@ def run_scenarios_only_ee(ee_trades: list[dict], qty: float,
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCENARIO_LABELS = {
-    "P":  "P  — Paper idealizado          ",
-    "H":  "H  — Hold resol. (atual runner) ",
-    "PP": "PP — Profit Protect 0.88 parcial",
-    "ST": "ST — Stop a 0.20               ",
-    "CO": "CO — Combinado PP + Stop 0.20  ",
+    "P":   "P   — Paper idealizado (100% fill)  ",
+    "H":   "H   — Hold (atual runner, SA 75%)   ",
+    "ST":  "ST  — Stop 0.47 sem PP [IDEAL]      ",
+    "SA1": "SA1 — Entrada precoce secs>160       ",
+    "SA2": "SA2 — Bid passivo ep-0.01            ",
+    "SA3": "SA3 — Qty=4 fill 95%                ",
+    "PP":  "PP  — PP 0.88 parcial (comparacao)  ",
 }
 
 def main() -> None:
@@ -381,7 +416,7 @@ def main() -> None:
     print(f"  EE WIN: {len(ee_wins)} | EE STOP/LOSS: {len(ee_stops)}")
     print()
 
-    scenarios = ["P", "H", "PP", "ST", "CO"]
+    scenarios = ["P", "H", "ST", "SA1", "SA2", "SA3", "PP"]
     res_total = run_scenarios(ee, ar, qty, scenarios)
     res_ee    = run_scenarios_only_ee(ee, qty, scenarios)
 
@@ -414,55 +449,69 @@ def main() -> None:
         print(f"  {lbl} {r['n']:>4} {r['wins']:>4} {r['losses']:>3} {r['wr']:>4.1f}% "
               f"{r['total_ticks']:>+7.0f} {r['total_pnl']:>+8.2f} {r['avg_pnl']:>+8.4f}")
 
-    # ── Análise PP vs Hold ────────────────────────────────────────────────────
+    # ── PP vs Hold vs Stop correto ───────────────────────────────────────────
     print(f"\n{'─'*80}")
-    print("  PP vs HOLD-TO-RESOLUTION — Análise por tipo de trade (EE only)")
+    print("  ANALISE PP vs HOLD vs STOP 0.47 — EE only")
     print(f"{'─'*80}")
-
-    ee_win_data  = [apply_scenario_ee(t, "H",  qty) for t in ee_wins]
-    ee_win_pp    = [apply_scenario_ee(t, "PP", qty) for t in ee_wins]
-    ee_loss_h    = [apply_scenario_ee(t, "H",  qty) for t in ee_stops]
-    ee_loss_st   = [apply_scenario_ee(t, "ST", qty) for t in ee_stops]
 
     def _s(vals):
         n = len(vals)
         if n == 0: return "n=0"
-        return f"n={n} total={sum(vals):>+.2f} avg={sum(vals)/n:>+.4f}"
+        return f"n={n:>3}  total={sum(vals):>+7.2f}  avg={sum(vals)/n:>+.4f}"
 
-    print(f"  Wins — Hold:           {_s(ee_win_data)}")
-    print(f"  Wins — PP 0.88 (65%):  {_s(ee_win_pp)}")
-    delta_win = round(sum(ee_win_pp) - sum(ee_win_data), 2)
-    print(f"  ΔPnL (PP - Hold) wins: {delta_win:>+.2f} USD", end="")
-    if delta_win < 0:
-        print(f"  ← PP PIORA wins (sai antes de 1.0)")
-    else:
-        print(f"  ← PP MELHORA wins")
+    ee_h   = [apply_scenario_ee(t, "H",  qty) for t in ee_wins]
+    ee_st  = [apply_scenario_ee(t, "ST", qty) for t in ee_wins]
+    ee_pp  = [apply_scenario_ee(t, "PP", qty) for t in ee_wins]
+    print(f"  Wins — Hold (1.0):         {_s(ee_h)}")
+    print(f"  Wins — ST stop (hold win): {_s(ee_st)}")
+    print(f"  Wins — PP 0.88 (65%fill):  {_s(ee_pp)}")
+    dpp = round(sum(ee_pp) - sum(ee_h), 2)
+    print(f"  Delta PP vs Hold:  {dpp:>+.2f} USD  ({'PP PIORA' if dpp < 0 else 'PP melhora'})")
 
     print()
-    print(f"  Stops — Hold (0.0):    {_s(ee_loss_h)}")
-    print(f"  Stops — ST (0.20):     {_s(ee_loss_st)}")
-    delta_loss = round(sum(ee_loss_st) - sum(ee_loss_h), 2)
-    print(f"  ΔPnL (Stop - Hold) losses: {delta_loss:>+.2f} USD", end="")
-    if delta_loss > 0:
-        print(f"  ← Stop SALVA capital")
-    else:
-        print(f"  ← Stop não ajuda")
+    l_h  = [apply_scenario_ee(t, "H",  qty) for t in ee_stops]
+    l_st = [apply_scenario_ee(t, "ST", qty) for t in ee_stops]
+    print(f"  Losses — Hold (0.0):       {_s(l_h)}")
+    print(f"  Losses — Stop a 0.47:      {_s(l_st)}")
+    dstop = round(sum(l_st) - sum(l_h), 2)
+    print(f"  Delta Stop vs Hold: {dstop:>+.2f} USD  ({'Stop SALVA capital' if dstop > 0 else 'Stop nao ajuda'})")
 
-    # ── Impacto da seleção adversa ────────────────────────────────────────────
+    total_st_vs_h = round((sum(ee_st) + sum(l_st)) - (sum(ee_h) + sum(l_h)), 2)
+    print(f"\n  Ganho liquido ST vs H (todos trades): {total_st_vs_h:>+.2f} USD")
+
+    # ── Seleção adversa: custo e estratégias de redução ─────────────────────
     print(f"\n{'─'*80}")
-    print("  IMPACTO DA SELEÇÃO ADVERSA NA ENTRADA (EE only)")
+    print("  SELECAO ADVERSA — custo e estrategias de reducao (EE only)")
     print(f"{'─'*80}")
-    ideal_win_pnl = sum(t["pnl_ideal"] for t in ee_wins)
-    real_win_pnl  = sum(apply_scenario_ee(t, "H", qty) for t in ee_wins)
-    ideal_loss_pnl = sum(t["pnl_ideal"] for t in ee_stops)
-    real_loss_pnl  = sum(apply_scenario_ee(t, "H", qty) for t in ee_stops)
 
-    sa_impact = round((real_win_pnl + real_loss_pnl) - (ideal_win_pnl + ideal_loss_pnl), 2)
-    print(f"  Wins idealizados:   {sum(t['pnl_ideal'] for t in ee_wins):>+.2f} USD")
-    print(f"  Wins realistas:     {real_win_pnl:>+.2f} USD  (fill {EE_WIN_ENTRY_FILL*100:.0f}%)")
-    print(f"  Losses idealizados: {ideal_loss_pnl:>+.2f} USD")
-    print(f"  Losses realistas:   {real_loss_pnl:>+.2f} USD  (fill {EE_LOSS_ENTRY_FILL*100:.0f}%)")
-    print(f"  Custo seleção adversa: {sa_impact:>+.2f} USD  ({sa_impact/(real_win_pnl+real_loss_pnl)*100:.1f}% do PnL)")
+    def _ee_total(sc):
+        return sum(apply_scenario_ee(t, sc, qty) for t in ee)
+
+    base_h  = _ee_total("H")
+    base_st = _ee_total("ST")
+
+    print(f"  {'Cenario':<40} {'PnL/10d':>8}  {'vs Hold':>8}  {'vs ST':>8}")
+    print(f"  {'─'*40} {'─'*8}  {'─'*8}  {'─'*8}")
+    for sc, lbl in [
+        ("P",   "Paper 100% fill, stop 0.65         "),
+        ("H",   "Hold (atual, SA 75%)                "),
+        ("ST",  "Stop 0.47 sem PP [IDEAL]            "),
+        ("SA1", "SA1: entrada precoce secs>160 (90%) "),
+        ("SA2", "SA2: bid passivo ep-0.01 (88%)      "),
+        ("SA3", "SA3: qty=4 fill 95%                 "),
+        ("PP",  "PP 0.88 parcial (removido, ref.)    "),
+    ]:
+        tot = _ee_total(sc)
+        vh  = round(tot - base_h,  2)
+        vst = round(tot - base_st, 2)
+        marker = " <<< IDEAL" if sc == "ST" else (" ***" if sc in ("SA1","SA2") else "")
+        print(f"  {lbl:<40} {tot:>+8.2f}  {vh:>+8.2f}  {vst:>+8.2f}{marker}")
+
+    print()
+    print(f"  Custo da SA (P vs H):    {round(base_h - _ee_total('P'), 2):>+.2f} USD / 10 dias")
+    print(f"  Potencial de recuperacao:")
+    print(f"    SA1 (entrada precoce): {round(_ee_total('SA1') - base_st, 2):>+.2f} vs ST ideal")
+    print(f"    SA2 (bid passivo):     {round(_ee_total('SA2') - base_st, 2):>+.2f} vs ST ideal")
 
     # ── Resumo ────────────────────────────────────────────────────────────────
     all_ts = [t["ts"] for t in ee + ar if t.get("ts", 0) > 0]
