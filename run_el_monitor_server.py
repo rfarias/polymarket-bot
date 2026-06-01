@@ -100,12 +100,15 @@ EE_CONT_MIN = 0.70
 EE_VEL_MIN = 0.13
 EE_ENTRY_LO = 0.82
 EE_ENTRY_HI = 0.86
-EE_MAX_ENTRY_SECS = 180
+EE_MAX_ENTRY_SECS = 155   # gate runner real 2026-05-27
 EE_MIN_ENTRY_SECS = 30
+EE_N180_MIN = 3           # gate runner real 2026-05-27
 EE_STOP_LEVEL = 0.65
 EE_PROFIT_PROTECT_BID = 0.88
 EE_PROFIT_PROTECT_SECS = 70
 EE_HEDGE_THR = 0.50
+AR_BID_MIN = 0.87         # AR: bid mínimo do líder para sinal AR
+AR_SECS_MAX = 70          # AR: janela de secs para quase-resolução
 
 
 def _sf(v: Any, d: float = 0.0) -> float:
@@ -282,12 +285,24 @@ def _build_state(
     ar_d = ar.state_dict()
 
     el_side = ee_d["early_side"]
-    el_bid = (up_bid if el_side == "UP" else down_bid) if el_side else 0.0
+    el_bid  = (up_bid if el_side == "UP" else down_bid) if el_side else 0.0
     opp_bid = (down_bid if el_side == "UP" else up_bid) if el_side else 0.0
+    n_s180  = ee_d["n_s180"]
 
-    in_secs = secs is not None and EE_MIN_ENTRY_SECS <= secs <= EE_MAX_ENTRY_SECS
-    in_bid = EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI if el_side else False
-    signal_ok = ee_d["signal_ok"] and in_secs and in_bid
+    in_secs  = secs is not None and EE_MIN_ENTRY_SECS <= secs <= EE_MAX_ENTRY_SECS
+    in_bid   = EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI if el_side else False
+    n180_ok  = n_s180 >= EE_N180_MIN
+    signal_ok = ee_d["signal_ok"] and in_secs and in_bid and n180_ok
+
+    # AR: EL estabelecido, bid acima da janela EE, mercado quase resolvido
+    ar_signal = (
+        el_side is not None
+        and secs is not None
+        and EE_MIN_ENTRY_SECS <= secs <= AR_SECS_MAX
+        and el_bid >= AR_BID_MIN
+        and opp_bid < 0.30
+        and not ar_d.get("inversion_strong")
+    )
 
     criteria = [
         {
@@ -302,7 +317,7 @@ def _build_state(
             "value": "sim" if ee_d.get("f3_ok") else ("nao" if ee_d.get("f3_ok") is False else "aguardando"),
             "accepted": f"min bid >= {EE_CONT_MIN}",
             "ok": bool(ee_d.get("f3_ok")),
-            "detail": f"{ee_d['n_s180']} amostras (janela 121-180s)",
+            "detail": f"{n_s180} amostras (janela 121-180s)",
         },
         {
             "label": "Velocidade EL",
@@ -310,6 +325,13 @@ def _build_state(
             "accepted": f">= {EE_VEL_MIN}",
             "ok": bool(el_side) and ee_d["el_vel"] >= EE_VEL_MIN,
             "detail": f"bid_180={ee_d['el_bid_180']:.3f} - bid_240={ee_d['el_bid_240']:.3f}",
+        },
+        {
+            "label": "Amostras 180s",
+            "value": str(n_s180),
+            "accepted": f">= {EE_N180_MIN}",
+            "ok": n180_ok,
+            "detail": "gate runner real",
         },
         {
             "label": "Bid na janela",
@@ -327,32 +349,59 @@ def _build_state(
         },
     ]
 
+    # ── Instrução principal ───────────────────────────────────────────────
+    vel_pct = int(round(ee_d["el_vel"] * 100)) if ee_d["el_vel"] else 0
     if signal_ok:
-        action, color = "SINAL EE", "green"
-        detail = f"Entrar {el_side} @ {el_bid:.3f}"
+        price_c = int(round(el_bid * 100))
+        action  = f"EE vel {vel_pct}. comprar {el_side.lower()} a {price_c},00"
+        color   = "green"
+        detail  = f"n_s180={n_s180} | secs={secs}s | gates: vel>={EE_VEL_MIN}, n>={EE_N180_MIN}"
+    elif ar_signal:
+        price_c = int(round(el_bid * 100))
+        action  = f"AR standard: comprar {el_side.lower()} a {price_c},00"
+        color   = "green"
+        detail  = f"secs={secs}s | bid={el_bid:.3f} | opp={opp_bid:.3f}"
     elif ar_d.get("inverted") and ar_d.get("inversion_strong"):
-        action, color = "INVERSAO FORTE", "orange"
+        action = "INVERSAO FORTE"
+        color  = "orange"
         detail = f"Novo lider: {ar_d.get('inversion_side')} bid={ar_d.get('inversion_bid', 0):.3f} (100% hist.)"
     elif ar_d.get("inverted"):
-        action, color = "INVERTIDO", "yellow"
+        action = "INVERTIDO"
+        color  = "yellow"
         detail = f"{ar_d.get('inversion_side')} subindo bid={ar_d.get('inversion_bid', 0):.3f}"
     elif not el_side:
-        action, color = "AGUARDAR", "gray"
-        detail = "EL nao detectado (janela 181-240s)"
+        action = "AGUARDAR"
+        color  = "gray"
+        detail = "EL nao detectado — janela 181-240s"
     elif not ee_d.get("f3_ok"):
-        action, color = "AGUARDAR", "yellow"
-        detail = "EL ok, aguardando F3 (janela 121-180s)"
+        action = "AGUARDAR"
+        color  = "yellow"
+        detail = f"EL {el_side} formando — aguardando F3 (janela 121-180s)"
     elif ee_d["el_vel"] < EE_VEL_MIN:
-        action, color = "AGUARDAR", "yellow"
-        detail = f"EL+F3 ok, vel={ee_d['el_vel']:.3f} < {EE_VEL_MIN} (fraco)"
-    elif not in_bid:
-        action, color = "FORA DA JANELA", "yellow"
-        detail = f"bid={el_bid:.3f} fora [{EE_ENTRY_LO}, {EE_ENTRY_HI}]"
+        action = "AGUARDAR"
+        color  = "yellow"
+        detail = f"EL+F3 ok — vel {vel_pct} (precisa {int(EE_VEL_MIN*100)}) aguardando aceleracao"
+    elif not n180_ok:
+        action = "AGUARDAR"
+        color  = "yellow"
+        detail = f"EL+F3+vel ok — n_s180={n_s180} < {EE_N180_MIN} aguardando amostras"
+    elif not in_bid and el_side:
+        action = "AGUARDAR"
+        color  = "yellow"
+        if el_bid < EE_ENTRY_LO:
+            detail = f"EE pronto — aguardando bid {el_bid:.3f} -> [{EE_ENTRY_LO},{EE_ENTRY_HI}]"
+        else:
+            detail = f"bid {el_bid:.3f} acima de {EE_ENTRY_HI} — aguardar AR?"
     elif not in_secs:
-        action, color = "FORA DA JANELA", "yellow"
-        detail = f"secs={secs} fora [{EE_MIN_ENTRY_SECS}, {EE_MAX_ENTRY_SECS}]"
+        action = "AGUARDAR"
+        color  = "yellow"
+        if secs is not None and secs > EE_MAX_ENTRY_SECS:
+            detail = f"EE pronto — aguardando secs <= {EE_MAX_ENTRY_SECS} (agora: {secs}s)"
+        else:
+            detail = f"secs={secs}s fora [{EE_MIN_ENTRY_SECS}s, {EE_MAX_ENTRY_SECS}s]"
     else:
-        action, color = "AGUARDAR", "gray"
+        action = "AGUARDAR"
+        color  = "gray"
         detail = "aguardando sinal"
 
     return {
@@ -364,6 +413,7 @@ def _build_state(
         "ee": ee_d,
         "el": ar_d,
         "signal_ok": signal_ok,
+        "ar_signal": ar_signal,
         "action": action,
         "color": color,
         "detail": detail,
