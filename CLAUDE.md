@@ -51,7 +51,7 @@ Nunca iniciar runner real diretamente com `python run_live_*.py --seconds <longo
 
 ## Estado da pesquisa EE (Early Entry)
 
-Fase atual: **Melhorias de execução ativas** (2026-05-28)
+Fase atual: **Melhorias de execução ativas** (2026-06-01)
 
 ### Gates deployados no runner real (acumulados)
 
@@ -69,6 +69,8 @@ Fase atual: **Melhorias de execução ativas** (2026-05-28)
 | **Gate spread>=0.70 removido** | **2026-06-01** | **redundante com vel>=0.17; bloqueia wins bons** |
 | **`EE_VEL_MIN 0.13 → 0.17` (paper)** | **2026-06-01** | **WR 88.7%, EV+ em ep 0.83–0.86** |
 | **SA2 bid passivo ep-0.01 (paper)** | **2026-06-01** | **reduz seleção adversa 75%→88% fill wins** |
+| **`EE_ENTRY_HI 0.86 → 0.85` (paper)** | **2026-06-01** | **ep=0.86 tinha WR=58%, EV=-0.277/share (_sim_new_setups)** |
+| **`n_s180 < 6` bloqueia (paper)** | **2026-06-01** | **n_s180=3-5 WR=65-67%; n_s180=7 WR=95% (_sim_new_setups)** |
 
 ### SA2 — Bid passivo (implementado no paper 2026-06-01, pendente no real)
 
@@ -93,8 +95,8 @@ Não usar PP (PP negativo com fill parcial 65% — confirmado).
 
 `market/live_early_entry_paper_v1.py` (active):
 - vel >= 0.17 (EE_VEL_MIN)
-- `n_s180 < 3` — deployado no real
-- `n_s180 == 5` — candidato: WR 56.2% (16 trades)
+- `n_s180 < 6` — deployado no paper 2026-06-01 (n_s180=3-5 WR=65-67%, n_s180=7 WR=95%)
+- `EE_ENTRY_HI = 0.85` — deployado no paper 2026-06-01 (ep=0.86 WR=58%)
 - `hora UTC == 6` — candidato: WR 42.9% (7 trades)
 
 ### Pendente — zona morta 0.50–0.84 com secs > 35
@@ -143,8 +145,9 @@ Campo `regime_diagnostics` adicionado ao evento `enter` do AR paper (`diagnostic
 - Não avançar para 50 ou 100 shares sem validação nos logs reais
 - `passive_capture_only` só alterar após comparar sessions reais vs paper
 - Stop, target e hold_to_resolution são definidos pelo sinal — não sobrescrever no runner
-- **`EE_VEL_MIN = 0.13` deployado em 2026-05-28** — não baixar sem nova análise
+- **`EE_VEL_MIN = 0.17` no paper desde 2026-06-01** — não baixar sem nova análise
 - EL Flip: não implementar no runner real sem validação nos logs reais
 - **EE stop FAK removido em 2026-05-27** — não reintroduzir sem nova análise de dados reais
-- Gates EE candidatos (n_s180=5, hora=6h UTC): só ir pro real após validação no paper (50+ dias úteis)
+- Gates paper `n_s180<6` e `EE_ENTRY_HI=0.85`: só ir pro real após 50+ trades no paper confirmando melhora de WR
+- Gate `hora UTC==6`: só ir pro real após validação no paper (50+ dias úteis)
 - Stop suave zona 0.50–0.84: não implementar sem análise dos logs reais pós-pull
