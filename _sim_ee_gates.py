@@ -32,7 +32,8 @@ import io
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if __name__ == "__main__":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # ---------------------------------------------------------------------------
 # Parâmetros
