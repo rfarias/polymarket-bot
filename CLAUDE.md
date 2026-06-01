@@ -102,6 +102,20 @@ Não usar PP (PP negativo com fill parcial 65% — confirmado).
 ### Pendente — zona morta 0.50–0.84 com secs > 35
 
 Stop não funciona (mata 15.4% wins). Zona ainda sem proteção.
+
+### Pendente — validação EV do setup extreme_99_limit
+
+**Problema**: EV > 0 exige WR > 99.0% (win=$0.01/share, loss=$0.99/share).
+O mercado precifica reversão em ~1–3% (opp=0.01–0.03) — se correto, EV já é negativo.
+
+**Dados locais**: apenas 9 eventos, nenhum trade fechado. Insuficiente para estimar WR.
+
+**Ação**: após `git pull` no outro PC, rodar análise de trades fechados por variante nos logs reais:
+```python
+# filtrar type in ('trade_closed','flat','redeem_flat') AND setup_variant == 'extreme_99_limit'
+# calcular WR, avg_pnl, n_reversoes
+```
+Não escalar nem recomendar operação manual do extreme_99 sem WR empírico confirmado > 99%.
 Aguarda dados SA2 no paper + logs reais pós-pull para decidir.
 
 ### Para analisar logs reais no outro PC após `git pull`
