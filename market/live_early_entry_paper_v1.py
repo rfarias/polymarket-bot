@@ -272,11 +272,22 @@ def run_early_entry_paper_v1(
     # cache do preço de abertura do candle (price to beat) — atualizado uma vez por slug
     _open_ref: dict = {"slug": None, "price": None, "event_start_time": None}
 
+    # SA2 — bid passivo ep-0.01
+    # Quando sinal dispara, não entra imediatamente: posta bid a el_bid-0.01.
+    # Preenche quando el_bid cair de volta até esse nível (flutuação natural).
+    # Cancela se: secs<35, slug muda, side muda, el_bid subir acima de EE_ENTRY_HI+0.05.
+    # Baseado em: simulação 2529 slugs mostrou fill 88% (vs 75% imediato),
+    # entrada 1 tick mais barata → +$33/10d vs hold, +$16/10d vs stop ideal.
+    _pending: Optional[dict] = None   # {"side", "price", "set_secs", "set_ts", "slug"}
+
     # acumuladores de sessão
     session_pnl    = 0.0
     session_wins   = 0
     session_losses = 0
     session_trades: list = []
+    session_pending_set   = 0   # quantas vezes o bid passivo foi postado
+    session_pending_fills = 0   # quantas vezes preencheu
+    session_pending_cancels = 0 # quantas vezes foi cancelado sem fill
 
     while time.time() - started_at < run_for:
         now = time.time()
@@ -314,6 +325,17 @@ def run_early_entry_paper_v1(
                     })
                     print(f"[EE_PAPER] MISSED (slug mudou)  slug={_last_slug[-20:]}")
                 ee.reset()
+                # Cancela bid passivo pendente do candle anterior
+                if _pending is not None:
+                    session_pending_cancels += 1
+                    _append_jsonl(log_path, {
+                        "type": "pending_cancelled", "ts": now,
+                        "session_id": session_id, "slug": _last_slug,
+                        "reason": "slug_changed",
+                        "pending_price": _pending["price"],
+                        "set_secs": _pending["set_secs"],
+                    })
+                    _pending = None
                 _last_slug = slug
 
                 # Busca o preço de abertura do candle (price to beat) para o novo slug
@@ -361,86 +383,157 @@ def run_early_entry_paper_v1(
             else:
                 _regime_reason = ""
 
+            # ── SA2: bid passivo ep-0.01 ──────────────────────────────────────
+            # Passo 1: postar bid passivo quando sinal dispara (nenhum pending ativo)
             if (
                 ee.state == "none"
+                and _pending is None
                 and elt.signal_ok
-                and secs is not None and 30 <= secs <= EE_MAX_SECS
+                and secs is not None and 35 <= secs <= EE_MAX_SECS
                 and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
                 and not _regime_blocked
             ):
-                ee.open_entry(el_side, el_bid, now, secs)
-
-                # Captura dist ao price to beat + momentum/volatilidade BTC (apenas logging)
-                btc_info: dict = {}
-                try:
-                    import requests as _req
-                    BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
-
-                    ref = fetch_external_btc_reference_v1()
-                    btc_spot = ref.get("reference_price")
-                    ptb      = _open_ref.get("price")
-                    if btc_spot and ptb:
-                        dist_usd = round(abs(btc_spot - ptb), 2)
-                        dist_bps = round(abs(btc_spot - ptb) / ptb * 10000, 2)
-                        btc_info = {
-                            "spot":      round(btc_spot, 2),
-                            "threshold": round(ptb, 2),
-                            "dist_usd":  dist_usd,
-                            "dist_bps":  dist_bps,
-                            "above":     btc_spot > ptb,
-                        }
-                    else:
-                        btc_info = {"spot": btc_spot, "threshold": ptb, "dist_usd": None, "dist_bps": None}
-
-                    # Momentum: 3 candles 1m antes da entrada
-                    start_ms = (int(now // 60) - 3) * 60 * 1000
-                    km = _req.get(BINANCE_KLINES, params={
-                        "symbol": "BTCUSDT", "interval": "1m",
-                        "startTime": start_ms, "limit": 3,
-                    }, timeout=5)
-                    krows = km.json() or []
-                    if len(krows) >= 3:
-                        closes  = [float(krows[i][4]) for i in range(3)]
-                        highs   = [float(krows[i][2]) for i in range(3)]
-                        lows    = [float(krows[i][3]) for i in range(3)]
-                        ref_k   = closes[-1]
-                        d1m     = round(closes[2] - closes[1], 2)
-                        d3m     = round(closes[2] - closes[0], 2)
-                        rng3m   = round(max(highs) - min(lows), 2)
-                        btc_info.update({
-                            "delta_1m_usd":  d1m,
-                            "delta_3m_usd":  d3m,
-                            "delta_1m_bps":  round(d1m / ref_k * 10000, 2) if ref_k else None,
-                            "delta_3m_bps":  round(d3m / ref_k * 10000, 2) if ref_k else None,
-                            "range_3m_usd":  rng3m,
-                            "range_3m_bps":  round(rng3m / ref_k * 10000, 2) if ref_k else None,
-                            "adverse_1m":    (d1m < 0 if el_side == "UP" else d1m > 0),
-                            "adverse_3m":    (d3m < 0 if el_side == "UP" else d3m > 0),
-                        })
-                except Exception:
-                    btc_info.setdefault("dist_usd", None)
-
+                _pending_price = round(el_bid - 0.01, 4)
+                _pending = {
+                    "side":     el_side,
+                    "price":    _pending_price,
+                    "set_secs": secs,
+                    "set_ts":   now,
+                    "slug":     slug,
+                    "el_vel":   elt.el_vel,
+                    "signal_ep": round(el_bid, 4),
+                }
+                session_pending_set += 1
                 _append_jsonl(log_path, {
-                    "type": "ee_paper_entry", "ts": now,
+                    "type": "pending_bid", "ts": now,
                     "session_id": session_id, "slug": slug,
-                    "side": el_side, "ep": round(el_bid, 4), "secs": secs,
-                    "el": elt.state_dict(),
-                    "btc": btc_info,
+                    "side": el_side,
+                    "signal_ep": round(el_bid, 4),
+                    "pending_price": _pending_price,
+                    "el_vel": elt.el_vel,
+                    "secs": secs,
                 })
-                dist_str = f"  dist={btc_info['dist_usd']}usd" if btc_info.get("dist_usd") is not None else ""
-                adv_str  = "  ADV!" if btc_info.get("adverse_1m") else ""
-                mom_str  = (f"  d1m={btc_info['delta_1m_usd']:+.0f}usd  rng={btc_info['range_3m_usd']:.0f}usd"
-                            if btc_info.get("delta_1m_usd") is not None else "")
                 print(
-                    f"[EE_PAPER] ENTRADA {el_side}  ep={el_bid:.3f}  "
+                    f"[EE_PAPER] BID_PASSIVO {el_side}  "
+                    f"signal={el_bid:.3f}  bid={_pending_price:.3f}  "
                     f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
-                    f"{dist_str}{mom_str}{adv_str}"
                 )
 
+            # Passo 2: verificar fill do bid passivo
             elif (
                 ee.state == "none"
+                and _pending is not None
+                and secs is not None
+            ):
+                _p_side  = _pending["side"]
+                _p_price = _pending["price"]
+                _p_el_bid = (up_bid if _p_side == "UP" else down_bid) if _p_side else 0.0
+
+                # Condição de fill: el_bid caiu até o preço passivo
+                _fill_ok = (_p_el_bid > 0 and _p_el_bid <= _p_price)
+
+                # Condições de cancelamento
+                _cancel_secs  = (secs < 35)
+                _cancel_drift = (_p_el_bid > EE_ENTRY_HI + 0.05)  # mercado subiu longe
+                _cancel_side  = (el_side is not None and el_side != _p_side)
+                _cancel       = _cancel_secs or _cancel_drift or _cancel_side
+
+                if _fill_ok and not _cancel:
+                    # FILL: entra ao preço passivo (1 tick abaixo do sinal original)
+                    ee.open_entry(_p_side, _p_price, now, secs)
+                    session_pending_fills += 1
+
+                    # Captura BTC info (logging)
+                    btc_info: dict = {}
+                    try:
+                        import requests as _req
+                        BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
+                        ref = fetch_external_btc_reference_v1()
+                        btc_spot = ref.get("reference_price")
+                        ptb      = _open_ref.get("price")
+                        if btc_spot and ptb:
+                            btc_info = {
+                                "spot":      round(btc_spot, 2),
+                                "threshold": round(ptb, 2),
+                                "dist_usd":  round(abs(btc_spot - ptb), 2),
+                                "dist_bps":  round(abs(btc_spot - ptb) / ptb * 10000, 2),
+                                "above":     btc_spot > ptb,
+                            }
+                        else:
+                            btc_info = {"spot": btc_spot, "threshold": ptb,
+                                        "dist_usd": None, "dist_bps": None}
+                        start_ms = (int(now // 60) - 3) * 60 * 1000
+                        km = _req.get(BINANCE_KLINES, params={
+                            "symbol": "BTCUSDT", "interval": "1m",
+                            "startTime": start_ms, "limit": 3,
+                        }, timeout=5)
+                        krows = km.json() or []
+                        if len(krows) >= 3:
+                            closes  = [float(krows[i][4]) for i in range(3)]
+                            highs   = [float(krows[i][2]) for i in range(3)]
+                            lows    = [float(krows[i][3]) for i in range(3)]
+                            ref_k   = closes[-1]
+                            d1m     = round(closes[2] - closes[1], 2)
+                            d3m     = round(closes[2] - closes[0], 2)
+                            rng3m   = round(max(highs) - min(lows), 2)
+                            btc_info.update({
+                                "delta_1m_usd": d1m,
+                                "delta_3m_usd": d3m,
+                                "delta_1m_bps": round(d1m / ref_k * 10000, 2) if ref_k else None,
+                                "delta_3m_bps": round(d3m / ref_k * 10000, 2) if ref_k else None,
+                                "range_3m_usd": rng3m,
+                                "range_3m_bps": round(rng3m / ref_k * 10000, 2) if ref_k else None,
+                                "adverse_1m":   (d1m < 0 if _p_side == "UP" else d1m > 0),
+                                "adverse_3m":   (d3m < 0 if _p_side == "UP" else d3m > 0),
+                            })
+                    except Exception:
+                        btc_info.setdefault("dist_usd", None)
+
+                    _append_jsonl(log_path, {
+                        "type": "ee_paper_entry", "ts": now,
+                        "session_id": session_id, "slug": slug,
+                        "side": _p_side,
+                        "ep": _p_price,
+                        "signal_ep": _pending["signal_ep"],
+                        "secs": secs,
+                        "wait_secs": _pending["set_secs"] - secs,
+                        "el": elt.state_dict(),
+                        "btc": btc_info,
+                        "entry_mode": "passive_bid",
+                    })
+                    print(
+                        f"[EE_PAPER] FILL_PASSIVO {_p_side}  "
+                        f"ep={_p_price:.3f} (signal={_pending['signal_ep']:.3f})  "
+                        f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
+                    )
+                    _pending = None
+
+                elif _cancel:
+                    reason = ("secs<35" if _cancel_secs
+                              else "side_changed" if _cancel_side
+                              else "drift_above_entry_hi")
+                    session_pending_cancels += 1
+                    _append_jsonl(log_path, {
+                        "type": "pending_cancelled", "ts": now,
+                        "session_id": session_id, "slug": slug,
+                        "reason": reason,
+                        "pending_price": _p_price,
+                        "set_secs": _pending["set_secs"],
+                        "current_secs": secs,
+                        "el_bid_now": round(_p_el_bid, 4),
+                    })
+                    print(
+                        f"[EE_PAPER] CANCELADO  bid={_p_price:.3f}  "
+                        f"motivo={reason}  secs={secs}  slug={slug[-20:]}"
+                    )
+                    _pending = None
+
+            # Regime bloqueado: loga bloqueio (sem pending)
+            elif (
+                ee.state == "none"
+                and _pending is None
                 and elt.signal_ok
-                and secs is not None and 30 <= secs <= EE_MAX_SECS
+                and secs is not None and 35 <= secs <= EE_MAX_SECS
                 and EE_ENTRY_LO <= el_bid <= EE_ENTRY_HI
                 and _regime_blocked
             ):
@@ -449,12 +542,11 @@ def run_early_entry_paper_v1(
                     "session_id": session_id, "slug": slug,
                     "reason": f"regime_gate:{_regime_reason}",
                     "ep": round(el_bid, 4), "el_vel": elt.el_vel,
-                    "leader_spread": _leader_spread, "secs": secs,
+                    "secs": secs,
                 })
                 print(
                     f"[EE_PAPER] BLOQUEADO  ep={el_bid:.3f}  "
-                    f"vel={elt.el_vel:+.3f}  spread={_leader_spread:.3f}  "
-                    f"secs={secs}  slug={slug[-20:]}"
+                    f"vel={elt.el_vel:+.3f}  secs={secs}  slug={slug[-20:]}"
                 )
 
             # --- Monitorar posição em entry ---
@@ -561,11 +653,12 @@ def run_early_entry_paper_v1(
 
             # linha de status por poll
             wr_disp = f"{session_wins/(session_wins+session_losses)*100:.0f}%" if (session_wins+session_losses) else "n/a"
+            _pend_str = f"  bid={_pending['price']:.2f}" if _pending else ""
             print(
                 f"[EE_PAPER] {slug[-20:]:20}  secs={str(secs):>4}  "
                 f"up={up_bid:.3f} dn={down_bid:.3f}  "
                 f"EL={el_side or '---':4} vel={elt.el_vel:>+.3f}  "
-                f"ee={ee.state:<7}  sess={session_pnl:>+.4f} {wr_disp}"
+                f"ee={ee.state:<7}{_pend_str}  sess={session_pnl:>+.4f} {wr_disp}"
             )
 
         except KeyboardInterrupt:
@@ -584,11 +677,17 @@ def run_early_entry_paper_v1(
     n = session_wins + session_losses
     wr = f"{session_wins / n * 100:.0f}%" if n else "n/a"
     avg = round(session_pnl / n, 4) if n else 0.0
+    fill_rate = (f"{session_pending_fills / session_pending_set * 100:.0f}%"
+                 if session_pending_set else "n/a")
     summary = {
         "type": "session_summary", "ts": time.time(),
         "session_id": session_id,
         "trades": n, "wins": session_wins, "losses": session_losses,
         "win_rate": wr, "pnl_total": round(session_pnl, 4), "avg_pnl": avg,
+        "sa2_pending_set":     session_pending_set,
+        "sa2_pending_fills":   session_pending_fills,
+        "sa2_pending_cancels": session_pending_cancels,
+        "sa2_fill_rate":       fill_rate,
         "trade_log": session_trades,
     }
     _append_jsonl(log_path, summary)
@@ -599,4 +698,7 @@ def run_early_entry_paper_v1(
         print(f"[EE_PAPER] PnL total: {session_pnl:>+.4f} USD  avg/trade: {avg:>+.4f}")
     else:
         print("[EE_PAPER] Sem trades nesta sessão.")
+    print(f"[EE_PAPER] SA2 bid passivo: postados={session_pending_set}  "
+          f"fills={session_pending_fills}  cancels={session_pending_cancels}  "
+          f"fill_rate={fill_rate}")
     print(f"[EE_PAPER] Log: {log_path}")
