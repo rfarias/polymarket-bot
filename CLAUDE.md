@@ -65,29 +65,42 @@ Fase atual: **Melhorias de execução ativas** (2026-05-28)
 | `ee_reversal` opp_bid >= 0.85 em secs <= 35 | 2026-05-27 | proteção de reversão genuína |
 | **`EE_VEL_MIN 0.08 → 0.13`** | **2026-05-28** | **WR 68%→86% / avg −$0.22→+$0.44** |
 | **Fix bug `el_bid=0` sem saída** | **2026-05-28** | **perda total quando livro EL esvaziava** |
+| **PP removido — hold to resolution** | **2026-05-27** | **PP fill parcial 65% → negativo vs hold** |
+| **Gate spread>=0.70 removido** | **2026-06-01** | **redundante com vel>=0.17; bloqueia wins bons** |
+| **`EE_VEL_MIN 0.13 → 0.17` (paper)** | **2026-06-01** | **WR 88.7%, EV+ em ep 0.83–0.86** |
+| **SA2 bid passivo ep-0.01 (paper)** | **2026-06-01** | **reduz seleção adversa 75%→88% fill wins** |
 
-### Aplicar no PC de casa (git pull pendente)
+### SA2 — Bid passivo (implementado no paper 2026-06-01, pendente no real)
 
-```powershell
-git pull
-.\scripts\watch_current_almost_resolved_real.ps1 -ArmReal -ArmEE -Qty 6 -RunSeconds 1800 -PollSeconds 0.5 -Continuous
-```
+**O problema**: wins preenchem 75% (mercado sobe rápido, livro fino).
+Losses preenchem 100% (seleção adversa). Custo: -$18/10d em qty=6.
 
-Confirmar após reinício: `entry_blocked` com reason `vel<0.13` deve aparecer (~30% das
-entradas filtradas). Documentação completa: `TESTES_ANALISE_EL.md` seção 23.
+**A solução SA2**: posta bid a `el_bid − 0.01` (passivo/maker) em vez de entrar imediatamente.
+O mercado recua 1 tick naturalmente → fill passivo.
+
+**Resultado simulado** (2529 slugs): fill 88% wins, entrada 1 tick mais barata → **+$33/10d** vs hold atual.
+
+**Para implementar no runner real (casa)**:
+Ao detectar sinal EE, em vez de `place_order(side, price=el_bid)`:
+1. Postar GTC limit buy a `el_bid − 0.01`
+2. Monitorar até fill (el_bid cai até o preço) ou cancelamento
+3. Cancelar se: secs < 35 OU mercado subiu > 5 ticks sem fill OU side mudou
+
+Não usar stop (stop mata 15.4% dos wins — confirmado 91 wins, floor real = 0.15).
+Não usar PP (PP negativo com fill parcial 65% — confirmado).
 
 ### Gates candidatos no paper local (este PC)
 
-`market/live_early_entry_paper_v1.py`:
-- `n_s180 < 3` — replicado do real
-- `n_s180 == 5` — WR 56.2%, validar 50+ dias úteis
-- `hora UTC == 6` — WR 42.9%, validar consistência
+`market/live_early_entry_paper_v1.py` (active):
+- vel >= 0.17 (EE_VEL_MIN)
+- `n_s180 < 3` — deployado no real
+- `n_s180 == 5` — candidato: WR 56.2% (16 trades)
+- `hora UTC == 6` — candidato: WR 42.9% (7 trades)
 
 ### Pendente — zona morta 0.50–0.84 com secs > 35
 
-Posições nessa faixa ainda não têm proteção. Fix planejado (stop suave se
-`el_bid < 0.72 AND opp_bid > 0.72`), mas aguarda dados reais com os gates atuais
-ativos. Não implementar sem análise dos logs reais pós-pull.
+Stop não funciona (mata 15.4% wins). Zona ainda sem proteção.
+Aguarda dados SA2 no paper + logs reais pós-pull para decidir.
 
 ### Para analisar logs reais no outro PC após `git pull`
 
