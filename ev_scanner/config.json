@@ -1,0 +1,35 @@
+{
+  "edge_minimum": 0.08,
+  "paper_bet_size": 20.0,
+  "min_market_volume": 500,
+
+  "weather": {
+    "active": true,
+    "check_interval_minutes": 60,
+    "edge_minimum": 0.08,
+    "cities": [
+      "São Paulo", "Rio de Janeiro", "London", "New York",
+      "Hong Kong", "Tokyo", "Sydney", "Paris"
+    ]
+  },
+
+  "soccer": {
+    "active": true,
+    "check_interval_minutes": 120,
+    "edge_minimum": 0.08,
+    "leagues": ["EPL", "La Liga", "Serie A", "Bundesliga", "Brasileirao", "Champions League"]
+  },
+
+  "fed_rate": {
+    "active": true,
+    "check_interval_minutes": 240,
+    "edge_minimum": 0.06
+  },
+
+  "nba_nfl": {
+    "active": true,
+    "check_interval_minutes": 120,
+    "edge_minimum": 0.08,
+    "leagues": ["NBA", "NFL"]
+  }
+}
