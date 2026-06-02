@@ -1,182 +1,272 @@
+"""
+ev_scanner/setups/soccer.py
+
+Fonte de dados: SofaScore API (unofficial, sem chave) + ESPN como fallback.
+Suporta: jogos de seleções (Copa do Mundo, amistosos, Nations League, etc.)
+         e competições de clube (EPL, La Liga, UCL, Libertadores, etc.)
+
+Resolução Polymarket: fifa.com para internacionais; fontes oficiais de cada liga.
+"""
 from __future__ import annotations
 
 import math
-import os
+import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
 
 from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should_enter, shares_for_bet
 from ev_scanner.utils.logger import log_event
-from ev_scanner.utils.polymarket_api import search_markets, parse_list_field
+from ev_scanner.utils.polymarket_api import get_active_markets, parse_list_field
 
-FOOTBALL_DATA_BASE = "https://api.football-data.org/v4"
+# ---------------------------------------------------------------------------
+# Competições mapeadas — SofaScore tournament IDs + nomes
+# ---------------------------------------------------------------------------
+# Formato: "slug_keyword": (sofascore_tournament_id, nome_legivel)
+# IDs confirmados da SofaScore API pública
 
-LEAGUE_CODES = {
-    "EPL": "PL", "La Liga": "PD", "Serie A": "SA",
-    "Bundesliga": "BL1", "Ligue 1": "FL1",
-    "Champions League": "CL", "Brasileirao": "BSA",
+COMPETITIONS: dict[str, tuple[int, str]] = {
+    # Internacionais (seleções)
+    "fifa.world":           (16,    "FIFA World Cup"),
+    "worldq.conmebol":      (28,    "WC Qualifiers CONMEBOL"),
+    "worldq.uefa":          (27,    "WC Qualifiers UEFA"),
+    "worldq.caf":           (29,    "WC Qualifiers CAF"),
+    "worldq.afc":           (30,    "WC Qualifiers AFC"),
+    "worldq.concacaf":      (31,    "WC Qualifiers CONCACAF"),
+    "friendly":             (11,    "FIFA Friendlies"),
+    "uefa.nations":         (1091,  "UEFA Nations League"),
+    "uefa.euro":            (1,     "UEFA Euro"),
+    "copa.america":         (133,   "Copa America"),
+    "concacaf.gold":        (140,   "CONCACAF Gold Cup"),
+    "afcon":                (42,    "Africa Cup of Nations"),
+    "afc.asian":            (72,    "AFC Asian Cup"),
+    # Europa — clubes
+    "eng.1":                (17,    "Premier League"),
+    "esp.1":                (8,     "La Liga"),
+    "ger.1":                (35,    "Bundesliga"),
+    "ita.1":                (23,    "Serie A"),
+    "fra.1":                (34,    "Ligue 1"),
+    "por.1":                (238,   "Primeira Liga"),
+    "ned.1":                (37,    "Eredivisie"),
+    "tur.1":                (52,    "Süper Lig"),
+    "sco.1":                (36,    "Scottish Premiership"),
+    "gre.1":                (238,   "Super League Greece"),  # aproximado
+    "rus.1":                (203,   "Russian Premier League"),
+    "uefa.champions":       (7,     "UEFA Champions League"),
+    "uefa.europa":          (679,   "UEFA Europa League"),
+    "uefa.conf":            (17015, "UEFA Conference League"),
+    "fifa.cwc":             (4,     "FIFA Club World Cup"),
+    # Américas — clubes
+    "usa.1":                (242,   "MLS"),
+    "bra.1":                (325,   "Brasileirão Série A"),
+    "bra.2":                (390,   "Brasileirão Série B"),
+    "arg.1":                (155,   "Liga Profesional Argentina"),
+    "col.1":                (11536, "Liga BetPlay"),
+    "chi.1":                (422,   "Primera División Chile"),
+    "mex.1":                (352,   "Liga MX"),
+    "uru.1":                (278,   "Primera División Uruguay"),
+    "ecu.1":                (240,   "Serie A Ecuador"),
+    "per.1":                (406,   "Liga 1 Peru"),
+    "ven.1":                (231,   "Primera División Venezuela"),
+    "libertadores":         (384,   "Copa Libertadores"),
+    "sudamericana":         (480,   "Copa Sudamericana"),
+    "concacaf.champions":   (1320,  "CONCACAF Champions Cup"),
+    # Ásia / Oriente Médio
+    "afc.champions":        (695,   "AFC Champions League"),
+    "jpn.1":                (196,   "J1 League"),
+    "chn.1":                (339,   "Chinese Super League"),
+    "sau.1":                (955,   "Saudi Pro League"),
+    # África
+    "caf.champions":        (205,   "CAF Champions League"),
+    "rsa.1":                (1185,  "PSL South Africa"),
 }
 
-# Approximate league average xG (goals per game per team)
-LEAGUE_AVG_GOALS = {
-    "PL": 1.55, "PD": 1.45, "SA": 1.40, "BL1": 1.60,
-    "FL1": 1.35, "CL": 1.50, "BSA": 1.40,
-}
+SOFA_BASE   = "https://api.sofascore.com/api/v1"
+_SOFA_SESS  = requests.Session()
+_SOFA_SESS.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://www.sofascore.com/",
+})
 
 
-def _fd_get(path: str, api_key: str, params: dict | None = None) -> dict:
-    resp = requests.get(
-        f"{FOOTBALL_DATA_BASE}/{path}",
-        headers={"X-Auth-Token": api_key},
-        params=params or {},
-        timeout=15,
-    )
+def _sofa_get(path: str, params: dict | None = None) -> dict:
+    resp = _SOFA_SESS.get(f"{SOFA_BASE}/{path}", params=params or {}, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
 
-def _team_form(team_id: int, api_key: str, n: int = 38) -> dict:
-    """Returns win/draw/loss rates, xG estimates for home and away."""
+# ---------------------------------------------------------------------------
+# SofaScore: busca jogos futuros de uma competição
+# ---------------------------------------------------------------------------
+def _sofa_upcoming(tournament_id: int, days_ahead: int = 14) -> list[dict]:
+    """Retorna jogos futuros de um torneio nos próximos N dias."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
-        data = _fd_get(f"teams/{team_id}/matches", api_key,
-                       params={"status": "FINISHED", "limit": n})
-        matches = data.get("matches", [])
+        data = _sofa_get(f"unique-tournament/{tournament_id}/events/next/0")
+        return data.get("events", [])
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# SofaScore: form recente de um time
+# ---------------------------------------------------------------------------
+def _sofa_team_form(team_id: int, n: int = 10) -> dict:
+    """Busca últimos N jogos do time e calcula form."""
+    try:
+        data = _sofa_get(f"team/{team_id}/events/last/0")
+        events = data.get("events", [])
     except Exception:
         return {}
 
-    home_wins = away_wins = home_draws = away_draws = 0
-    home_total = away_total = 0
-    goals_for_home = goals_for_away = 0.0
-    goals_ag_home  = goals_ag_away  = 0.0
+    wins = draws = losses = gf = ga = 0
+    count = 0
+    for ev in reversed(events):
+        home = ev.get("homeTeam", {})
+        away = ev.get("awayTeam", {})
+        score = ev.get("homeScore") or {}
+        h_goals = score.get("current") if isinstance(score, dict) else None
+        score_a = ev.get("awayScore") or {}
+        a_goals = score_a.get("current") if isinstance(score_a, dict) else None
+        if h_goals is None or a_goals is None:
+            continue
+        is_home = home.get("id") == team_id
+        my_g  = h_goals if is_home else a_goals
+        opp_g = a_goals if is_home else h_goals
+        gf += my_g; ga += opp_g
+        if my_g > opp_g:    wins += 1
+        elif my_g == opp_g: draws += 1
+        else:               losses += 1
+        count += 1
+        if count >= n: break
 
-    for m in matches:
-        home_id = m.get("homeTeam", {}).get("id")
-        score   = m.get("score", {}).get("fullTime", {})
-        home_g  = score.get("home") or 0
-        away_g  = score.get("away") or 0
-        winner  = m.get("score", {}).get("winner")
-
-        if home_id == team_id:
-            home_total += 1
-            goals_for_home += home_g
-            goals_ag_home  += away_g
-            if winner == "HOME_TEAM":   home_wins  += 1
-            elif winner == "DRAW":      home_draws += 1
-        else:
-            away_total += 1
-            goals_for_away += away_g
-            goals_ag_away  += home_g
-            if winner == "AWAY_TEAM":   away_wins  += 1
-            elif winner == "DRAW":      away_draws += 1
-
+    if count == 0:
+        return {}
     return {
-        "home_win_rate":  home_wins  / home_total  if home_total  else 0.5,
-        "away_win_rate":  away_wins  / away_total  if away_total  else 0.35,
-        "home_draw_rate": home_draws / home_total  if home_total  else 0.25,
-        "away_draw_rate": away_draws / away_total  if away_total  else 0.25,
-        "xg_for_home":   goals_for_home / home_total if home_total else 1.4,
-        "xg_ag_home":    goals_ag_home  / home_total if home_total else 1.4,
-        "xg_for_away":   goals_for_away / away_total if away_total else 1.2,
-        "xg_ag_away":    goals_ag_away  / away_total if away_total else 1.4,
+        "win_rate":  wins  / count,
+        "draw_rate": draws / count,
+        "loss_rate": losses / count,
+        "gf_avg":    gf / count,
+        "ga_avg":    ga / count,
+        "n":         count,
     }
 
 
-def _h2h_win_rate(home_id: int, away_id: int, api_key: str) -> Optional[float]:
+def _sofa_find_team(tournament_id: int, name: str) -> Optional[int]:
+    """Busca ID do time no torneio pelo nome."""
     try:
-        data = _fd_get("matches", api_key, params={
-            "homeTeam": home_id, "awayTeam": away_id,
-            "status": "FINISHED", "limit": 10,
-        })
-        matches = data.get("matches", [])
-        if len(matches) < 3:
-            return None
-        home_wins = sum(1 for m in matches if m.get("score", {}).get("winner") == "HOME_TEAM")
-        return home_wins / len(matches)
-    except Exception:
-        return None
-
-
-def _poisson_prob(lambda_: float, k: int) -> float:
-    return math.exp(-lambda_) * (lambda_ ** k) / math.factorial(k)
-
-
-def _poisson_match_probs(lambda_home: float, lambda_away: float, max_goals: int = 7) -> tuple[float, float, float]:
-    p_home = p_draw = p_away = 0.0
-    for i in range(max_goals + 1):
-        for j in range(max_goals + 1):
-            p = _poisson_prob(lambda_home, i) * _poisson_prob(lambda_away, j)
-            if i > j:   p_home += p
-            elif i == j: p_draw += p
-            else:        p_away += p
-    total = p_home + p_draw + p_away
-    return p_home / total, p_draw / total, p_away / total
-
-
-def _combined_prob(home_form: dict, away_form: dict, h2h: Optional[float],
-                   league_avg: float) -> tuple[float, float, float]:
-    # Poisson model
-    lambda_home = home_form.get("xg_for_home", 1.4) * (away_form.get("xg_ag_away", 1.4) / league_avg)
-    lambda_away = away_form.get("xg_for_away", 1.2) * (home_form.get("xg_ag_home", 1.4) / league_avg)
-    p_home_p, p_draw_p, p_away_p = _poisson_match_probs(max(0.1, lambda_home), max(0.1, lambda_away))
-
-    # Form-based
-    p_home_f = home_form.get("home_win_rate", 0.5)
-    p_away_f = away_form.get("away_win_rate", 0.35)
-    p_draw_f = 1.0 - p_home_f - p_away_f
-
-    # H2H
-    if h2h is not None:
-        w_poisson, w_form, w_h2h = 0.30, 0.50, 0.20
-        p_home = w_poisson * p_home_p + w_form * p_home_f + w_h2h * h2h
-    else:
-        w_poisson, w_form = 0.30, 0.70
-        p_home = w_poisson * p_home_p + w_form * p_home_f
-
-    p_draw  = 0.30 * p_draw_p + 0.70 * p_draw_f
-    p_away  = max(0.01, 1.0 - p_home - p_draw)
-    return round(p_home, 4), round(p_draw, 4), round(p_away, 4)
-
-
-def _find_teams_in_market(title: str, api_key: str, league_code: str) -> tuple[Optional[int], Optional[int]]:
-    """Try to find team IDs by searching the competition standings."""
-    try:
-        data = _fd_get(f"competitions/{league_code}/teams", api_key)
-        teams = data.get("teams", [])
-        title_lower = title.lower()
-        matched = []
-        for t in teams:
-            name = t.get("name", "").lower()
-            short = t.get("shortName", "").lower()
-            tla   = t.get("tla", "").lower()
-            if name in title_lower or short in title_lower or tla in title_lower:
-                matched.append(t["id"])
-        if len(matched) >= 2:
-            return matched[0], matched[1]
+        data = _sofa_get(f"unique-tournament/{tournament_id}/season/latest/top-teams/overall")
+        teams = data.get("topTeams", {})
+        all_teams = []
+        for bucket in teams.values():
+            if isinstance(bucket, list):
+                all_teams += [item.get("team", {}) for item in bucket]
+        name_lower = name.lower()
+        for t in all_teams:
+            if (name_lower in t.get("name", "").lower() or
+                    name_lower in t.get("shortName", "").lower()):
+                return t.get("id")
     except Exception:
         pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Modelo Poisson
+# ---------------------------------------------------------------------------
+def _poisson_prob(lam: float, k: int) -> float:
+    return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
+
+def _match_probs(lh: float, la: float, max_g: int = 8) -> tuple[float, float, float]:
+    ph = pd = pa = 0.0
+    for i in range(max_g + 1):
+        for j in range(max_g + 1):
+            p = _poisson_prob(max(0.01, lh), i) * _poisson_prob(max(0.01, la), j)
+            if i > j: ph += p
+            elif i == j: pd += p
+            else: pa += p
+    t = ph + pd + pa
+    return ph / t, pd / t, pa / t
+
+
+def _probs_from_form(home: dict, away: dict, league_avg: float = 1.45) -> tuple[float, float, float]:
+    if not home or not away:
+        return 0.45, 0.28, 0.27
+    lh = home.get("gf_avg", 1.4) * (away.get("ga_avg", 1.4) / league_avg)
+    la = away.get("gf_avg", 1.2) * (home.get("ga_avg", 1.4) / league_avg)
+    ph_p, pd_p, pa_p = _match_probs(lh, la)
+    # Combinar Poisson com win rate direta
+    ph_f = min(0.80, home.get("win_rate", 0.45) + 0.05)  # leve vantagem casa
+    pa_f = away.get("win_rate", 0.35)
+    pd_f = max(0.05, 1.0 - ph_f - pa_f)
+    ph = 0.5 * ph_p + 0.5 * ph_f
+    pd = 0.5 * pd_p + 0.5 * pd_f
+    pa = max(0.02, 1.0 - ph - pd)
+    return round(ph, 4), round(pd, 4), round(pa, 4)
+
+
+# ---------------------------------------------------------------------------
+# Extração de times do título do mercado
+# ---------------------------------------------------------------------------
+def _extract_teams(title: str) -> tuple[Optional[str], Optional[str]]:
+    m = re.search(r"^(.+?)\s+(?:vs\.?|v\.?|-)\s+(.+?)(?:\s*[:\(].*)?$",
+                  title.strip(), re.IGNORECASE)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
     return None, None
 
 
+def _infer_league(slug: str, title: str) -> Optional[tuple[str, int]]:
+    """Tenta identificar a competição pelo slug/título e retorna (key, tournament_id)."""
+    text = (slug + " " + title).lower()
+    # Matches mais específicos primeiro
+    mapping = [
+        ("libertadores",      "libertadores"),
+        ("sudamericana",      "sudamericana"),
+        ("champions",         "uefa.champions"),
+        ("europa-league",     "uefa.europa"),
+        ("conference",        "uefa.conf"),
+        ("premier-league",    "eng.1"),
+        ("la-liga",           "esp.1"),
+        ("bundesliga",        "ger.1"),
+        ("serie-a",           "ita.1"),
+        ("ligue-1",           "fra.1"),
+        ("brasileirao",       "bra.1"),
+        ("mls",               "usa.1"),
+        ("liga-mx",           "mex.1"),
+        ("copa-america",      "copa.america"),
+        ("euro",              "uefa.euro"),
+        ("nations-league",    "uefa.nations"),
+        ("world-cup",         "fifa.world"),
+        ("friendly",          "friendly"),
+        ("fif-",              "friendly"),   # slug prefixo FIFA
+    ]
+    for pattern, key in mapping:
+        if pattern in text:
+            return key, COMPETITIONS[key][0]
+    return None, None
+
+
+# ---------------------------------------------------------------------------
+# Scan principal
+# ---------------------------------------------------------------------------
 def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
     edge_min = float(config.get("edge_minimum", 0.08))
     bet_size  = float(config.get("paper_bet_size", 20.0))
-    api_key   = os.getenv("FOOTBALL_DATA_API_KEY", "")
     results: list[dict] = []
 
-    if not api_key:
-        log_event("soccer", {"type": "data_unavailable", "reason": "FOOTBALL_DATA_API_KEY not set"})
-        print("[SOCCER] data_unavailable — set FOOTBALL_DATA_API_KEY in .env")
-        return []
+    log_event("soccer", {"type": "scan_start",
+                          "competitions": list(COMPETITIONS.keys())})
 
-    log_event("soccer", {"type": "scan_start"})
+    markets = get_active_markets(tag_slug="soccer", limit=300)
+    markets += [e for e in get_active_markets(tag_slug="football", limit=100)
+                if e["slug"] not in {m["slug"] for m in markets}]
 
-    leagues = config.get("leagues", list(LEAGUE_CODES.keys()))
-    markets = search_markets(keywords=["soccer", "football", "epl", "laliga", "serie", "bundesliga",
-                                        "brasileirao", "champions", "premier league", "match"],
-                              limit=200)
+    now_utc = datetime.now(timezone.utc)
+    markets_checked = 0
 
     for event in markets:
         slug  = event.get("slug", "")
@@ -185,85 +275,149 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         if vol < min_volume:
             continue
 
-        # Try to identify league
-        league_code = None
-        for league_name, code in LEAGUE_CODES.items():
-            if league_name.lower() in title.lower() or league_name.lower() in slug.lower():
-                league_code = code
-                break
-        if not league_code:
+        # Filtrar expirados
+        end_str = event.get("endDate", "")
+        if end_str:
+            try:
+                end_utc = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                if (end_utc - now_utc).total_seconds() < 7200:
+                    continue
+            except Exception:
+                pass
+
+        # Precisa ter 3 sub-mercados (Home/Draw/Away)
+        subs = event.get("markets", [])
+        if len(subs) < 3:
+            continue
+        draw_sub = next((s for s in subs if isinstance(s, dict) and
+                         "draw" in str(s.get("groupItemTitle", "")).lower()), None)
+        if not draw_sub:
             continue
 
-        league_avg = LEAGUE_AVG_GOALS.get(league_code, 1.45)
-        home_id, away_id = _find_teams_in_market(title, api_key, league_code)
-        if not home_id or not away_id:
+        home_name, away_name = _extract_teams(title)
+        if not home_name or not away_name:
             continue
 
-        home_form = _team_form(home_id, api_key)
-        away_form = _team_form(away_id, api_key)
-        if not home_form or not away_form:
-            continue
+        comp_key, tournament_id = _infer_league(slug, title)
+        p_home = p_draw = p_away = None
+        form_source = "unavailable"
 
-        h2h = _h2h_win_rate(home_id, away_id, api_key)
-        p_home, p_draw, p_away = _combined_prob(home_form, away_form, h2h, league_avg)
+        # Tentar SofaScore
+        if tournament_id:
+            try:
+                home_id = _sofa_find_team(tournament_id, home_name)
+                away_id = _sofa_find_team(tournament_id, away_name)
+                if home_id and away_id:
+                    home_form = _sofa_team_form(home_id)
+                    away_form = _sofa_team_form(away_id)
+                    if home_form and away_form:
+                        p_home, p_draw, p_away = _probs_from_form(home_form, away_form)
+                        form_source = f"sofascore:{comp_key}"
+                time.sleep(0.5)
+            except Exception:
+                pass
 
-        time.sleep(0.7)  # football-data.org: 10 calls/min free tier
+        # Fallback: preços do mercado como referência (NÃO gera EV+ — seria circular)
+        if p_home is None:
+            try:
+                def _find_sub(subs, name, exclude=None):
+                    parts = name.lower().split()
+                    for s in subs:
+                        if not isinstance(s, dict): continue
+                        if exclude and s is exclude: continue
+                        t = str(s.get("groupItemTitle","")).lower()
+                        if "draw" in t: continue
+                        if any(p in t for p in parts):
+                            return s
+                    return None
 
-        poly_markets = event.get("markets", [])
-        for pm in poly_markets:
-            outcomes       = parse_list_field(pm.get("outcomes", []))
-            outcome_prices = parse_list_field(pm.get("outcomePrices", []))
-            for outcome, price_str in zip(outcomes, outcome_prices):
-                try:
-                    price_poly = float(price_str)
-                except Exception:
+                home_sub = _find_sub(subs, home_name)
+                away_sub = _find_sub(subs, away_name, exclude=home_sub)
+                # Fallback posicional se nao encontrar por nome
+                if not home_sub:
+                    home_sub = next((s for s in subs if isinstance(s,dict) and s is not draw_sub), None)
+                if not away_sub:
+                    away_sub = next((s for s in reversed(subs) if isinstance(s,dict) and s is not draw_sub and s is not home_sub), None)
+                if not home_sub or not away_sub:
                     continue
-                if price_poly <= 0 or price_poly >= 1:
-                    continue
+                p_home = float(parse_list_field(home_sub.get("outcomePrices", []))[0])
+                p_draw = float(parse_list_field(draw_sub.get("outcomePrices", []))[0])
+                p_away = float(parse_list_field(away_sub.get("outcomePrices", []))[0])
+                form_source = "market_prior"
+            except Exception:
+                continue
 
-                out_lower = str(outcome).lower()
-                if any(w in out_lower for w in ["home", "win", "yes"]):
-                    prob_real = p_home
-                elif "draw" in out_lower:
-                    prob_real = p_draw
-                elif any(w in out_lower for w in ["away", "loss"]):
-                    prob_real = p_away
-                else:
-                    continue
+        # Avaliar cada sub-mercado
+        for pm in subs:
+            if not isinstance(pm, dict):
+                continue
+            pm_title = str(pm.get("groupItemTitle") or pm.get("title") or "")
+            prices   = parse_list_field(pm.get("outcomePrices", []))
+            outcomes = parse_list_field(pm.get("outcomes", []))
+            if not prices or not pm_title:
+                continue
+            try:
+                yes_idx    = next((i for i, o in enumerate(outcomes) if str(o).upper() == "YES"), 0)
+                price_poly = float(prices[yes_idx])
+            except Exception:
+                continue
+            if price_poly <= 0 or price_poly >= 1:
+                continue
 
-                edge  = calculate_edge(prob_real, price_poly)
-                ev    = ev_per_dollar(prob_real, price_poly)
-                enter = should_enter(edge, prob_real, price_poly, min_edge=edge_min)
+            pm_lower = pm_title.lower()
+            if "draw" in pm_lower:
+                prob_real = p_draw
+            elif any(p in pm_lower for p in home_name.lower().split()):
+                prob_real = p_home
+            elif any(p in pm_lower for p in away_name.lower().split()):
+                prob_real = p_away
+            else:
+                idx = next((i for i, s in enumerate(subs) if s is pm), -1)
+                prob_real = [p_home, p_draw, p_away][idx] if 0 <= idx <= 2 else None
+            if prob_real is None:
+                continue
 
-                row: dict = {
-                    "type": "ev_found" if enter else "scan",
-                    "market_slug": slug,
-                    "league": league_code,
-                    "title": title,
-                    "outcome": str(outcome),
-                    "prob_home": p_home, "prob_draw": p_draw, "prob_away": p_away,
-                    "prob_real_target": round(prob_real, 4),
-                    "price_polymarket": round(price_poly, 4),
-                    "edge": round(edge, 4),
-                    "ev_per_dollar": round(ev, 4),
-                    "would_enter": enter,
-                    "entry_side": "YES",
-                    "model_components": {
-                        "home_form_weight": 0.40,
-                        "h2h_weight": 0.20 if h2h is not None else 0.0,
-                        "poisson_weight": 0.30,
-                    },
+            edge  = calculate_edge(prob_real, price_poly)
+            ev    = ev_per_dollar(prob_real, price_poly)
+            # market_prior é circular — nunca gera EV+ real
+            enter = should_enter(edge, prob_real, price_poly, min_edge=edge_min) and form_source != "market_prior"
+
+            row: dict = {
+                "type":             "ev_found" if enter else "scan",
+                "market_slug":      slug,
+                "title":            title,
+                "home_team":        home_name,
+                "away_team":        away_name,
+                "outcome":          pm_title,
+                "competition":      comp_key or "unknown",
+                "form_source":      form_source,
+                "prob_home":        round(p_home, 4),
+                "prob_draw":        round(p_draw, 4),
+                "prob_away":        round(p_away, 4),
+                "prob_real_target": round(prob_real, 4),
+                "price_polymarket": round(price_poly, 4),
+                "edge":             round(edge, 4),
+                "ev_per_dollar":    round(ev, 4),
+                "would_enter":      enter,
+                "entry_side":       "YES",
+            }
+            log_event("soccer", row)
+            markets_checked += 1
+
+            if enter:
+                entry_row = {
+                    **row,
+                    "type":             "simulated_entry",
+                    "entry_price":      round(price_poly, 4),
+                    "shares_simulated": shares_for_bet(bet_size, price_poly),
+                    "bet_size":         bet_size,
                 }
-                log_event("soccer", row)
+                log_event("soccer", entry_row)
+                results.append(entry_row)
+                print(f"[SOCCER] EV+  {title[:38]:<38}  '{pm_title}': "
+                      f"edge={edge:.1%}  poly={price_poly:.3f}  real={prob_real:.3f}  [{form_source}]")
 
-                if enter:
-                    entry_row = {**row, "type": "simulated_entry",
-                                 "entry_price": round(price_poly, 4),
-                                 "shares_simulated": shares_for_bet(bet_size, price_poly),
-                                 "bet_size": bet_size}
-                    log_event("soccer", entry_row)
-                    results.append(entry_row)
-                    print(f"[SOCCER] EV+ {title} {outcome}: edge={edge:.1%} poly={price_poly:.2f} real={prob_real:.2f}")
-
-    log_event("soccer", {"type": "scan_end", "ev_found": len(results)})
+    log_event("soccer", {"type": "scan_end",
+                          "markets_checked": markets_checked,
+                          "ev_found": len(results)})
     return results
