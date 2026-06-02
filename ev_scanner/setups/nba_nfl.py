@@ -7,7 +7,7 @@ from typing import Optional
 
 from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should_enter, shares_for_bet
 from ev_scanner.utils.logger import log_event
-from ev_scanner.utils.polymarket_api import search_markets
+from ev_scanner.utils.polymarket_api import search_markets, parse_list_field
 
 try:
     from nba_api.stats.endpoints import teamgamelog, leaguegamefinder
@@ -193,7 +193,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
         poly_markets = event.get("markets", [])
         for pm in poly_markets:
-            outcomes       = pm.get("outcomes", [])
+            outcomes       = parse_list_field(pm.get("outcomes", []))
             outcome_prices = parse_list_field(pm.get("outcomePrices", []))
             for outcome, price_str in zip(outcomes, outcome_prices):
                 try:

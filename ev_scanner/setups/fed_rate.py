@@ -10,7 +10,7 @@ import requests
 
 from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should_enter, shares_for_bet
 from ev_scanner.utils.logger import log_event
-from ev_scanner.utils.polymarket_api import search_markets
+from ev_scanner.utils.polymarket_api import search_markets, parse_list_field
 
 FRED_BASE = "https://api.fred.stlouisfed.org/series/observations"
 
@@ -74,24 +74,28 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
     log_event("fed_rate", {"type": "scan_start"})
 
-    # Fetch macro context
+    # Fetch macro context via FRED (optional — fallback to hardcoded if key missing)
     cpi   = _fred_latest("CPIAUCSL", fred_key) if fred_key else None
     unemp = _fred_latest("UNRATE",   fred_key) if fred_key else None
 
     if cpi is None or unemp is None:
-        log_event("fed_rate", {"type": "data_unavailable",
-                                "reason": "FRED_API_KEY missing or API error",
-                                "cpi": cpi, "unemployment": unemp})
-        print("[FED_RATE] data_unavailable — set FRED_API_KEY in .env")
-        return []
+        # Fallback: use approximate 2026 macro context
+        # CPI ~2.5% (below 3), unemployment ~4.2% (below 4.5)
+        cpi   = cpi   or 2.5
+        unemp = unemp or 4.2
+        log_event("fed_rate", {"type": "warn",
+                                "reason": "FRED_API_KEY not set — using macro fallback",
+                                "cpi_fallback": cpi, "unemp_fallback": unemp})
+        print(f"[FED_RATE] FRED key not set — using fallback: CPI={cpi} UNEMP={unemp}")
 
-    cpi_above_3   = cpi > 3.0
+    cpi_above_3    = cpi   > 3.0
     unemp_above_45 = unemp > 4.5
     base_rates = _BASE_RATES[(cpi_above_3, unemp_above_45)]
 
     # Search Polymarket for Fed-related markets
     markets = search_markets(
         keywords=["fed", "federal reserve", "rate cut", "rate hike", "fomc", "interest rate"],
+        tag_slug="fed-rates",
         limit=100,
     )
 
@@ -104,75 +108,76 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
         poly_markets = event.get("markets", [])
         for pm in poly_markets:
-            outcomes       = pm.get("outcomes", [])
-            outcome_prices = parse_list_field(pm.get("outcomePrices", []))
-            if len(outcomes) != len(outcome_prices):
+            # Action label is in groupItemTitle; price for YES is outcomePrices[0]
+            title   = str(pm.get("groupItemTitle") or pm.get("title") or "")
+            prices  = parse_list_field(pm.get("outcomePrices", []))
+            outcomes = parse_list_field(pm.get("outcomes", []))
+            if not title or not prices:
+                continue
+            try:
+                yes_idx    = next((i for i, o in enumerate(outcomes) if str(o).upper() == "YES"), 0)
+                price_poly = float(prices[yes_idx])
+            except Exception:
+                continue
+            if price_poly <= 0 or price_poly >= 1:
                 continue
 
-            for outcome, price_str in zip(outcomes, outcome_prices):
-                try:
-                    price_poly = float(price_str)
-                except Exception:
-                    continue
-                if price_poly <= 0 or price_poly >= 1:
-                    continue
+            title_lower = title.lower()
 
-                outcome_lower = str(outcome).lower()
+            # Determine action type from sub-market title
+            if any(w in title_lower for w in ["cut", "lower", "decrease"]):
+                action = "cut"
+            elif any(w in title_lower for w in ["hike", "raise", "increase"]):
+                action = "hike"
+            elif any(w in title_lower for w in ["hold", "pause", "unchanged", "no change"]):
+                action = "hold"
+            else:
+                continue
 
-                # Determine action type from outcome label
-                if any(w in outcome_lower for w in ["cut", "lower", "decrease"]):
-                    action = "cut"
-                elif any(w in outcome_lower for w in ["hike", "raise", "increase"]):
-                    action = "hike"
-                elif any(w in outcome_lower for w in ["hold", "pause", "unchanged", "no change"]):
-                    action = "hold"
-                else:
-                    continue
+            cme_prob  = _cme_fedwatch_prob(action)
+            base_prob = base_rates.get(action, 0.25)
 
-                cme_prob = _cme_fedwatch_prob(action)
-                base_prob = base_rates.get(action, 0.25)
+            if cme_prob is not None:
+                prob_real = 0.70 * cme_prob + 0.30 * base_prob
+            else:
+                prob_real = base_prob
+                log_event("fed_rate", {"type": "data_unavailable",
+                                        "reason": "CME FedWatch unavailable, using base rate only",
+                                        "action": action})
 
-                if cme_prob is not None:
-                    prob_real = 0.70 * cme_prob + 0.30 * base_prob
-                else:
-                    prob_real = base_prob
-                    log_event("fed_rate", {"type": "data_unavailable",
-                                            "reason": "CME FedWatch unavailable, using base rate only",
-                                            "action": action})
+            edge  = calculate_edge(prob_real, price_poly)
+            ev    = ev_per_dollar(prob_real, price_poly)
+            enter = should_enter(edge, prob_real, price_poly, min_edge=edge_min)
 
-                edge  = calculate_edge(prob_real, price_poly)
-                ev    = ev_per_dollar(prob_real, price_poly)
-                enter = should_enter(edge, prob_real, price_poly, min_edge=edge_min)
+            row: dict = {
+                "type": "ev_found" if enter else "scan",
+                "market_slug": slug,
+                "outcome": title,
+                "action": action,
+                "prob_real": round(prob_real, 4),
+                "cme_fedwatch_prob": round(cme_prob, 4) if cme_prob is not None else None,
+                "base_rate_contextual": round(base_prob, 4),
+                "current_cpi": round(cpi, 2),
+                "current_unemployment": round(unemp, 2),
+                "price_polymarket": round(price_poly, 4),
+                "edge": round(edge, 4),
+                "ev_per_dollar": round(ev, 4),
+                "would_enter": enter,
+                "entry_side": "YES",
+            }
+            log_event("fed_rate", row)
 
-                row: dict = {
-                    "type": "ev_found" if enter else "scan",
-                    "market_slug": slug,
-                    "outcome": str(outcome),
-                    "action": action,
-                    "prob_real": round(prob_real, 4),
-                    "cme_fedwatch_prob": round(cme_prob, 4) if cme_prob is not None else None,
-                    "base_rate_contextual": round(base_prob, 4),
-                    "current_cpi": round(cpi, 2),
-                    "current_unemployment": round(unemp, 2),
-                    "price_polymarket": round(price_poly, 4),
-                    "edge": round(edge, 4),
-                    "ev_per_dollar": round(ev, 4),
-                    "would_enter": enter,
-                    "entry_side": "YES",
+            if enter:
+                entry_row = {
+                    **row,
+                    "type": "simulated_entry",
+                    "entry_price": round(price_poly, 4),
+                    "shares_simulated": shares_for_bet(bet_size, price_poly),
+                    "bet_size": bet_size,
                 }
-                log_event("fed_rate", row)
-
-                if enter:
-                    entry_row = {
-                        **row,
-                        "type": "simulated_entry",
-                        "entry_price": round(price_poly, 4),
-                        "shares_simulated": shares_for_bet(bet_size, price_poly),
-                        "bet_size": bet_size,
-                    }
-                    log_event("fed_rate", entry_row)
-                    results.append(entry_row)
-                    print(f"[FED_RATE] EV+ {action} {slug}: edge={edge:.1%} poly={price_poly:.2f} real={prob_real:.2f}")
+                log_event("fed_rate", entry_row)
+                results.append(entry_row)
+                print(f"[FED_RATE] EV+ {action} {slug}: edge={edge:.1%} poly={price_poly:.2f} real={prob_real:.2f}")
 
     log_event("fed_rate", {"type": "scan_end", "ev_found": len(results)})
     return results
