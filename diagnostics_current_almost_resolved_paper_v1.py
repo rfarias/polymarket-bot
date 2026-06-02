@@ -721,13 +721,28 @@ def main() -> int:
             signal["allow"] = False
             signal["reason"] = f"passive_capture_only_skipped_{signal.get('setup_variant') or 'none'}"
 
-        # Gate EV: standard acima de 0.96 tem EV negativo (WR 93-95% vs preço 0.96-0.97)
-        if signal.get("allow") and str(signal.get("setup_variant") or "") == "standard":
+        # Gates por variante — espelham live_current_almost_resolved_real_v1.py
+        # standard: ep >= 0.97 causa perda catastrófica (risco $5.82 vs win $0.12)
+        #           d_bps < 12 indica margem insuficiente
+        # dual_rich: ep >= 0.985 gera breakeven/stop (runner usa bid atual, não signal.entry_price)
+        _gate_variant = str(signal.get("setup_variant") or "")
+        if signal.get("allow") and _gate_variant == "standard":
             _ep = _safe_float(signal.get("entry_price"), 0.0)
-            if _ep > 0.960:
+            _d_bps = _safe_float(signal.get("distance_to_price_to_beat_bps"), None)
+            if _ep >= 0.97:
                 signal = dict(signal)
                 signal["allow"] = False
-                signal["reason"] = f"standard_price_above_0.96_ev_negative_{round(_ep, 3)}"
+                signal["reason"] = f"variant_gate:standard:ep_high:{round(_ep, 3)}>=0.97"
+            elif _d_bps is not None and _d_bps < 12.0:
+                signal = dict(signal)
+                signal["allow"] = False
+                signal["reason"] = f"variant_gate:standard:d_bps_low:{round(_d_bps,1)}<12"
+        if signal.get("allow") and _gate_variant == "dual_rich_late_limit":
+            _dr_ask = _ask_for_side(current_snap, str(signal.get("side") or ""))
+            if _dr_ask >= 0.985:
+                signal = dict(signal)
+                signal["allow"] = False
+                signal["reason"] = f"variant_gate:dual_rich:ep_high:{round(_dr_ask,3)}>=0.985"
 
         gray_ready = False
         gray_side = ""
