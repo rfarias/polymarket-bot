@@ -13,60 +13,64 @@ from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should
 from ev_scanner.utils.logger import log_event
 from ev_scanner.utils.polymarket_api import get_active_markets
 
-# City slug → (lat, lon, tz) — baseado nas cidades encontradas na Polymarket
-CITY_COORDS: dict[str, tuple[float, float, str]] = {
-    "amsterdam":    (52.3676,   4.9041,   "Europe/Amsterdam"),
-    "ankara":       (39.9334,  32.8597,   "Europe/Istanbul"),
-    "atlanta":      (33.7490,  -84.3880,  "America/New_York"),
-    "austin":       (30.2672,  -97.7431,  "America/Chicago"),
-    "beijing":      (39.9042,  116.4074,  "Asia/Shanghai"),
-    "buenos-aires": (-34.6037, -58.3816,  "America/Argentina/Buenos_Aires"),
-    "busan":        (35.1796,  129.0756,  "Asia/Seoul"),
-    "cape-town":    (-33.9249,  18.4241,  "Africa/Johannesburg"),
-    "chengdu":      (30.5728,  104.0668,  "Asia/Shanghai"),
-    "chicago":      (41.8781,  -87.6298,  "America/Chicago"),
-    "chongqing":    (29.5630,  106.5516,  "Asia/Shanghai"),
-    "dallas":       (32.7767,  -96.7970,  "America/Chicago"),
-    "denver":       (39.7392, -104.9903,  "America/Denver"),
-    "guangzhou":    (23.1291,  113.2644,  "Asia/Shanghai"),
-    "helsinki":     (60.1699,   24.9384,  "Europe/Helsinki"),
-    "hong-kong":    (22.3193,  114.1694,  "Asia/Hong_Kong"),
-    "houston":      (29.7604,  -95.3698,  "America/Chicago"),
-    "istanbul":     (41.0082,   28.9784,  "Europe/Istanbul"),
-    "jeddah":       (21.3891,   39.8579,  "Asia/Riyadh"),
-    "jinan":        (36.6512,  117.1201,  "Asia/Shanghai"),
-    "karachi":      (24.8607,   67.0011,  "Asia/Karachi"),
-    "kuala-lumpur": (3.1390,   101.6869,  "Asia/Kuala_Lumpur"),
-    "london":       (51.5074,   -0.1278,  "Europe/London"),
-    "los-angeles":  (34.0522, -118.2437,  "America/Los_Angeles"),
-    "lucknow":      (26.8467,   80.9462,  "Asia/Kolkata"),
-    "madrid":       (40.4168,   -3.7038,  "Europe/Madrid"),
-    "manila":       (14.5995,  120.9842,  "Asia/Manila"),
-    "mexico-city":  (19.4326,  -99.1332,  "America/Mexico_City"),
-    "miami":        (25.7617,  -80.1918,  "America/New_York"),
-    "milan":        (45.4654,    9.1859,  "Europe/Rome"),
-    "moscow":       (55.7558,   37.6173,  "Europe/Moscow"),
-    "munich":       (48.1351,   11.5820,  "Europe/Berlin"),
-    "nyc":          (40.7128,  -74.0060,  "America/New_York"),
-    "panama-city":  (8.9936,   -79.5197,  "America/Panama"),
-    "paris":        (48.8566,    2.3522,  "Europe/Paris"),
-    "qingdao":      (36.0671,  120.3826,  "Asia/Shanghai"),
-    "san-francisco":(37.7749, -122.4194,  "America/Los_Angeles"),
-    "sao-paulo":    (-23.5505,  -46.6333, "America/Sao_Paulo"),
-    "seattle":      (47.6062, -122.3321,  "America/Los_Angeles"),
-    "seoul":        (37.5665,  126.9780,  "Asia/Seoul"),
-    "shanghai":     (31.2304,  121.4737,  "Asia/Shanghai"),
-    "shenzhen":     (22.5431,  114.0579,  "Asia/Shanghai"),
-    "singapore":    (1.3521,   103.8198,  "Asia/Singapore"),
-    "taipei":       (25.0330,  121.5654,  "Asia/Taipei"),
-    "tel-aviv":     (32.0853,   34.7818,  "Asia/Jerusalem"),
-    "tokyo":        (35.6762,  139.6503,  "Asia/Tokyo"),
-    "toronto":      (43.6532,  -79.3832,  "America/Toronto"),
-    "warsaw":       (52.2297,   21.0122,  "Europe/Warsaw"),
-    "wellington":   (-41.2866,  174.7756, "Pacific/Auckland"),
-    "wuhan":        (30.5928,  114.3055,  "Asia/Shanghai"),
-    "zhengzhou":    (34.7466,  113.6253,  "Asia/Shanghai"),
+# Coordenadas das estações de resolução confirmadas (não cidade centro).
+# Fonte: descrição/resolutionSource de cada mercado na Polymarket (2026-06-02).
+# Formato: city_slug → (lat, lon, tz, station_code)
+# Fontes: Wunderground (aeroporto), Hong Kong Observatory, NOAA (Moscow/Istanbul)
+STATION_COORDS: dict[str, tuple[float, float, str, str]] = {
+    "amsterdam":    (52.3086,   4.7639,   "Europe/Amsterdam",               "EHAM"),
+    "ankara":       (40.1282,  32.9951,   "Europe/Istanbul",                "LTAC"),
+    "atlanta":      (33.6367, -84.4281,   "America/New_York",               "KATL"),
+    "austin":       (30.1975, -97.6664,   "America/Chicago",                "KAUS"),
+    "beijing":      (40.0799, 116.6031,   "Asia/Shanghai",                  "ZBAA"),
+    "buenos-aires": (-34.8222,-58.5358,   "America/Argentina/Buenos_Aires", "SAEZ"),
+    "busan":        (35.1795, 128.9380,   "Asia/Seoul",                     "RKPK"),
+    "cape-town":    (-33.9715, 18.6021,   "Africa/Johannesburg",            "FACT"),
+    "chengdu":      (30.5785, 103.9474,   "Asia/Shanghai",                  "ZUUU"),
+    "chicago":      (41.9742, -87.9073,   "America/Chicago",                "KORD"),
+    "chongqing":    (29.7192, 106.6417,   "Asia/Shanghai",                  "ZUCK"),
+    "dallas":       (32.8471, -96.8518,   "America/Chicago",                "KDAL"),
+    "denver":       (39.7017,-104.7515,   "America/Denver",                 "KBKF"),
+    "guangzhou":    (23.3924, 113.2988,   "Asia/Shanghai",                  "ZGGG"),
+    "helsinki":     (60.3172,  24.9633,   "Europe/Helsinki",                "EFHK"),
+    "hong-kong":    (22.3017, 114.1722,   "Asia/Hong_Kong",                 "HKO"),   # Hong Kong Observatory
+    "houston":      (29.6454, -95.2789,   "America/Chicago",                "KHOU"),
+    "istanbul":     (41.2753,  28.7519,   "Europe/Istanbul",                "LTFM"),  # NOAA Istanbul Airport
+    "jeddah":       (21.6796,  39.1565,   "Asia/Riyadh",                    "OEJN"),
+    "jinan":        (36.8570, 117.0160,   "Asia/Shanghai",                  "ZSJN"),
+    "karachi":      (24.9065,  67.1608,   "Asia/Karachi",                   "OPKC"),
+    "kuala-lumpur": (2.7456,  101.7072,   "Asia/Kuala_Lumpur",              "WMKK"),
+    "london":       (51.5053,   0.0553,   "Europe/London",                  "EGLC"),
+    "los-angeles":  (33.9425,-118.4081,   "America/Los_Angeles",            "KLAX"),
+    "lucknow":      (26.7606,  80.8893,   "Asia/Kolkata",                   "VILK"),
+    "madrid":       (40.4936,  -3.5668,   "Europe/Madrid",                  "LEMD"),
+    "manila":       (14.5086, 121.0197,   "Asia/Manila",                    "RPLL"),
+    "mexico-city":  (19.4363, -99.0721,   "America/Mexico_City",            "MMMX"),
+    "miami":        (25.7959, -80.2870,   "America/New_York",               "KMIA"),
+    "milan":        (45.6306,   8.7281,   "Europe/Rome",                    "LIMC"),
+    "moscow":       (55.5915,  37.2615,   "Europe/Moscow",                  "UUWW"),  # NOAA Vnukovo
+    "munich":       (48.3538,  11.7861,   "Europe/Berlin",                  "EDDM"),
+    "nyc":          (40.7773, -73.8726,   "America/New_York",               "KLGA"),
+    "panama-city":  (8.9836,  -79.5536,   "America/Panama",                 "MPMG"),
+    "paris":        (48.9694,   2.4414,   "Europe/Paris",                   "LFPB"),  # Le Bourget
+    "qingdao":      (36.2661, 120.3747,   "Asia/Shanghai",                  "ZSQD"),
+    "san-francisco":(37.6189,-122.3750,   "America/Los_Angeles",            "KSFO"),
+    "sao-paulo":    (-23.4356,-46.4731,   "America/Sao_Paulo",              "SBGR"),
+    "seattle":      (47.4502,-122.3088,   "America/Los_Angeles",            "KSEA"),
+    "seoul":        (37.4691, 126.4505,   "Asia/Seoul",                     "RKSI"),
+    "shanghai":     (31.1434, 121.8052,   "Asia/Shanghai",                  "ZSPD"),
+    "shenzhen":     (22.6395, 113.8144,   "Asia/Shanghai",                  "ZGSZ"),
+    "singapore":    (1.3502,  103.9943,   "Asia/Singapore",                 "WSSS"),
+    "taipei":       (25.0694, 121.5521,   "Asia/Taipei",                    "RCSS"),
+    "tel-aviv":     (32.0114,  34.8867,   "Asia/Jerusalem",                 "LLBG"),
+    "tokyo":        (35.5494, 139.7798,   "Asia/Tokyo",                     "RJTT"),
+    "toronto":      (43.6772, -79.6306,   "America/Toronto",                "CYYZ"),
+    "warsaw":       (52.1657,  20.9671,   "Europe/Warsaw",                  "EPWA"),
+    "wellington":   (-41.3272, 174.8049,  "Pacific/Auckland",               "NZWN"),
+    "wuhan":        (30.7836, 114.2081,   "Asia/Shanghai",                  "ZHHH"),
+    "zhengzhou":    (34.5197, 113.8408,   "Asia/Shanghai",                  "ZHCC"),
 }
+
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL  = "https://archive-api.open-meteo.com/v1/archive"
@@ -186,15 +190,15 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
     results: list[dict] = []
 
     # Build set of city slugs to scan (from config)
-    configured_cities: list[str] = config.get("cities", list(CITY_COORDS.keys()))
+    configured_cities: list[str] = config.get("cities", list(STATION_COORDS.keys()))
     city_slugs_allowed = {
         c.lower().replace(" ", "-").replace("ã", "a").replace("ó", "o")
         for c in configured_cities
     }
-    # Also accept exact keys from CITY_COORDS that partially match config city names
+    # Also accept exact keys from STATION_COORDS that partially match config city names
     for cfg_city in configured_cities:
         cfg_lower = cfg_city.lower()
-        for key in CITY_COORDS:
+        for key in STATION_COORDS:
             if key in cfg_lower or cfg_lower in key or cfg_lower.replace(" ", "-") == key:
                 city_slugs_allowed.add(key)
 
@@ -220,7 +224,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         date_str  = _slug_to_date(slug)
         if not city_slug or not date_str:
             continue
-        if city_slug not in CITY_COORDS:
+        if city_slug not in STATION_COORDS:
             continue
         if city_slug not in city_slugs_allowed:
             continue
@@ -252,7 +256,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         if days_ahead > 7:
             continue
 
-        lat, lon, tz = CITY_COORDS[city_slug]
+        lat, lon, tz, station_code = STATION_COORDS[city_slug]
         try:
             month = int(date_str[5:7])
             day   = int(date_str[8:10])
@@ -315,6 +319,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                 "days_ahead": days_ahead,
                 "bucket": title,
                 "bucket_temp": bucket_temp,
+                "station_code": station_code,
                 "end_utc": end_date_str,
                 "secs_remaining": round(secs_remaining),
                 "prob_real": round(prob_real, 4),
