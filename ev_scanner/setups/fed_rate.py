@@ -105,7 +105,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         poly_markets = event.get("markets", [])
         for pm in poly_markets:
             outcomes       = pm.get("outcomes", [])
-            outcome_prices = pm.get("outcomePrices", [])
+            outcome_prices = parse_list_field(pm.get("outcomePrices", []))
             if len(outcomes) != len(outcome_prices):
                 continue
 
