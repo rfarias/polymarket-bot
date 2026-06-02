@@ -4,7 +4,7 @@ import json
 import math
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -207,6 +207,9 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
     markets_checked = 0
 
+    now_utc      = datetime.now(timezone.utc)
+    min_buffer_h = 2.0  # horas mínimas antes do endDate para entrar
+
     for event in events:
         slug   = event.get("slug", "")
         vol    = float(event.get("volume") or 0)
@@ -221,8 +224,32 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             continue
         if city_slug not in city_slugs_allowed:
             continue
-        days_ahead = _days_until(date_str)
-        if days_ahead < 0 or days_ahead > 7:  # only forecast within 7 days
+
+        # Verificar endDate — mercado deve ter pelo menos min_buffer_h restantes
+        end_date_str = event.get("endDate") or ""
+        try:
+            end_utc = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        except Exception:
+            # Se não tem endDate, usar meia-noite UTC do dia seguinte como fallback
+            try:
+                end_utc = datetime.strptime(date_str, "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc) + timedelta(days=1)
+            except Exception:
+                continue
+        secs_remaining = (end_utc - now_utc).total_seconds()
+        if secs_remaining < min_buffer_h * 3600:
+            # Mercado expirado ou prestes a fechar — não entrar
+            log_event("weather", {
+                "type": "skip_expired",
+                "market_slug": slug,
+                "end_utc": end_date_str,
+                "secs_remaining": round(secs_remaining),
+            })
+            continue
+
+        # days_ahead calculado a partir do endDate (mais preciso que slug date)
+        days_ahead = max(0, int(secs_remaining / 86400))
+        if days_ahead > 7:
             continue
 
         lat, lon, tz = CITY_COORDS[city_slug]
@@ -288,6 +315,8 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                 "days_ahead": days_ahead,
                 "bucket": title,
                 "bucket_temp": bucket_temp,
+                "end_utc": end_date_str,
+                "secs_remaining": round(secs_remaining),
                 "prob_real": round(prob_real, 4),
                 "prob_forecast": round(prob_forecast, 4),
                 "forecast_temp": round(forecast_temp, 1),
