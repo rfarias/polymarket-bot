@@ -21,6 +21,7 @@ from typing import Optional
 
 from ev_scanner.setups import weather, fed_rate, soccer, nba_nfl
 from ev_scanner.utils.logger import log_event, read_all_positions
+from ev_scanner.utils.resolver import check_and_log_resolutions
 
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 
@@ -47,11 +48,13 @@ def _stats_summary(setup_name: str) -> dict:
 def _run_setup(name: str, module, config: dict, min_volume: float) -> None:
     setup_cfg = {**config, **config.get(name, {})}
     try:
-        results = module.run_scan(setup_cfg, min_volume=min_volume)
-        stats   = _stats_summary(name)
+        results  = module.run_scan(setup_cfg, min_volume=min_volume)
+        new_res  = check_and_log_resolutions(name)
+        stats    = _stats_summary(name)
+        res_note = f" (+{new_res} resolved)" if new_res else ""
         print(f"[{name.upper()}] scan done — ev_found={len(results)} | "
-              f"total_entries={stats['entries']} resolved={stats['resolved']} "
-              f"wr={stats['wr']} pnl=${stats['pnl_simulated']}")
+              f"entries={stats['entries']} resolved={stats['resolved']} "
+              f"wr={stats['wr']} pnl=${stats['pnl_simulated']}{res_note}")
     except Exception as e:
         log_event(name, {"type": "error", "error": str(e), "traceback": traceback.format_exc()})
         print(f"[{name.upper()}] ERROR: {e}")

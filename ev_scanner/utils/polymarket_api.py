@@ -125,6 +125,16 @@ def parse_list_field(value: Any) -> list:
     return []
 
 
+def fetch_event_by_slug(slug: str) -> dict | None:
+    """Fetch event data by slug regardless of active/closed/resolved status."""
+    try:
+        data = _get(f"{GAMMA_BASE}/events", params={"slug": slug, "limit": 1})
+        events = data if isinstance(data, list) else data.get("events", [])
+        return events[0] if events else None
+    except Exception:
+        return None
+
+
 def browse_tags(sample: int = 300) -> dict[str, int]:
     """Helper: count tag frequencies in a sample of active markets."""
     markets = get_active_markets(limit=sample)

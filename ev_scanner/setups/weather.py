@@ -185,8 +185,9 @@ def _fetch_historical_prob(lat: float, lon: float, tz: str,
 
 
 def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
-    edge_min = float(config.get("edge_minimum", 0.08))
-    bet_size  = float(config.get("paper_bet_size", 20.0))
+    edge_min      = float(config.get("edge_minimum", 0.08))
+    min_price     = float(config.get("min_bucket_price", 0.04))
+    bet_size      = float(config.get("paper_bet_size", 20.0))
     results: list[dict] = []
 
     # Build set of city slugs to scan (from config)
@@ -272,6 +273,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             continue
 
         sub_markets = event.get("markets", [])
+        best_candidate: Optional[dict] = None  # melhor bucket EV+ deste evento
 
         for pm in sub_markets:
             title    = str(pm.get("groupItemTitle") or pm.get("title") or "")
@@ -291,6 +293,8 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             except Exception:
                 continue
             if price_poly <= 0 or price_poly >= 1:
+                continue
+            if price_poly < min_price:
                 continue
 
             bucket_temp = _parse_bucket_temp(title)
@@ -334,6 +338,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             }
             log_event("weather", row)
 
+            # Acumula melhor candidato por evento (máximo prob_real)
             if enter:
                 entry_row = {
                     **row,
@@ -342,10 +347,16 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                     "shares_simulated": shares_for_bet(bet_size, price_poly),
                     "bet_size": bet_size,
                 }
-                log_event("weather", entry_row)
-                results.append(entry_row)
-                print(f"[WEATHER] EV+  {city_slug} {date_str} '{title}': "
-                      f"edge={edge:.1%}  poly={price_poly:.3f}  real={prob_real:.3f}")
+                if best_candidate is None or prob_real > best_candidate["prob_real"]:
+                    best_candidate = entry_row
+
+        # Entra apenas no bucket de maior EV para este evento
+        if best_candidate is not None:
+            log_event("weather", best_candidate)
+            results.append(best_candidate)
+            print(f"[WEATHER] EV+  {city_slug} {date_str} '{best_candidate['bucket']}': "
+                  f"edge={best_candidate['edge']:.1%}  poly={best_candidate['entry_price']:.3f}  "
+                  f"real={best_candidate['prob_real']:.3f}")
 
     log_event("weather", {"type": "scan_end", "markets_checked": markets_checked, "ev_found": len(results)})
     return results

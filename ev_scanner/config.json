@@ -7,6 +7,7 @@
     "active": true,
     "check_interval_minutes": 60,
     "edge_minimum": 0.08,
+    "min_bucket_price": 0.04,
     "cities": [
       "São Paulo", "Rio de Janeiro", "London", "New York",
       "Hong Kong", "Tokyo", "Sydney", "Paris"
