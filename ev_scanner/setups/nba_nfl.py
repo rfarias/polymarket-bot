@@ -10,11 +10,48 @@ from ev_scanner.utils.logger import log_event
 from ev_scanner.utils.polymarket_api import search_markets, parse_list_field
 
 try:
-    from nba_api.stats.endpoints import teamgamelog, leaguegamefinder
+    from nba_api.stats.endpoints import teamgamelog, leaguedashteamstats
     from nba_api.stats.static import teams as nba_teams_static
     _NBA_AVAILABLE = True
 except ImportError:
     _NBA_AVAILABLE = False
+
+# Cache de ratings por temporada: {season: {team_id: {"net_rating": float, "win_rate": float}}}
+_ratings_cache: dict[str, dict] = {}
+
+
+def _current_nba_season() -> str:
+    """Retorna a temporada NBA atual no formato 'YYYY-YY'."""
+    now = datetime.now(timezone.utc)
+    # Temporada começa em outubro; antes de outubro é a temporada do ano anterior
+    year = now.year if now.month >= 10 else now.year - 1
+    return f"{year}-{str(year + 1)[-2:]}"
+
+
+def _fetch_all_team_ratings(season: str) -> dict[int, dict]:
+    """Busca NET_RATING, OFF_RATING, DEF_RATING para todos os times em uma chamada."""
+    if season in _ratings_cache:
+        return _ratings_cache[season]
+    try:
+        time.sleep(0.6)
+        data = leaguedashteamstats.LeagueDashTeamStats(
+            season=season,
+            measure_type_detailed_defense="Advanced",
+        )
+        df = data.get_data_frames()[0]
+        result: dict[int, dict] = {}
+        for _, row in df.iterrows():
+            result[int(row["TEAM_ID"])] = {
+                "net_rating": float(row.get("NET_RATING", 0.0) or 0.0),
+                "off_rating": float(row.get("OFF_RATING", 0.0) or 0.0),
+                "def_rating": float(row.get("DEF_RATING", 0.0) or 0.0),
+                "wins":       int(row.get("W", 0)),
+                "losses":     int(row.get("L", 0)),
+            }
+        _ratings_cache[season] = result
+        return result
+    except Exception:
+        return {}
 
 # NBA home advantage in points (historical constant)
 NBA_HOME_ADVANTAGE = 3.0
@@ -80,29 +117,20 @@ def _nba_team_id(name: str) -> Optional[int]:
     return None
 
 
-def _nba_net_rating(team_id: int, n_games: int = 15) -> dict:
-    """Fetch last N games for a team and return net rating + win rate."""
-    if not _NBA_AVAILABLE:
+def _nba_team_stats(team_id: int, all_ratings: dict) -> dict:
+    """Retorna stats do time a partir do cache de ratings."""
+    r = all_ratings.get(team_id, {})
+    if not r:
         return {}
-    try:
-        log = teamgamelog.TeamGameLog(team_id=team_id, season="2024-25")
-        df = log.get_data_frames()[0].head(n_games)
-        if df.empty:
-            return {}
-        pts_for = float(df["PTS"].mean())
-        # approximate opponent pts via +/-
-        plus_minus = float(df["PLUS_MINUS"].mean()) if "PLUS_MINUS" in df.columns else 0.0
-        pts_against = pts_for - plus_minus
-        wins = int((df["WL"] == "W").sum())
-        return {
-            "net_rating": round(pts_for - pts_against, 2),
-            "pts_for":    round(pts_for, 2),
-            "pts_against": round(pts_against, 2),
-            "win_rate":   round(wins / len(df), 3),
-            "n_games":    len(df),
-        }
-    except Exception:
-        return {}
+    total = r["wins"] + r["losses"]
+    return {
+        "net_rating": r["net_rating"],
+        "off_rating": r["off_rating"],
+        "def_rating": r["def_rating"],
+        "win_rate":   round(r["wins"] / total, 3) if total > 0 else 0.5,
+        "wins":       r["wins"],
+        "losses":     r["losses"],
+    }
 
 
 def _logistic(x: float) -> float:
@@ -129,7 +157,12 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         print("[NBA_NFL] nba_api not available — pip install nba_api")
         return []
 
-    log_event("nba_nfl", {"type": "scan_start"})
+    # Buscar ratings NBA uma vez para toda a temporada (uma chamada de API)
+    season = _current_nba_season()
+    all_ratings = _fetch_all_team_ratings(season) if _NBA_AVAILABLE else {}
+    print(f"[NBA_NFL] ratings carregados: {len(all_ratings)} times (temporada {season})")
+
+    log_event("nba_nfl", {"type": "scan_start", "season": season, "teams_rated": len(all_ratings)})
 
     markets = search_markets(
         keywords=["nba", "nfl", "basketball", "football", "playoffs",
@@ -149,7 +182,6 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         is_nfl = "nfl" in title_lower or "super bowl" in title_lower
 
         if not is_nba and not is_nfl:
-            # try team name detection
             if _find_team_in_text(title_lower, TEAM_MAP_NBA):
                 is_nba = True
             elif _find_team_in_text(title_lower, TEAM_MAP_NFL):
@@ -161,7 +193,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         team_map = TEAM_MAP_NBA if is_nba else TEAM_MAP_NFL
         league   = "NBA" if is_nba else "NFL"
 
-        # Extract two teams
+        # Extrair dois times
         found = []
         for key, name in team_map.items():
             if key in title_lower or name.lower() in title_lower:
@@ -177,14 +209,12 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             away_id = _nba_team_id(away_name)
             if not home_id or not away_id:
                 continue
-            time.sleep(0.6)  # nba_api rate limit
-            home_stats = _nba_net_rating(home_id)
-            away_stats = _nba_net_rating(away_id)
+            home_stats = _nba_team_stats(home_id, all_ratings)
+            away_stats = _nba_team_stats(away_id, all_ratings)
             if not home_stats or not away_stats:
                 continue
             p_home = _nba_win_prob(home_stats["net_rating"], away_stats["net_rating"])
         else:
-            # NFL: no live API — use flat prior with home advantage only
             home_stats = {"net_rating": 0.0, "win_rate": 0.5}
             away_stats = {"net_rating": 0.0, "win_rate": 0.5}
             p_home = _nfl_win_prob(0.0, 0.0)
