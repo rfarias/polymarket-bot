@@ -10,7 +10,7 @@ from typing import Optional
 import requests
 
 from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should_enter, shares_for_bet
-from ev_scanner.utils.logger import log_event
+from ev_scanner.utils.logger import log_event, read_open_position_keys
 from ev_scanner.utils.polymarket_api import get_active_markets
 
 # Coordenadas das estações de resolução confirmadas (não cidade centro).
@@ -205,6 +205,8 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
     log_event("weather", {"type": "scan_start", "cities": list(city_slugs_allowed)})
 
+    open_keys = read_open_position_keys("weather")
+
     events = get_active_markets(tag_slug="daily-temperature", limit=500)
     events2 = get_active_markets(tag_slug="highest-temperature", limit=200)
     seen = {e["slug"] for e in events}
@@ -350,13 +352,28 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                 if best_candidate is None or prob_real > best_candidate["prob_real"]:
                     best_candidate = entry_row
 
-        # Entra apenas no bucket de maior EV para este evento
+        # Entra apenas no bucket de maior prob_real para este evento
         if best_candidate is not None:
-            log_event("weather", best_candidate)
-            results.append(best_candidate)
-            print(f"[WEATHER] EV+  {city_slug} {date_str} '{best_candidate['bucket']}': "
-                  f"edge={best_candidate['edge']:.1%}  poly={best_candidate['entry_price']:.3f}  "
-                  f"real={best_candidate['prob_real']:.3f}")
+            pos_key = best_candidate["market_slug"] + "|" + best_candidate["bucket"]
+            if pos_key in open_keys:
+                # Posição já aberta — registrar atualização de preço para trajetória
+                log_event("weather", {
+                    **{k: best_candidate[k] for k in (
+                        "market_slug", "city", "resolution_date", "days_ahead",
+                        "bucket", "bucket_temp", "station_code", "end_utc",
+                        "secs_remaining", "prob_real", "prob_forecast",
+                        "forecast_temp", "forecast_sigma", "edge", "ev_per_dollar",
+                    )},
+                    "type":          "price_update",
+                    "price_current": best_candidate["entry_price"],
+                })
+            else:
+                # Nova posição
+                log_event("weather", best_candidate)
+                results.append(best_candidate)
+                print(f"[WEATHER] EV+  {city_slug} {date_str} '{best_candidate['bucket']}': "
+                      f"edge={best_candidate['edge']:.1%}  poly={best_candidate['entry_price']:.3f}  "
+                      f"real={best_candidate['prob_real']:.3f}")
 
     log_event("weather", {"type": "scan_end", "markets_checked": markets_checked, "ev_found": len(results)})
     return results

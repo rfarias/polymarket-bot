@@ -61,14 +61,29 @@ def read_open_positions(setup_name: str) -> list[dict]:
 
 
 def read_all_positions(setup_name: str, days_back: int = 30) -> list[dict]:
-    """Return all simulated entries across all log files for this setup."""
+    """Return entries, exits and price updates across all log files for this setup."""
     rows = []
     for f in sorted(_LOGS_DIR.glob(f"{setup_name}_paper_*.jsonl")):
         try:
             for line in f.read_text(encoding="utf-8").splitlines():
                 row = json.loads(line)
-                if row.get("type") in ("simulated_entry", "simulated_exit"):
+                if row.get("type") in ("simulated_entry", "simulated_exit", "price_update"):
                     rows.append(row)
         except Exception:
             pass
     return rows
+
+
+def read_open_position_keys(setup_name: str) -> set[str]:
+    """Return slug|bucket (or slug|outcome) keys with open simulated positions."""
+    entries: set[str] = set()
+    exits: set[str] = set()
+    for row in read_all_positions(setup_name):
+        slug      = row.get("market_slug", "")
+        secondary = str(row.get("bucket") or row.get("outcome") or "")
+        key = f"{slug}|{secondary}"
+        if row.get("type") == "simulated_entry":
+            entries.add(key)
+        elif row.get("type") == "simulated_exit":
+            exits.add(key)
+    return entries - exits

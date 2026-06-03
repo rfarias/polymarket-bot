@@ -181,17 +181,33 @@ def check_and_log_resolutions(setup_name: str) -> int:
         shares      = float(entry.get("shares_simulated", 0.0))
         pnl = shares * (1.0 - entry_price) if result["won"] else -bet_size
 
+        # Trajetória de preço: price_update events para esta posição
+        slug_key     = str(entry.get("bucket") or entry.get("outcome") or "")
+        updates      = [
+            r for r in all_rows
+            if r.get("type") == "price_update"
+            and r.get("market_slug") == slug
+            and str(r.get("bucket") or r.get("outcome") or "") == slug_key
+        ]
+        update_prices = [float(r["price_current"]) for r in updates if "price_current" in r]
+        all_prices    = [entry_price] + update_prices
+        max_price     = max(all_prices)
+        appreciated   = round((max_price - entry_price) / entry_price * 100, 1) if entry_price > 0 else 0.0
+
         exit_row: dict = {
-            "type":            "simulated_exit",
-            "market_slug":     slug,
-            "entry_key":       key,
-            "entry_ts":        entry.get("ts_human", ""),
-            "entry_price":     entry_price,
-            "exit_price":      result["exit_price"],
-            "won":             result["won"],
-            "pnl_simulated":   round(pnl, 4),
-            "bet_size":        bet_size,
+            "type":             "simulated_exit",
+            "market_slug":      slug,
+            "entry_key":        key,
+            "entry_ts":         entry.get("ts_human", ""),
+            "entry_price":      entry_price,
+            "exit_price":       result["exit_price"],
+            "won":              result["won"],
+            "pnl_simulated":    round(pnl, 4),
+            "bet_size":         bet_size,
             "shares_simulated": shares,
+            "n_price_updates":  len(updates),
+            "max_price_seen":   round(max_price, 4),
+            "appreciated_pct":  appreciated,
         }
         for field in ("city", "bucket", "resolution_date", "outcome",
                       "league", "home_team", "away_team", "action"):
