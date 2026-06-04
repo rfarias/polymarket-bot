@@ -176,7 +176,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
     edge_min   = float(config.get("edge_minimum", 0.08))
     min_price  = float(config.get("min_bucket_price", 0.05))
     bet_size   = float(config.get("paper_bet_size", 20.0))
-    min_days   = int(config.get("min_days_ahead", 1))   # nunca entrar em mercado do mesmo dia
+    min_hours  = float(config.get("min_hours_ahead", 14.0))  # nunca entrar se <14h para resolução
     min_prob   = float(config.get("min_prob_real", 0.06))  # ignora buckets climatologicamente raros
     results: list[dict] = []
 
@@ -236,11 +236,13 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
         days_ahead = max(0, int(secs_remaining / 86400))
 
-        # Nunca entrar em mercado do mesmo dia — temperatura já observada ou quase
-        if days_ahead < min_days:
+        # endDate dos mercados de temperatura é ao meio-dia UTC (T12:00:00Z).
+        # Usar horas em vez de dias inteiros: 17h restantes = dia seguinte válido.
+        if secs_remaining < min_hours * 3600:
             log_event("weather", {
-                "type": "skip_same_day", "market_slug": slug,
-                "days_ahead": days_ahead, "min_days_ahead": min_days,
+                "type": "skip_too_close", "market_slug": slug,
+                "secs_remaining": round(secs_remaining),
+                "min_hours_ahead": min_hours,
             })
             continue
 
