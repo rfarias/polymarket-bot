@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should_enter, shares_for_bet
-from ev_scanner.utils.logger import log_event
+from ev_scanner.utils.logger import log_event, read_open_position_keys
 from ev_scanner.utils.polymarket_api import search_markets, parse_list_field
 
 try:
@@ -147,9 +148,38 @@ def _nfl_win_prob(home_net: float, away_net: float) -> float:
     return round(_logistic(net_diff / 7.0), 4)
 
 
+_TITLE_NOISE = frozenset({
+    "spread", "1h", "2h", "1q", "2q", "3q", "4q",
+    "half", "quarter", "score", "first", "moneyline", "ml",
+    "double", "handicap", "team",
+})
+
+
+def _is_win_market(outcomes: list[str], home_name: str, away_name: str, title: str) -> bool:
+    """True se o sub-mercado é de vitória simples pré-jogo (não spread/half/quarter/props).
+
+    Critérios: outcomes = exatamente os dois times E título vazio ou sem palavras de ruído.
+    """
+    if len(outcomes) != 2:
+        return False
+    names = {o.strip().lower() for o in outcomes}
+    home_last = home_name.split()[-1].lower()
+    away_last = away_name.split()[-1].lower()
+    if names not in ({home_last, away_last}, {home_name.lower(), away_name.lower()}):
+        return False
+    t = title.lower().strip()
+    if not t:
+        return True  # título vazio = outright win market
+    if re.search(r"\d", t):
+        return False  # tem número → spread ou prop
+    return not any(w in t for w in _TITLE_NOISE)
+
+
 def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
-    edge_min = float(config.get("edge_minimum", 0.08))
-    bet_size  = float(config.get("paper_bet_size", 20.0))
+    edge_min      = float(config.get("edge_minimum", 0.08))
+    bet_size      = float(config.get("paper_bet_size", 20.0))
+    min_price_win = float(config.get("min_price_win", 0.25))   # ignora se mercado muito skewed
+    pregame_hours = float(config.get("pregame_only_hours", 4.0))  # só entra até X h antes do endDate
     results: list[dict] = []
 
     if not _NBA_AVAILABLE:
@@ -157,11 +187,13 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         print("[NBA_NFL] nba_api not available — pip install nba_api")
         return []
 
-    # Buscar ratings NBA uma vez para toda a temporada (uma chamada de API)
-    season = _current_nba_season()
-    all_ratings = _fetch_all_team_ratings(season) if _NBA_AVAILABLE else {}
-    print(f"[NBA_NFL] ratings carregados: {len(all_ratings)} times (temporada {season})")
+    season      = _current_nba_season()
+    all_ratings = _fetch_all_team_ratings(season)
+    open_keys        = read_open_position_keys("nba_nfl")
+    entered_this_run: set[str] = set()   # dedup intra-ciclo
+    now_utc          = datetime.now(timezone.utc)
 
+    print(f"[NBA_NFL] ratings carregados: {len(all_ratings)} times (temporada {season})")
     log_event("nba_nfl", {"type": "scan_start", "season": season, "teams_rated": len(all_ratings)})
 
     markets = search_markets(
@@ -177,6 +209,25 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         if vol < min_volume:
             continue
 
+        # Verificar endDate — pular jogos em andamento ou encerrados
+        end_date_str = event.get("endDate") or ""
+        try:
+            end_utc = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        except Exception:
+            end_utc = None
+
+        if end_utc is not None:
+            secs_remaining = (end_utc - now_utc).total_seconds()
+            # endDate em eventos NBA/NFL é o tip-off; pular se dentro da janela do jogo
+            if secs_remaining < pregame_hours * 3600:
+                log_event("nba_nfl", {
+                    "type": "skip_live_or_ended",
+                    "market_slug": slug,
+                    "end_utc": end_date_str,
+                    "secs_remaining": round(secs_remaining),
+                })
+                continue
+
         title_lower = title.lower() + " " + slug.lower()
         is_nba = "nba" in title_lower or "basketball" in title_lower
         is_nfl = "nfl" in title_lower or "super bowl" in title_lower
@@ -186,14 +237,12 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                 is_nba = True
             elif _find_team_in_text(title_lower, TEAM_MAP_NFL):
                 is_nfl = True
-
         if not is_nba and not is_nfl:
             continue
 
         team_map = TEAM_MAP_NBA if is_nba else TEAM_MAP_NFL
         league   = "NBA" if is_nba else "NFL"
 
-        # Extrair dois times
         found = []
         for key, name in team_map.items():
             if key in title_lower or name.lower() in title_lower:
@@ -225,12 +274,20 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
         for pm in poly_markets:
             outcomes       = parse_list_field(pm.get("outcomes", []))
             outcome_prices = parse_list_field(pm.get("outcomePrices", []))
+            pm_title       = str(pm.get("groupItemTitle") or pm.get("title") or "")
+
+            # Só mercados de vitória simples — outcomes=dois times E título sem ruído
+            if not _is_win_market(outcomes, home_name, away_name, pm_title):
+                continue
             for outcome, price_str in zip(outcomes, outcome_prices):
                 try:
                     price_poly = float(price_str)
                 except Exception:
                     continue
                 if price_poly <= 0 or price_poly >= 1:
+                    continue
+                # Preço muito skewed → jogo provavelmente em andamento
+                if price_poly < min_price_win:
                     continue
 
                 out_lower = str(outcome).lower()
@@ -256,8 +313,8 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                     "model_inputs": {
                         "home_net_rating": home_stats.get("net_rating"),
                         "away_net_rating": away_stats.get("net_rating"),
-                        "home_win_rate_last15": home_stats.get("win_rate"),
-                        "away_win_rate_last15": away_stats.get("win_rate"),
+                        "home_win_rate": home_stats.get("win_rate"),
+                        "away_win_rate": away_stats.get("win_rate"),
                         "h2h_win_rate": None,
                     },
                     "price_polymarket": round(price_poly, 4),
@@ -265,17 +322,26 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                     "ev_per_dollar": round(ev, 4),
                     "would_enter": enter,
                     "entry_side": "YES",
+                    "end_utc": end_date_str,
                 }
                 log_event("nba_nfl", row)
 
                 if enter:
-                    entry_row = {**row, "type": "simulated_entry",
-                                 "entry_price": round(price_poly, 4),
-                                 "shares_simulated": shares_for_bet(bet_size, price_poly),
-                                 "bet_size": bet_size}
+                    pos_key = slug + "|" + str(outcome)
+                    if pos_key in open_keys or pos_key in entered_this_run:
+                        continue
+                    entered_this_run.add(pos_key)
+                    entry_row = {
+                        **row,
+                        "type":             "simulated_entry",
+                        "entry_price":      round(price_poly, 4),
+                        "shares_simulated": shares_for_bet(bet_size, price_poly),
+                        "bet_size":         bet_size,
+                    }
                     log_event("nba_nfl", entry_row)
                     results.append(entry_row)
-                    print(f"[{league}] EV+ {home_name} vs {away_name} {outcome}: edge={edge:.1%}")
+                    print(f"[{league}] EV+ {home_name} vs {away_name} — {outcome}: "
+                          f"edge={edge:.1%} poly={price_poly:.3f} model={prob_real:.3f}")
 
     log_event("nba_nfl", {"type": "scan_end", "ev_found": len(results)})
     return results

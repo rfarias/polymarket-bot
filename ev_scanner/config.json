@@ -33,6 +33,8 @@
     "active": true,
     "check_interval_minutes": 120,
     "edge_minimum": 0.08,
+    "min_price_win": 0.25,
+    "pregame_only_hours": 4.0,
     "leagues": ["NBA", "NFL"]
   }
 }
