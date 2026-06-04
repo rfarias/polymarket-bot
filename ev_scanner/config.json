@@ -24,9 +24,10 @@
   },
 
   "fed_rate": {
-    "active": true,
+    "active": false,
     "check_interval_minutes": 240,
-    "edge_minimum": 0.06
+    "edge_minimum": 0.06,
+    "min_cme_divergence": 0.06
   },
 
   "nba_nfl": {
