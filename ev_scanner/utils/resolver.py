@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from ev_scanner.utils.logger import log_event, read_all_positions
@@ -163,9 +164,18 @@ def check_and_log_resolutions(setup_name: str) -> int:
         if not event:
             continue
 
-        # Só tentar resolução se o mercado estiver fechado
+        # Tentar resolução se: closed=True OU endDate já passou
+        # (alguns mercados têm preços resolvidos mas closed=False por atraso de flag)
         if not event.get("closed", False):
-            continue
+            end_date_str = event.get("endDate", "")
+            if not end_date_str:
+                continue
+            try:
+                end_utc = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) < end_utc:
+                    continue  # ainda ativo
+            except Exception:
+                continue
 
         result = None
         if setup_name == "weather":
