@@ -18,7 +18,7 @@ from typing import Optional
 import requests
 
 from ev_scanner.utils.ev_calculator import calculate_edge, ev_per_dollar, should_enter, shares_for_bet
-from ev_scanner.utils.logger import log_event
+from ev_scanner.utils.logger import log_event, read_open_position_keys
 from ev_scanner.utils.polymarket_api import get_active_markets, parse_list_field
 
 # ---------------------------------------------------------------------------
@@ -261,6 +261,9 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
     log_event("soccer", {"type": "scan_start",
                           "competitions": list(COMPETITIONS.keys())})
 
+    open_keys:        set[str] = read_open_position_keys("soccer")
+    entered_this_run: set[str] = set()
+
     markets = get_active_markets(tag_slug="soccer", limit=300)
     markets += [e for e in get_active_markets(tag_slug="football", limit=100)
                 if e["slug"] not in {m["slug"] for m in markets}]
@@ -404,7 +407,11 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             log_event("soccer", row)
             markets_checked += 1
 
+            pos_key = f"{slug}|{pm_title}"
             if enter:
+                if pos_key in open_keys or pos_key in entered_this_run:
+                    continue
+                entered_this_run.add(pos_key)
                 entry_row = {
                     **row,
                     "type":             "simulated_entry",
