@@ -1,0 +1,4 @@
+market_id,entry_secs,entry_price,el_vel,n_s180,el_side,resolution,win
+1885969,120,0.83,0.1973,60,DOWN,0,True
+1891233,120,0.82,0.2035,60,UP,1,True
+1912394,120,0.83,0.2152,60,UP,1,True

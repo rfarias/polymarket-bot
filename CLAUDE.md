@@ -153,6 +153,38 @@ Campo `regime_diagnostics` adicionado ao evento `enter` do AR paper (`diagnostic
 - Não bloqueia — apenas sinaliza para análise prospectiva
 - Gate real só após 50+ entradas com `risky_zone=true` confirmadas como losses
 
+## Backtest externo — BrockMisner dataset (2026-06-04)
+
+Dataset: `BrockMisner/polymarket-btc-updown` (HuggingFace, gratuito)
+Período: fev–abr 2026 | Scripts: `_backtest_brockMisner.py`, `_backtest_bid_prices.py`
+
+### Resultados EE (Early Entry)
+
+| Fonte de preço | Mercados | Sinais | WR | IC 95% | p-valor |
+|---------------|----------|--------|----|--------|---------|
+| Mid-price (`up_price`) | 5.817 | 37 | **94.6%** | [82%, 98%] | 5×10⁻⁹ ✓ |
+| Bid real (`best_bid`) | 616 | 3 | 100% | [44%, 100%] | n.s. |
+
+**Interpretação EE:** a queda de 37→3 sinais é proporcional ao sample menor (616/5817 ≈ 10.6% → 37×10.6% ≈ 3.9 esperado). WR consistente com os logs paper (88.7%) e com o resultado mid-price (94.6%). Bid real ≈ mid − 0.01, como esperado.
+
+### Resultados AR (Almost Resolved) — bid real
+
+| Faixa de bid | secs máx | n | WR |
+|-------------|----------|---|----|
+| bid ≥ 0.95 | 60s | 252 | **99.2%** |
+| bid ≥ 0.90 | 60s | 170 | 90.6% |
+| bid ≥ 0.88 | 60s | 600 | **94.0%** IC=[91.8%,95.6%] p=2×10⁻¹²³ ✓ |
+| bid ≥ 0.75 | 120s | 613 | 85.5% |
+| bid 0.75–0.80 | 120s | 241 | 78.4% |
+
+**Interpretação AR:** o resultado de 94% com bid real (vs 100% trivial com mid-price) é o dado mais valioso. Confirma que ~6% dos mercados revertem mesmo com bid ≥ 88% nos últimos 60s. Gradiente claro: quanto maior o bid e menor o secs, maior o WR.
+
+### Caveats
+
+- Período (fev–abr 2026) coincide com calibração das gates EE → possível look-ahead parcial
+- `n_s180` recalibrado para granularidade do dataset (≥3 em vez de ≥6)
+- Para validação limpa: precisaria de dados pós-junho 2026 com bid real
+
 ## EV Scanner — módulo complementar (stand by desde 2026-06-04)
 
 Arquivo principal: `ev_scanner/main.py`
