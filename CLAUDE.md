@@ -153,6 +153,58 @@ Campo `regime_diagnostics` adicionado ao evento `enter` do AR paper (`diagnostic
 - Não bloqueia — apenas sinaliza para análise prospectiva
 - Gate real só após 50+ entradas com `risky_zone=true` confirmadas como losses
 
+## EV Scanner — módulo complementar (stand by desde 2026-06-04)
+
+Arquivo principal: `ev_scanner/main.py`
+Filosofia: comparar probabilidade real (fonte externa) vs preço Polymarket → entrar se edge ≥ 8%.
+Todos os setups operam em **paper only** — nenhuma ordem real.
+
+Para rodar: `python -m ev_scanner.main` (loop) ou `--once` (uma vez) ou `--setup <nome>`.
+
+### Estado atual dos setups
+
+| Setup | Fonte de prob_real | active | Motivo |
+|-------|-------------------|--------|--------|
+| `weather` | Open-Meteo climatologia histórica 20 anos | `true` | funcional |
+| `nba_nfl` | nba_api PyPI (sem chave) | `true` | funcional |
+| `fed_rate` | CME FedWatch | `false` | retorna 403 neste PC |
+| `soccer` | SofaScore (unofficial) | `false` | retorna 403 neste PC |
+
+### Correções aplicadas (2026-06-04)
+
+- **Logs contaminados arquivados** em `ev_scanner/logs/_archive/` — modelos errados de 02–04/06
+- **soccer dedup** corrigido — `open_keys + entered_this_run` (mesmo padrão do nba_nfl)
+- **weather timing** corrigido — `min_days_ahead=1` trocado por `min_hours_ahead=14.0`:
+  endDate dos mercados de temperatura é `T12:00:00Z`; divisão inteira bloqueava
+  mercados de amanhã com 17h restantes (`int(17/24)=0`).
+- **weather model** reescrito (commit 8dd9ceb): prob_real = frequência empírica de 20 anos
+  de arquivo Open-Meteo (±7 dias do mesmo dia do ano), em vez de NWP forecast circular.
+
+### Para reativar fed_rate
+
+CME FedWatch retorna 403 neste PC (bloqueio de IP/geo).
+Quando acessível, setar `"active": true` em `ev_scanner/config.json`.
+O scan abortará limpo se o endpoint voltar a bloquear — sem fallback de base rates.
+
+### Para reativar soccer
+
+SofaScore retorna 403 neste PC. Alternativas a implementar (escolher uma):
+1. **football-data.org** — gratuito com chave; adicionar `FOOTBALL_DATA_API_KEY` no `.env`;
+   suporta EPL/La Liga/Série A/Bundesliga/Brasileirão/CL no tier free.
+2. **ELO estático** — arquivo de ratings FIFA/ELO para seleções nacionais (Copa do Mundo);
+   ESPN API tem jogos futuros mas sem histórico suficiente de classificatórias.
+
+Enquanto SofaScore estiver bloqueado, todo scan cai para `form_source='market_prior'`
+(circular — usa o próprio preço Polymarket como prior → nunca gera EV+ real).
+
+### Critério para avançar para paper real → real
+
+Por setup, após 50+ trades **resolvidos**:
+- `edge_realizado >= 0.06`
+- `win_rate >= prob_media_entrada × 0.90`
+- `ev_por_trade >= $0.50`
+- sem viés sistemático de lado
+
 ## Parâmetros de risco (não alterar sem confirmação)
 
 - Qty padrão de teste: 6 shares
