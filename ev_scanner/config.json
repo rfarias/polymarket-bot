@@ -17,7 +17,7 @@
   },
 
   "soccer": {
-    "active": true,
+    "active": false,
     "check_interval_minutes": 120,
     "edge_minimum": 0.08,
     "leagues": ["EPL", "La Liga", "Serie A", "Bundesliga", "Brasileirao", "Champions League"]
