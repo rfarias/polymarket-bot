@@ -4,13 +4,15 @@
   "min_market_volume": 500,
 
   "weather": {
-    "active": true,
-    "check_interval_minutes": 60,
+    "active": false,
+    "check_interval_minutes": 360,
     "edge_minimum": 0.08,
-    "min_bucket_price": 0.04,
+    "min_bucket_price": 0.05,
+    "min_days_ahead": 1,
+    "min_prob_real": 0.06,
     "cities": [
-      "São Paulo", "Rio de Janeiro", "London", "New York",
-      "Hong Kong", "Tokyo", "Sydney", "Paris"
+      "São Paulo", "London", "New York",
+      "Hong Kong", "Tokyo", "Paris"
     ]
   },
 
