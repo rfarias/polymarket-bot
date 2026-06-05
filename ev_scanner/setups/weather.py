@@ -282,7 +282,9 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             if not prices or not title:
                 continue
             try:
-                yes_idx    = next((i for i, o in enumerate(outcomes) if str(o).upper() == "YES"), 0)
+                yes_idx    = next((i for i, o in enumerate(outcomes) if str(o).upper() == "YES"), None)
+                if yes_idx is None:
+                    continue  # sub-mercado sem outcome YES — estrutura inesperada
                 price_poly = float(prices[yes_idx])
             except Exception:
                 continue
@@ -332,6 +334,9 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
             log_event("weather", row)
 
             if enter:
+                # Guarda dupla: nunca selecionar bucket com preço abaixo do mínimo
+                if price_poly < min_price:
+                    continue
                 entry_row = {
                     **row,
                     "type":             "simulated_entry",

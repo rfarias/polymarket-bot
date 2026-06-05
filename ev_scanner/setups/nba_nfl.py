@@ -291,12 +291,20 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                     continue
 
                 out_lower = str(outcome).lower()
-                if home_name.split()[-1].lower() in out_lower or "home" in out_lower:
-                    prob_real = p_home
-                elif away_name.split()[-1].lower() in out_lower or "away" in out_lower:
-                    prob_real = p_away
+                home_last = home_name.split()[-1].lower()
+                away_last = away_name.split()[-1].lower()
+                if home_last in out_lower or "home" in out_lower:
+                    prob_real  = p_home
+                    team_token = home_last   # chave normalizada para dedup
+                elif away_last in out_lower or "away" in out_lower:
+                    prob_real  = p_away
+                    team_token = away_last
                 else:
                     continue
+
+                # pos_key usa sobrenome do time (normalizado) — imune a variações
+                # de formato do outcome na API ("Knicks" vs "New York Knicks" etc.)
+                pos_key = slug + "|" + team_token
 
                 edge  = calculate_edge(prob_real, price_poly)
                 ev    = ev_per_dollar(prob_real, price_poly)
@@ -308,6 +316,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                     "league": league,
                     "home_team": home_name, "away_team": away_name,
                     "outcome": str(outcome),
+                    "pos_key": pos_key,    # armazenado para dedup inter-ciclo via read_open_position_keys
                     "prob_home_model": p_home, "prob_away_model": p_away,
                     "prob_real_target": round(prob_real, 4),
                     "model_inputs": {
@@ -327,7 +336,6 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                 log_event("nba_nfl", row)
 
                 if enter:
-                    pos_key = slug + "|" + str(outcome)
                     if pos_key in open_keys or pos_key in entered_this_run:
                         continue
                     entered_this_run.add(pos_key)

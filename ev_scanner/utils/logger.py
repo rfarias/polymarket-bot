@@ -75,13 +75,20 @@ def read_all_positions(setup_name: str, days_back: int = 30) -> list[dict]:
 
 
 def read_open_position_keys(setup_name: str) -> set[str]:
-    """Return slug|bucket (or slug|outcome) keys with open simulated positions."""
+    """Return pos_keys with open simulated positions.
+
+    Prefer the explicit 'pos_key' field (written by nba_nfl after the dedup fix).
+    Fall back to slug|bucket or slug|outcome for older log entries.
+    """
     entries: set[str] = set()
     exits: set[str] = set()
     for row in read_all_positions(setup_name):
-        slug      = row.get("market_slug", "")
-        secondary = str(row.get("bucket") or row.get("outcome") or "")
-        key = f"{slug}|{secondary}"
+        slug = row.get("market_slug", "")
+        if row.get("pos_key"):
+            key = str(row["pos_key"])
+        else:
+            secondary = str(row.get("bucket") or row.get("outcome") or "")
+            key = f"{slug}|{secondary}"
         if row.get("type") == "simulated_entry":
             entries.add(key)
         elif row.get("type") == "simulated_exit":
