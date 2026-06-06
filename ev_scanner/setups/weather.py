@@ -4,7 +4,9 @@ import json
 import math
 import re
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -70,8 +72,38 @@ STATION_COORDS: dict[str, tuple[float, float, str, str]] = {
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-# Cache: (lat, lon, month, day) → {bucket_temp: prob, ...}
-_clim_cache: dict[tuple, dict[float, float]] = {}
+# Cache persistente em disco: ev_scanner/logs/clim_cache.json
+_CACHE_PATH = Path(__file__).parent.parent / "logs" / "clim_cache.json"
+
+# Cache em memória para a sessão atual: key → (dist, n_samples)
+_clim_cache: dict[str, tuple[dict[float, float], int]] = {}
+
+
+def _cache_key(lat: float, lon: float, month: int, day: int) -> str:
+    return f"{round(lat, 3)},{round(lon, 3)},{month},{day}"
+
+
+def _load_disk_cache() -> None:
+    if not _clim_cache and _CACHE_PATH.exists():
+        try:
+            raw = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+            for k, entry in raw.items():
+                dist = {float(t): p for t, p in entry["dist"].items()}
+                _clim_cache[k] = (dist, int(entry.get("n", 0)))
+        except Exception:
+            pass
+
+
+def _save_disk_cache() -> None:
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {
+            k: {"dist": {str(t): p for t, p in dist.items()}, "n": n}
+            for k, (dist, n) in _clim_cache.items()
+        }
+        _CACHE_PATH.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _slug_to_city(slug: str) -> Optional[str]:
@@ -102,20 +134,24 @@ def _fetch_climatology(lat: float, lon: float, tz: str,
     nos últimos `years` anos e retorna distribuição empírica por grau inteiro.
 
     Usa janela de ±7 dias para ter pelo menos ~280 amostras (20 anos × 15 dias).
+    Rejeita o resultado se qualquer batch da API falhar (evita distribuições parciais).
+    Persiste o cache em disco para consistência entre sessões.
     """
-    cache_key = (round(lat, 3), round(lon, 3), month, day)
-    if cache_key in _clim_cache:
-        return _clim_cache[cache_key]
+    _load_disk_cache()
+
+    key = _cache_key(lat, lon, month, day)
+    if key in _clim_cache:
+        return _clim_cache[key][0]
 
     end_year   = datetime.now(timezone.utc).year - 1
     start_year = max(2000, end_year - years + 1)
+    window_days = 7
 
     samples: list[float] = []
-    window_days = 7  # ±7 dias em torno do dia-alvo
+    batches = list(range(start_year, end_year + 1, 5))
 
-    for batch_start in range(start_year, end_year + 1, 5):
+    for batch_start in batches:
         batch_end = min(batch_start + 4, end_year)
-        # Pede janeiro-a-dezembro para capturar ±7 dias corretamente
         try:
             resp = requests.get(ARCHIVE_URL, params={
                 "latitude":   lat,
@@ -129,33 +165,32 @@ def _fetch_climatology(lat: float, lon: float, tz: str,
             data  = resp.json().get("daily", {})
             dates = data.get("time", [])
             temps = data.get("temperature_2m_max", [])
-
-            target_day = datetime(2000, month, day)  # ano fictício para comparar mm-dd
             for d_str, t in zip(dates, temps):
                 if t is None:
                     continue
                 try:
-                    d = datetime.strptime(d_str, "%Y-%m-%d")
+                    d   = datetime.strptime(d_str, "%Y-%m-%d")
                     ref = datetime(d.year, month, day)
                     if abs((d - ref).days) <= window_days:
                         samples.append(float(t))
                 except Exception:
                     continue
         except Exception:
-            pass
+            # Batch falhou: rejeitar distribuição inteira para evitar parcialidade
+            return None
         time.sleep(0.3)
 
-    if len(samples) < 30:
+    min_samples = len(batches) * 15 * (years // len(batches) if batches else 1)
+    if len(samples) < max(30, min_samples // 2):
         return None
 
-    # Distribuição empírica: frequência por grau inteiro arredondado
-    from collections import Counter
     rounded = [round(t) for t in samples]
     counts  = Counter(rounded)
     n       = len(rounded)
     dist    = {float(k): v / n for k, v in counts.items()}
 
-    _clim_cache[cache_key] = dist
+    _clim_cache[key] = (dist, n)
+    _save_disk_cache()
     return dist
 
 
@@ -260,6 +295,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
 
         # Probabilidade histórica (uma chamada por cidade+mês+dia, cacheada)
         clim_dist = _fetch_climatology(lat, lon, tz, month, day)
+        clim_n    = _clim_cache.get(_cache_key(lat, lon, month, day), (None, 0))[1]
         if not clim_dist:
             log_event("weather", {
                 "type": "data_unavailable", "market_slug": slug,
@@ -324,7 +360,7 @@ def run_scan(config: dict, min_volume: float = 500.0) -> list[dict]:
                 "end_utc":          end_date_str,
                 "secs_remaining":   round(secs_remaining),
                 "prob_real":        round(prob_real, 4),
-                "clim_samples":     sum(1 for _ in clim_dist),  # nº de graus distintos no histórico
+                "clim_samples":     clim_n,  # total de dias históricos na amostra
                 "price_polymarket": round(price_poly, 4),
                 "edge":             round(edge, 4),
                 "ev_per_dollar":    round(ev, 4),
