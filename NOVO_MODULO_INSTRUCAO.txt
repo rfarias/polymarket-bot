@@ -1,0 +1,583 @@
+# NOVOS SETUPS — EV+ BASE RATE — Requisitos de Implementação
+# Todos em PAPER ONLY na fase inicial
+
+## CONTEXTO E FILOSOFIA
+
+O bot já opera mercados de BTC 5min de forma quase ininterrupta.
+Esses novos setups são complementares e operam com frequência muito menor
+(horas a dias entre oportunidades), então podem rodar simultaneamente
+sem conflito de recursos.
+
+A estratégia central de todos os setups é a mesma:
+  1. Calcular a probabilidade REAL do evento via fonte externa validada
+  2. Comparar com o preço atual na Polymarket (= probabilidade implícita)
+  3. Se diferença >= EDGE_MINIMUM: registrar entrada simulada (EV+)
+  4. Aguardar resolução e registrar resultado
+
+Não há previsão de direção, não há TA, não há momentum.
+É pura comparação entre probabilidade real e preço de mercado.
+
+TODOS OS SETUPS INICIAM EM PAPER ONLY.
+Nenhuma ordem real até validação estatística (mínimo 50 trades resolvidos).
+
+---
+
+## ARQUITETURA GERAL
+
+Arquivo principal: ev_scanner/main.py
+Roda em loop contínuo com schedule por setup.
+Cada setup tem seu próprio módulo, log e ciclo de checagem.
+
+Estrutura de arquivos:
+
+  ev_scanner/
+    main.py                    # orquestra todos os setups
+    config.json                # parâmetros e thresholds de todos os setups
+    setups/
+      weather.py               # Setup 1 — Clima/Temperatura
+      soccer.py                # Setup 2 — Futebol
+      fed_rate.py              # Setup 3 — Fed Rate / Macro
+      nba_nfl.py               # Setup 4 — NBA/NFL
+    utils/
+      polymarket_api.py        # buscar mercados e preços na Polymarket
+      ev_calculator.py         # calcular edge e EV por trade
+      logger.py                # logging padronizado para todos os setups
+    logs/
+      weather_paper_YYYYMMDD.jsonl
+      soccer_paper_YYYYMMDD.jsonl
+      fed_rate_paper_YYYYMMDD.jsonl
+      nba_nfl_paper_YYYYMMDD.jsonl
+      ev_scanner_decisions.jsonl  # audit log geral
+    reports/
+      report_YYYYMMDD_HH.md
+
+---
+
+## PARÂMETROS GLOBAIS (config.json)
+
+{
+  "edge_minimum": 0.08,         // mínimo de 8% de diferença para entrar
+  "paper_bet_size": 20.0,       // $20 por trade simulado (todos os setups)
+  "min_market_volume": 500,     // volume mínimo do mercado na Polymarket
+
+  "weather": {
+    "active": true,
+    "check_interval_minutes": 60,
+    "edge_minimum": 0.08,
+    "cities": ["São Paulo", "Rio de Janeiro", "London", "New York",
+               "Hong Kong", "Tokyo", "Sydney", "Paris"]
+  },
+
+  "soccer": {
+    "active": true,
+    "check_interval_minutes": 120,
+    "edge_minimum": 0.08,
+    "leagues": ["EPL", "La Liga", "Serie A", "Bundesliga",
+                "Brasileirao", "Champions League"]
+  },
+
+  "fed_rate": {
+    "active": true,
+    "check_interval_minutes": 240,
+    "edge_minimum": 0.06
+  },
+
+  "nba_nfl": {
+    "active": true,
+    "check_interval_minutes": 120,
+    "edge_minimum": 0.08,
+    "leagues": ["NBA", "NFL"]
+  }
+}
+
+---
+
+## SETUP 1 — CLIMA / TEMPERATURA
+
+Arquivo: ev_scanner/setups/weather.py
+Ciclo: a cada 60 minutos
+
+### Fonte de dados
+
+Open-Meteo API (gratuita, sem chave, sem limite razoável de uso):
+  Documentação: https://open-meteo.com/en/docs
+  Endpoint histórico: https://archive-api.open-meteo.com/v1/archive
+  Endpoint forecast: https://api.open-meteo.com/v1/forecast
+
+  Parâmetros principais:
+    latitude, longitude, daily, timezone, start_date, end_date
+
+### Lógica de probabilidade real
+
+Para cada mercado de temperatura ativo na Polymarket do tipo:
+  "Highest temperature in [CITY] on [DATE]?"
+  com buckets como: "<20°C", "20-22°C", "22-24°C", ">24°C"
+
+  1. Buscar forecast do Open-Meteo para a cidade e data:
+     temperature_2m_max (máxima diária prevista)
+     temperature_2m_max com ensemble members (incerteza)
+
+  2. Buscar histórico dos últimos 30 anos para a mesma data:
+     calcular distribuição histórica de temperatura máxima
+
+  3. Combinar forecast + histórico em probabilidade por bucket:
+     peso_forecast = 0.70  (forecast é mais informativo perto da data)
+     peso_historico = 0.30
+     Se data > 7 dias: peso_forecast = 0.30, peso_historico = 0.70
+
+  4. Probabilidade real por bucket = combinação ponderada
+
+  Exemplo:
+    Mercado: "Highest temperature in London on June 5?"
+    Bucket: ">22°C"
+    Forecast Open-Meteo: 68% de probabilidade
+    Histórico 30 anos para 5 de junho em Londres: 52%
+    Probabilidade combinada (< 7 dias): 0.70 × 68% + 0.30 × 52% = 63.2%
+    Preço Polymarket: 50¢ (50%)
+    Edge: 63.2% - 50% = 13.2% → ACIMA de 8% → ENTRAR
+
+### Mapeamento de cidades para coordenadas
+
+Manter dicionário de coordenadas das cidades monitoradas:
+  "São Paulo":      {"lat": -23.5505, "lon": -46.6333}
+  "Rio de Janeiro": {"lat": -22.9068, "lon": -43.1729}
+  "London":         {"lat": 51.5074,  "lon": -0.1278}
+  "New York":       {"lat": 40.7128,  "lon": -74.0060}
+  "Hong Kong":      {"lat": 22.3193,  "lon": 114.1694}
+  "Tokyo":          {"lat": 35.6762,  "lon": 139.6503}
+  "Sydney":         {"lat": -33.8688, "lon": 151.2093}
+  "Paris":          {"lat": 48.8566,  "lon": 2.3522}
+
+### Descoberta de mercados na Polymarket
+
+Buscar na Gamma API por mercados ativos de temperatura:
+  GET gamma-api.polymarket.com/events?
+      tag=weather&active=true&limit=50
+
+Filtrar por slug contendo: "temperature", "temp", "highest"
+Extrair: event_id, slug, token_ids, current_prices, resolution_date
+
+### Logging JSONL — campos obrigatórios
+
+{
+  "ts": float,
+  "ts_human": str,
+  "setup": "weather",
+  "type": "scan" | "ev_found" | "simulated_entry" | "simulated_exit",
+  "market_slug": str,
+  "city": str,
+  "resolution_date": str,
+  "bucket": str,                      // ex: ">22°C"
+  "prob_real": float,                 // probabilidade calculada
+  "prob_forecast": float,             // contribuição do forecast
+  "prob_historical": float,           // contribuição histórica
+  "price_polymarket": float,          // preço atual na Polymarket
+  "edge": float,                      // prob_real - price_polymarket
+  "ev_per_dollar": float,             // edge / price_polymarket
+  "would_enter": bool,
+  "entry_side": "YES" | "NO",
+
+  // apenas em simulated_entry:
+  "entry_price": float,
+  "shares_simulated": float,
+  "bet_size": float,
+
+  // apenas em simulated_exit:
+  "resolution": str,
+  "pnl_simulated": float,
+  "return_pct": float
+}
+
+---
+
+## SETUP 2 — FUTEBOL
+
+Arquivo: ev_scanner/setups/soccer.py
+Ciclo: a cada 120 minutos
+
+### Fonte de dados
+
+football-data.org (API gratuita com chave, tier free = 10 calls/min):
+  Registro: https://www.football-data.org/client/register
+  Variável no .env: FOOTBALL_DATA_API_KEY
+  Endpoint resultados históricos:
+    GET https://api.football-data.org/v4/competitions/{league}/matches
+    Headers: {"X-Auth-Token": API_KEY}
+
+  Ligas suportadas no tier gratuito:
+    PL  (Premier League)
+    PD  (La Liga)
+    SA  (Serie A)
+    BL1 (Bundesliga)
+    FL1 (Ligue 1)
+    CL  (Champions League)
+    BSA (Brasileirão Série A)
+
+FBref para xG (scraping, respeitar robots.txt):
+  https://fbref.com/en/comps/ — dados de expected goals por jogo
+
+### Lógica de probabilidade real
+
+Para cada mercado de resultado de jogo na Polymarket:
+  "Will [TEAM A] beat [TEAM B]?"
+  "Match result: [TEAM A] vs [TEAM B]?"
+
+  1. Buscar últimos 38 jogos de cada time via football-data.org:
+     calcular win rate, draw rate, loss rate em casa e fora
+
+  2. Calcular base rate histórica do confronto direto (H2H):
+     últimos 10 confrontos diretos entre os dois times
+
+  3. Se disponível, buscar xG dos últimos 10 jogos de cada time:
+     xG_for (criação ofensiva) e xG_against (solidez defensiva)
+     calcular probabilidade via modelo de Poisson simples
+
+  4. Combinar os três fatores com pesos:
+     prob_home_win = (
+       0.40 × base_rate_home_form +
+       0.30 × base_rate_h2h +
+       0.30 × poisson_xg_model
+     )
+
+  Modelo de Poisson simplificado:
+    lambda_home = media_xG_for_home × (media_xG_against_away / media_liga)
+    lambda_away = media_xG_for_away × (media_xG_against_home / media_liga)
+    P(home wins) = sum(P(X=i) × sum(P(Y=j) para j<i) para i em range(8))
+    P(draw)      = sum(P(X=i) × P(Y=i) para i em range(8))
+    P(away wins) = 1 - P(home wins) - P(draw)
+
+  Médias da liga como referência: calcular dos últimos 380 jogos da liga
+
+  5. Comparar com preço Polymarket e calcular edge
+
+### VARIÁVEL NO .ENV
+
+FOOTBALL_DATA_API_KEY=sua_chave_aqui
+
+### Logging JSONL — campos obrigatórios
+
+{
+  "ts": float,
+  "ts_human": str,
+  "setup": "soccer",
+  "type": "scan" | "ev_found" | "simulated_entry" | "simulated_exit",
+  "market_slug": str,
+  "league": str,
+  "home_team": str,
+  "away_team": str,
+  "match_date": str,
+  "prob_home": float,
+  "prob_draw": float,
+  "prob_away": float,
+  "prob_real_target": float,          // prob do lado sendo comprado
+  "price_polymarket": float,
+  "edge": float,
+  "would_enter": bool,
+  "entry_side": "YES" | "NO",
+  "model_components": {
+    "home_form_weight": float,
+    "h2h_weight": float,
+    "poisson_weight": float
+  },
+
+  // em simulated_entry e simulated_exit: mesmos campos do Setup 1
+}
+
+---
+
+## SETUP 3 — FED RATE / MACRO
+
+Arquivo: ev_scanner/setups/fed_rate.py
+Ciclo: a cada 240 minutos (4 horas)
+
+### Fonte de dados
+
+CME FedWatch Tool (gratuito, público):
+  Probabilidades implícitas de decisão do Fed via futuros de fed funds
+  Endpoint público:
+    https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html
+  Dados em JSON:
+    https://www.cmegroup.com/CmeWS/mvc/Meeting/FedWatch/V2/
+    (inspecionar requests da página para endpoint exato)
+
+Alternativa mais estável — FRED API (Federal Reserve de St. Louis):
+  Gratuita com chave: https://fred.stlouisfed.org/docs/api/fred/
+  Variável no .env: FRED_API_KEY
+  Série DFEDTARU: Fed Funds Target Rate Upper Bound
+  Série DFEDTARL: Fed Funds Target Rate Lower Bound
+
+  Histórico completo de decisões do Fed:
+    Calcular base rate de: hold, hike+25, hike+50, cut-25, cut-50
+    por contexto (inflação acima/abaixo de 2%, unemployment rate etc.)
+
+### Lógica de probabilidade real
+
+Para mercados do tipo:
+  "Will the Fed cut rates at [meeting date]?"
+  "Fed funds rate above X% by [date]?"
+
+  1. Buscar probabilidade implícita do CME FedWatch para a reunião
+  2. Calcular base rate histórica condicionada ao contexto atual:
+     - Se CPI > 3.0%: Fed cortou em X% das reuniões historicamente
+     - Se unemployment > 4.5%: Fed cortou em Y% das reuniões
+  3. Combinar: 0.70 × CME_FedWatch + 0.30 × base_rate_contextual
+  4. Comparar com preço Polymarket
+
+Para mercados de CPI/PCE/inflação:
+  Fonte: Cleveland Fed Inflation Nowcast (gratuito)
+  URL: https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting
+
+### VARIÁVEL NO .ENV
+
+FRED_API_KEY=sua_chave_aqui
+
+### Logging JSONL
+
+Mesma estrutura dos outros setups com campos adicionais:
+  "cme_fedwatch_prob": float,
+  "base_rate_contextual": float,
+  "current_cpi": float,
+  "current_unemployment": float,
+  "next_meeting_date": str
+
+---
+
+## SETUP 4 — NBA / NFL
+
+Arquivo: ev_scanner/setups/nba_nfl.py
+Ciclo: a cada 120 minutos
+
+### Fonte de dados NBA
+
+nba_api (Python, gratuito, sem chave):
+  pip install nba_api
+  from nba_api.stats.endpoints import teamgamelog, leaguegamefinder
+
+  Dados disponíveis:
+    Histórico de jogos por time (win/loss, pontos, home/away)
+    Últimos N jogos de cada time
+    Head-to-head histórico
+
+basketball-reference.com (scraping com respeito ao rate limit):
+  Dados históricos desde 1946
+  Usar biblioteca basketball_reference_scraper se disponível:
+    pip install basketball_reference_scraper
+
+### Fonte de dados NFL
+
+pro-football-reference.com (scraping):
+  Resultados históricos, spreads, over/unders
+
+nflreadr (dados públicos NFL):
+  pip install nflreadr  (ou baixar CSVs em github.com/nflverse/nfldata)
+  Histórico completo de jogos desde 1999
+
+### Lógica de probabilidade real — NBA
+
+Para mercados do tipo:
+  "Will [TEAM A] beat [TEAM B]?" em jogo específico
+
+  1. Buscar via nba_api os últimos 15 jogos de cada time:
+     calcular win_rate_home e win_rate_away separadamente
+
+  2. Calcular net_rating dos últimos 15 jogos:
+     net_rating = points_for_avg - points_against_avg
+
+  3. Modelo de probabilidade:
+     net_diff = net_rating_home - net_rating_away
+     home_advantage = 3.0  // pontos, constante histórica NBA
+     prob_home = 1 / (1 + exp(-(net_diff + home_advantage) / 10))
+     // logística calibrada nos dados históricos
+
+  4. Ajuste por H2H últimas 3 temporadas:
+     se h2h_win_rate disponível: peso 0.20 no resultado final
+
+  5. Comparar com Polymarket e calcular edge
+
+### Lógica de probabilidade real — NFL
+
+Mesma lógica com ajustes:
+  home_advantage = 2.5  // pontos, constante histórica NFL
+  usar últimos 8 jogos (temporada mais curta)
+  incluir: turnover differential, third down conversion rate
+
+### Descoberta de mercados na Polymarket
+
+Buscar na Gamma API por jogos das próximas 72 horas:
+  GET gamma-api.polymarket.com/events?
+      tag=nba&active=true&limit=100
+
+  Parsear slug para extrair nomes dos times
+  Mapear para IDs dos times nas APIs de dados
+
+Manter dicionário de mapeamento:
+  TEAM_MAP_NBA = {
+    "lakers": "Los Angeles Lakers",
+    "celtics": "Boston Celtics",
+    ...
+  }
+
+### Logging JSONL
+
+{
+  "ts": float,
+  "ts_human": str,
+  "setup": "nba_nfl",
+  "league": "NBA" | "NFL",
+  "type": "scan" | "ev_found" | "simulated_entry" | "simulated_exit",
+  "market_slug": str,
+  "home_team": str,
+  "away_team": str,
+  "game_date": str,
+  "prob_home_model": float,
+  "prob_away_model": float,
+  "model_inputs": {
+    "home_net_rating": float,
+    "away_net_rating": float,
+    "home_win_rate_last15": float,
+    "away_win_rate_last15": float,
+    "h2h_win_rate": float | null
+  },
+  "price_polymarket": float,
+  "edge": float,
+  "would_enter": bool,
+  "entry_side": "YES" | "NO",
+
+  // em simulated_entry e simulated_exit: mesmos campos padrão
+}
+
+---
+
+## UTILS COMPARTILHADOS
+
+### polymarket_api.py
+
+Funções para todos os setups usarem:
+
+  get_active_markets(tag=None, limit=100) → list[dict]
+    Busca mercados ativos na Gamma API com filtro de tag opcional
+
+  get_market_price(market_slug) → dict
+    Retorna preços atuais de YES/NO para um mercado
+
+  get_market_volume(market_slug) → float
+    Retorna volume total do mercado
+
+  Endpoint base: https://gamma-api.polymarket.com/events
+
+### ev_calculator.py
+
+  calculate_edge(prob_real, price_market) → float
+    edge = prob_real - price_market
+
+  calculate_ev(prob_real, price_market, bet_size) → float
+    ev = (prob_real × (1 - price_market) - (1 - prob_real) × price_market)
+         × bet_size / price_market
+
+  should_enter(edge, ev_per_dollar, min_edge=0.08) → bool
+    return edge >= min_edge and ev_per_dollar > 0
+
+  kelly_fraction(prob_real, price_market) → float
+    b = (1 - price_market) / price_market  // odds decimais - 1
+    kelly = (prob_real × b - (1 - prob_real)) / b
+    return max(0, min(kelly, 0.25))  // cap em 25% do bankroll
+
+### logger.py
+
+  log_event(setup_name, event_dict) → None
+    Escreve em logs/{setup_name}_paper_YYYYMMDD.jsonl
+    E em logs/ev_scanner_decisions.jsonl (log consolidado)
+
+---
+
+## INTEGRAÇÃO COM O OPTIMIZER (agente existente)
+
+O optimizer_loop.py existente deve reconhecer os novos setups.
+Adicionar ao config.json as seções de cada novo setup.
+Adicionar aos relatórios markdown a seção:
+
+  ## EV Scanner — Novos Setups
+
+  | Setup | Scans | EV+ encontrados | Entradas sim. | WR | PnL sim. |
+  |---|---|---|---|---|---|
+  | weather | 24 | 8 | 5 | 80% | +$47 |
+  | soccer | 12 | 3 | 2 | 50% | +$8 |
+  | fed_rate | 6 | 1 | 1 | — | pendente |
+  | nba_nfl | 12 | 4 | 3 | 67% | +$18 |
+
+  ### Melhores oportunidades últimas 24h:
+  - weather/London: edge 13.2% → YES ">22°C" a 50¢ (prob real 63.2%)
+  - soccer/EPL Arsenal vs Chelsea: edge 9.1% → YES Arsenal a 58¢ (prob 67.1%)
+
+---
+
+## VARIÁVEIS NECESSÁRIAS NO .ENV
+
+# Já existentes (BTC bot)
+POLY_PRIVATE_KEY=...
+POLY_API_KEY=...
+
+# Novos setups
+FOOTBALL_DATA_API_KEY=...    # football-data.org (registro gratuito)
+FRED_API_KEY=...             # FRED St. Louis (registro gratuito)
+# Open-Meteo e nba_api não precisam de chave
+
+---
+
+## MÉTRICAS DE VALIDAÇÃO PARA MODO REAL
+
+Após 50+ trades simulados RESOLVIDOS por setup:
+
+  edge_realizado >= 0.06        // edge real após resolução
+  win_rate >= prob_media_entrada × 0.90  // WR real >= 90% do esperado
+  ev_por_trade >= $0.50
+  sem viés sistematico de lado  // não estar errando sempre YES ou sempre NO
+
+Se após 50 trades o edge_realizado for negativo:
+  → revisar modelo de probabilidade, não aumentar edge_minimum
+  → provável erro no modelo, não no conceito
+
+---
+
+## ORDEM DE IMPLEMENTAÇÃO
+
+1. utils/polymarket_api.py + utils/ev_calculator.py + utils/logger.py
+   → base compartilhada de todos os setups
+
+2. Setup 1 (weather) — mais simples, API mais limpa, edge mais documentado
+   → testar descoberta de mercados de temperatura na Polymarket
+   → testar chamada Open-Meteo para cidades brasileiras primeiro
+   → validar que probabilidades calculadas fazem sentido
+
+3. Setup 3 (fed_rate) — menor frequência, mais fácil de validar
+   → CME FedWatch como fonte primária
+   → poucas reuniões do Fed por ano, resultados bem documentados
+
+4. Setup 2 (soccer) — frequência alta, mais mercados disponíveis
+   → começar com EPL e Brasileirão (ligas com mais dados)
+   → validar modelo de Poisson com dados históricos antes de escanear
+
+5. Setup 4 (nba_nfl) — depende da temporada ativa
+   → NBA playoffs ativos agora: implementar com prioridade
+   → NFL: temporada começa setembro, preparar o módulo agora
+
+6. ev_scanner/main.py — orquestrador de todos os setups
+   → schedule separado por setup conforme check_interval_minutes
+
+7. Integrar ao optimizer_loop.py existente
+   → adicionar seção EV Scanner nos relatórios
+
+---
+
+## REGRAS INEGOCIÁVEIS
+
+1. TODOS OS SETUPS INICIAM EM PAPER — nenhuma ordem real sem validação
+2. EDGE MÍNIMO DE 8% — abaixo disso não entrar nem em paper
+3. VOLUME MÍNIMO DE $500 no mercado — sem liquidez, sem entrada
+4. NUNCA entrar em mercados sem fonte de resolução clara nas regras
+5. CADA SETUP tem log separado — nunca misturar dados entre setups
+6. O modelo de probabilidade deve ser documentado no log
+   → nunca registrar só o resultado, sempre o raciocínio completo
+7. Se a API externa estiver fora do ar: registrar "data_unavailable"
+   no log e pular o ciclo — nunca usar última probabilidade conhecida
+   como se fosse atual

@@ -120,6 +120,25 @@ Aguarda dados SA2 no paper + logs reais pós-pull para decidir.
 
 ### Para analisar logs reais no outro PC após `git pull`
 
+**Contexto**: o runner real acumula ~25 entradas EE/dia com vel>=0.13. Após ~30 dias,
+esperamos 750–900 entradas com `el_bid`, `el_vel`, `n_s180`, `ep`, `secs` e PnL real —
+suficiente para validar todos os gates candidatos sem precisar de Telonex.
+
+#### Passo 1 — sincronizar
+
+```powershell
+git pull
+```
+
+Verificar quantidade de logs disponíveis:
+
+```powershell
+Get-ChildItem logs\ee_real_* -Directory | Measure-Object  # quantas sessões
+Get-ChildItem logs\ee_real_*\ee_real.jsonl | ForEach-Object { (Get-Content $_ | Measure-Object -Line).Lines } | Measure-Object -Sum
+```
+
+#### Passo 2 — pipeline de simulações existentes
+
 ```powershell
 .\_run_real_analysis.ps1 -Push   # roda todos os scripts + commita resultados
 ```
@@ -130,6 +149,114 @@ Scripts disponíveis (aceitam `--logs "logs/ee_real_*/ee_real.jsonl"`):
 - `_sim_el_bid_stability.py` — estabilidade do bid antes da entrada
 - `_sim_3gates.py` — gates de estabilidade (dip, mono, opp)
 - `_sim_btc_momentum.py` — paradoxo adverso BTC
+
+#### Passo 3 — validação retroativa dos gates candidatos (vel, n_s180, ep)
+
+Gates testados no paper mas ainda não deployados no real: `vel>=0.17`, `n_s180>=6`, `ep<=0.85`.
+Este script aplica cada gate retroativamente sobre os trades reais fechados e compara WR/PnL:
+
+```python
+# _analise_gates_real.py  (rodar no outro PC)
+import json, pathlib, statistics
+
+LOGS = sorted(pathlib.Path("logs").glob("ee_real_*/ee_real.jsonl"))
+
+entries, closed_map = {}, {}
+for f in LOGS:
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            ev = json.loads(line)
+            t = ev.get("type", "")
+            slug = ev.get("slug", "")
+            if t == "enter":
+                el = ev.get("el", {})
+                entries[slug] = {
+                    "vel": el.get("el_vel"),
+                    "n_s180": el.get("n_s180"),
+                    "ep": ev.get("ep"),
+                    "secs": ev.get("secs"),
+                    "el_bid": el.get("el_bid_180"),
+                    "variant": ev.get("setup_variant"),
+                }
+            elif t in ("trade_closed", "flat", "redeem_flat"):
+                closed_map[slug] = ev.get("pnl") or ev.get("result", {}).get("pnl")
+        except:
+            pass
+
+trades = [(entries[s], closed_map[s]) for s in entries if s in closed_map and closed_map[s] is not None]
+print(f"Total trades fechados: {len(trades)}")
+
+def stats(subset, label):
+    pnls = [pnl for _, pnl in subset]
+    if not pnls:
+        print(f"  {label}: sem dados"); return
+    wins = [p for p in pnls if p > 0]
+    wr = len(wins) / len(pnls) * 100
+    avg = statistics.mean(pnls)
+    print(f"  {label}: n={len(pnls)}  WR={wr:.1f}%  avg={avg:+.3f}")
+
+print("\n=== SEM FILTRO (baseline) ===")
+stats(trades, "todos")
+
+print("\n=== GATE vel >= 0.17 ===")
+stats([(e, p) for e, p in trades if e.get("vel") is not None and e["vel"] >= 0.17], "vel>=0.17")
+stats([(e, p) for e, p in trades if e.get("vel") is not None and e["vel"] < 0.17], "vel<0.17 (bloqueado)")
+
+print("\n=== GATE n_s180 >= 6 ===")
+stats([(e, p) for e, p in trades if e.get("n_s180") is not None and e["n_s180"] >= 6], "n_s180>=6")
+stats([(e, p) for e, p in trades if e.get("n_s180") is not None and e["n_s180"] < 6], "n_s180<6 (bloqueado)")
+
+print("\n=== GATE ep <= 0.85 ===")
+stats([(e, p) for e, p in trades if e.get("ep") is not None and e["ep"] <= 0.85], "ep<=0.85")
+stats([(e, p) for e, p in trades if e.get("ep") is not None and e["ep"] > 0.85], "ep>0.85 (bloqueado)")
+
+print("\n=== TODOS OS GATES (vel>=0.17 + n_s180>=6 + ep<=0.85) ===")
+stats([(e, p) for e, p in trades
+       if e.get("vel", 0) >= 0.17 and e.get("n_s180", 0) >= 6 and e.get("ep", 1) <= 0.85], "todos os gates")
+
+print("\n=== HORA UTC ===")
+import datetime
+for h in [6, 7, 8, 9, 10, 11, 12, 13, 14]:
+    hora_trades = [(e, p) for e, p in trades
+                   if datetime.datetime.utcfromtimestamp(e.get("secs", 0) or 0).hour == h]
+    # nota: usar ts da entry, nao secs
+# (adaptar se entry tiver campo 'ts' separado)
+```
+
+Critério para promover ao real: gate candidato deve mostrar **WR >= 85% e n >= 50** nos logs reais.
+
+#### Passo 4 — validação WR do extreme_99_limit
+
+```python
+# trecho a acrescentar em _analise_gates_real.py
+print("\n=== EXTREME_99_LIMIT ===")
+ext = [(e, p) for e, p in trades if e.get("variant") == "extreme_99_limit"]
+stats(ext, "extreme_99_limit")
+# EV > 0 exige WR > 99% (win=$0.01, loss=$0.99). Não operar sem n>=200 confirmados.
+```
+
+#### Passo 5 — SA2 retroativo (qualidade de entrada)
+
+Estima quanto cada trade teria poupado entrando 1 tick abaixo do `el_bid_180`:
+
+```python
+# trecho a acrescentar em _analise_gates_real.py
+sa2 = [(e, p) for e, p in trades if e.get("el_bid") is not None]
+savings = [e["el_bid"] - (e["el_bid"] - 0.01) for e, _ in sa2]  # = sempre $0.01/share
+win_saves = [0.01 * 6 for e, p in sa2 if p > 0]  # economy por win (qty=6)
+# SA2 fill rate (bid caiu 1 tick antes de resolver?) só verificável com Telonex ou livro real
+print(f"\n=== SA2 RETROATIVO ===")
+print(f"Trades com el_bid disponivel: {len(sa2)}")
+print(f"Economia potencial SA2 (se 88% fill wins): {len([p for _,p in sa2 if p>0]) * 0.01 * 6 * 0.88:.2f} USD")
+```
+
+#### Passo 6 — commitar resultados
+
+```powershell
+git add _result_*.csv _result_*.json
+git commit -m "analise: gates reais pos-pull $(Get-Date -Format 'yyyy-MM-dd')"
+git push
+```
 
 ## Análise EL Flip (nova — 2026-05-25)
 
