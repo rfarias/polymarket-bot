@@ -364,6 +364,85 @@ Por setup, após 50+ trades **resolvidos**:
 - `ev_por_trade >= $0.50`
 - sem viés sistemático de lado
 
+## Lag Continuation — novo setup (portado 2026-07-06)
+
+Origem: `polymarket-overlay-indicator` (projeto TS/Node separado), setup
+`lag_continuation_30s_dom_cheap`. Rodava lá em paper contínuo desde 30/06
+via `scripts/watch_lag_continuation_paper.ps1`.
+
+**Lógica**: `price_to_beat` = preço do BTC/USDT no instante em que a janela de
+5min abriu (kline Binance). `signed_distance_bps` = distância atual do BTC em
+relação a esse preço. Lado dominante = UP se BTC acima do alvo, DOWN se abaixo.
+Momentum = variação do BTC nos últimos 30s, na direção do lado dominante.
+Entra (compra ask) se: `secs_to_end` entre 30–120s, distância dentro de
+±30bps, momentum direcional ≥ mínimo, e ask ≤ máximo. Sai por tempo
+(`secs_to_end <= 5`) ou no rollover do slot (bid ao vivo). Sem stop, sem
+take-profit — aposta que a tendência persiste até a resolução.
+
+### Resultado agregado no paper do overlay-indicator (30/06–06/07, pré-gate)
+
+190 trades pareados (entry+exit), sem posições em aberto:
+- WR 66,8% (127 wins / 63 losses)
+- PnL total +$357,97 (stake=6/trade), avg +$1,88/trade
+- Lados balanceados (Up 107 / Down 110 entradas)
+
+### Gate de exclusão adicionado (2026-07-06)
+
+Análise por faixa de `secondsToEnd` mostrou que **`secs ∈ [75,90)` é a única
+faixa com PnL agregado negativo** (n=22, WR=40,9%, PnL total -$14,21; todas as
+outras faixas são positivas, ex.: [105,120) WR=76,7% +$150,94).
+
+Excluindo essa janela morta: **WR 66,8% → 70,2%, PnL total +$357,97 → +$372,18**
+(n=190→168). Remove 13 losses e só 9 wins daquela janela — ganho líquido, não
+troca de volume por qualidade.
+
+Testado também `min_momentum_bps 4→6`: WR sobe a 80% mas é troca de volume por
+qualidade (grupo removido ainda fica positivo, +$167 em 135 trades) — **não
+aplicado**, ao contrário do gate de zona morta que é puramente aditivo.
+
+Gate implementado em ambos os lados:
+- `polymarket-overlay-indicator/src/services/lagContinuationPaperService.ts` +
+  `src/cli/lagContinuationPaper.ts` (`--exclude-seconds-to-end-min/max`, default 75/90)
+- `market/lag_continuation_signal_v1.py` (`exclude_seconds_to_end_min/max`, default 75/90)
+
+Amostra pequena (n=22 na zona excluída) — tratar como candidato validado, não
+como gate definitivo, até acumular mais sessões.
+
+### Port para polymarket-bot (paper, 2026-07-06)
+
+- `market/lag_continuation_signal_v1.py` — config (`LagContinuationConfigV1`) +
+  `evaluate_lag_continuation_v1()`, mesmos defaults do TS (incl. gate de exclusão)
+- `diagnostics_lag_continuation_paper_v1.py` — runner paper, mesmo padrão dos
+  outros `diagnostics_*_paper_v1.py` (jsonl com `enter`/`exit`/`snapshot`/`summary`)
+- `scripts/watch_lag_continuation_paper.ps1` — watchdog, mesmo padrão dos outros
+- Reaproveita infra já existente: `market/rest_5m_shadow_public_v5.py` (slots,
+  books, executable prices) e `market/current_scalp_signal_v1.py`
+  (`fetch_binance_open_price_for_event_start_v1` para `price_to_beat`,
+  `fetch_external_btc_reference_v1` para o preço corrente)
+- Smoke-tested (20s, dados reais) — sem posições persistidas entre sessões
+  (diferente do TS, que salva `lag_continuation_open_state.json`; aqui, como
+  nos demais paper scripts do repo, a posição aberta é fechada a mercado no
+  fim da sessão — `reason="session_end"`)
+
+### Pendente — runner real (planejado para o outro PC)
+
+Objetivo declarado: rodar como runner real com mão mínima para testar fatores
+que o paper não modela — liquidez real do book, entradas parciais, slippage.
+
+Ainda não implementado (motivo: `Regras` deste arquivo — não avançar para real
+sem confirmação explícita, e ainda não há broker integrado a este setup):
+- Integração com broker real (`market/broker_factory.py` / `polymarket_broker_v3.py`)
+- Tratamento de fill parcial (o paper assume fill 100% do stake ao ask)
+- Checagem de profundidade do book antes de entrar (paper usa `executable_buy`/
+  `executable_sell`, que já reflete liquidez agregada, mas não simula slippage
+  de ordem própria)
+- Watchdog dedicado (`watch_lag_continuation_real_v1.ps1`, seguindo o padrão de
+  `watch_current_almost_resolved_real.ps1`)
+
+Critério antes de propor ir para real: mesmo padrão dos outros setups —
+50+ trades resolvidos no paper (Python, pós-gate) confirmando WR e PnL na
+faixa do resultado do overlay-indicator.
+
 ## Parâmetros de risco (não alterar sem confirmação)
 
 - Qty padrão de teste: 6 shares
@@ -376,3 +455,4 @@ Por setup, após 50+ trades **resolvidos**:
 - Gates paper `n_s180<6` e `EE_ENTRY_HI=0.85`: só ir pro real após 50+ trades no paper confirmando melhora de WR
 - Gate `hora UTC==6`: só ir pro real após validação no paper (50+ dias úteis)
 - Stop suave zona 0.50–0.84: não implementar sem análise dos logs reais pós-pull
+- Lag Continuation: `exclude_seconds_to_end [75,90)` validado com n=22 apenas — não remover o gate nem subir `min_momentum_bps` sem nova análise; não avançar para real sem 50+ trades resolvidos no paper Python
