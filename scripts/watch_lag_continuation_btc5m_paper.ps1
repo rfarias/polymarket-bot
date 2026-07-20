@@ -2,6 +2,8 @@ param(
     [int]$RunSeconds = 3600,
     [double]$PollSeconds = 1,
     [double]$Stake = 6.0,
+    [double]$StopLossBps = 15.0,
+    [double]$TakeProfitBps = 30.0,
     [int]$RestartDelaySeconds = 5,
     [switch]$Continuous,
     [int]$MaxCycles = 1
@@ -29,6 +31,8 @@ while ($true) {
         "--seconds" ([string]$RunSeconds) `
         "--poll-secs" ([string]$PollSeconds) `
         "--stake" ([string]$Stake) `
+        "--stop-loss-bps" ([string]$StopLossBps) `
+        "--take-profit-bps" ([string]$TakeProfitBps) `
         "--log-file" $logFile
 
     $exitCode = $LASTEXITCODE

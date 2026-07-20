@@ -4,6 +4,13 @@ diagnostics_lag_continuation_btc5m_paper_v1.py
 Paper runner do setup "lag continuation" adaptado para BTC em candle de 5min
 puro (sem Polymarket) — ver market/lag_continuation_btc5m_signal_v1.py.
 
+Entrada: mesma logica do setup original (distancia do preco de abertura da
+janela de 5min + momentum direcional). Saida: stop-loss / take-profit em bps
+fixos (market/btc5m_risk_management_v1.py), checados a cada poll — NAO ha
+saida por tempo nem por fechamento de candle. A posicao pode atravessar
+varias janelas de 5min ate bater stop ou alvo (diferente do contrato binario
+Polymarket, que so resolve no fechamento).
+
 So gera sinal e simula PnL de uma posicao LONG/SHORT direta em BTC, com custo
 de execucao explicito (fee_bps_round_trip). Nao posta nenhuma ordem real —
 nenhum broker de exchange esta integrado. Paper only, conforme regras do
@@ -26,6 +33,7 @@ from market.btc5m_price_feed_v1 import (
     fetch_external_btc_reference_v1,
     seconds_to_end_v1,
 )
+from market.btc5m_risk_management_v1 import BTC5mRiskConfigV1, evaluate_exit_v1
 from market.lag_continuation_btc5m_signal_v1 import (
     LagContinuationBTC5mConfigV1,
     evaluate_lag_continuation_btc5m_v1,
@@ -48,6 +56,7 @@ class PaperPositionV1:
     momentum_bps: Optional[float] = None
     exit_price: Optional[float] = None
     exit_reason: Optional[str] = None
+    exit_move_bps: Optional[float] = None
     pnl_gross: Optional[float] = None
     fee_cost: Optional[float] = None
     pnl: Optional[float] = None
@@ -92,15 +101,23 @@ def _paper_enter(signal: dict, *, stake: float, now: float, window_start_ts: flo
     )
 
 
-def _close_position(pos: PaperPositionV1, *, exit_price: Optional[float], reason: str, cfg: LagContinuationBTC5mConfigV1) -> PaperPositionV1:
+def _close_position(
+    pos: PaperPositionV1,
+    *,
+    exit_price: Optional[float],
+    reason: str,
+    move_bps: Optional[float],
+    fee_bps_round_trip: float,
+) -> PaperPositionV1:
     pos.mode = "idle"
     pos.exit_price = exit_price if exit_price is not None else pos.entry_price
     pos.exit_reason = reason
+    pos.exit_move_bps = move_bps
     entry = pos.entry_price or 0.0
     exitp = pos.exit_price or 0.0
     direction = 1.0 if pos.position_side == "LONG" else -1.0
     pnl_gross = pos.size_btc * direction * (exitp - entry)
-    fee_cost = pos.stake * (cfg.fee_bps_round_trip / 10_000.0)
+    fee_cost = pos.stake * (fee_bps_round_trip / 10_000.0)
     pos.pnl_gross = round(pnl_gross, 4)
     pos.fee_cost = round(fee_cost, 4)
     pos.pnl = round(pnl_gross - fee_cost, 4)
@@ -125,7 +142,8 @@ def _trade_stats(completed: list[dict]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Paper-trade lag continuation em BTC 5min puro (sem Polymarket) — LONG/SHORT direto no spot"
+        description="Paper-trade lag continuation em BTC 5min puro (sem Polymarket) — LONG/SHORT direto no spot, "
+        "saida por stop/alvo em bps (nao por fechamento de candle)"
     )
     parser.add_argument("--seconds", type=int, default=3600)
     parser.add_argument("--poll-secs", type=float, default=1.0)
@@ -136,10 +154,11 @@ def main() -> int:
     parser.add_argument("--max-signed-distance-bps", type=float, default=30.0)
     parser.add_argument("--momentum-window-sec", type=float, default=30.0)
     parser.add_argument("--min-momentum-bps", type=float, default=4.0)
-    parser.add_argument("--exit-seconds-to-end", type=int, default=5)
     parser.add_argument("--exclude-seconds-to-end-min", type=int, default=75)
     parser.add_argument("--exclude-seconds-to-end-max", type=int, default=90)
     parser.add_argument("--fee-bps-round-trip", type=float, default=8.0)
+    parser.add_argument("--stop-loss-bps", type=float, default=15.0)
+    parser.add_argument("--take-profit-bps", type=float, default=30.0)
     parser.add_argument("--log-file", type=str, default=None)
     args = parser.parse_args()
 
@@ -150,10 +169,13 @@ def main() -> int:
         max_signed_distance_bps=args.max_signed_distance_bps,
         momentum_window_sec=args.momentum_window_sec,
         min_momentum_bps=args.min_momentum_bps,
-        exit_seconds_to_end=args.exit_seconds_to_end,
         exclude_seconds_to_end_min=args.exclude_seconds_to_end_min,
         exclude_seconds_to_end_max=args.exclude_seconds_to_end_max,
         fee_bps_round_trip=args.fee_bps_round_trip,
+    )
+    risk_cfg = BTC5mRiskConfigV1(
+        stop_loss_bps=args.stop_loss_bps,
+        take_profit_bps=args.take_profit_bps,
     )
     log_path = Path(args.log_file) if args.log_file else _build_default_log_path()
     pos = PaperPositionV1()
@@ -166,6 +188,8 @@ def main() -> int:
 
     print("[LAG_CONTINUATION_BTC5M_CONFIG]")
     pprint(cfg.as_dict())
+    print("[RISK_CONFIG]")
+    pprint(risk_cfg.as_dict())
     print("[LOG_FILE]")
     print(log_path)
 
@@ -209,19 +233,24 @@ def main() -> int:
         else:
             blocked_reasons[str(signal.get("reason") or "unknown")] += 1
 
-        if pos.mode == "open" and pos.window_start_ts != window.window_start_ts:
-            pos = _close_position(pos, exit_price=btc_price, reason="window_rollover", cfg=cfg)
-            completed.append(asdict(pos))
-            exit_reasons[str(pos.exit_reason or "unknown")] += 1
-            _append_jsonl(log_path, {"type": "exit", "ts": now, "position": completed[-1]})
-            pos = PaperPositionV1()
-
         if pos.mode == "idle" and signal.get("allow"):
             pos = _paper_enter(signal, stake=args.stake, now=now, window_start_ts=window.window_start_ts, secs_to_end=current_secs)
             _append_jsonl(log_path, {"type": "enter", "ts": now, "signal": signal, "position": asdict(pos)})
         elif pos.mode == "open":
-            if current_secs is not None and current_secs <= cfg.exit_seconds_to_end and btc_price is not None:
-                pos = _close_position(pos, exit_price=btc_price, reason="time_exit", cfg=cfg)
+            exit_eval = evaluate_exit_v1(
+                position_side=pos.position_side or "",
+                entry_price=pos.entry_price or 0.0,
+                current_price=btc_price,
+                cfg=risk_cfg,
+            )
+            if exit_eval.get("exit"):
+                pos = _close_position(
+                    pos,
+                    exit_price=btc_price,
+                    reason=str(exit_eval.get("reason")),
+                    move_bps=exit_eval.get("move_bps"),
+                    fee_bps_round_trip=cfg.fee_bps_round_trip,
+                )
                 completed.append(asdict(pos))
                 exit_reasons[str(pos.exit_reason or "unknown")] += 1
                 _append_jsonl(log_path, {"type": "exit", "ts": now, "position": completed[-1]})
@@ -251,7 +280,13 @@ def main() -> int:
 
     if pos.mode == "open":
         final_ref = fetch_external_btc_reference_v1()
-        pos = _close_position(pos, exit_price=final_ref.get("reference_price"), reason="session_end", cfg=cfg)
+        pos = _close_position(
+            pos,
+            exit_price=final_ref.get("reference_price"),
+            reason="session_end",
+            move_bps=None,
+            fee_bps_round_trip=cfg.fee_bps_round_trip,
+        )
         completed.append(asdict(pos))
         exit_reasons[str(pos.exit_reason or "unknown")] += 1
         _append_jsonl(log_path, {"type": "exit", "ts": time.time(), "position": completed[-1]})
@@ -263,6 +298,7 @@ def main() -> int:
         "top_blocked_reasons": blocked_reasons.most_common(12),
         "log_file": str(log_path),
         "config": cfg.as_dict(),
+        "risk_config": risk_cfg.as_dict(),
     }
     _append_jsonl(log_path, {"type": "summary", "ts": time.time(), "summary": summary})
     print("[LAG_CONTINUATION_BTC5M_SUMMARY]")

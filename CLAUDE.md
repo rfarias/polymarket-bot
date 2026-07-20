@@ -479,6 +479,29 @@ exchange integrado — avançar para execução real exige, no mínimo, o mesmo
 critério dos outros setups (50+ trades resolvidos no paper confirmando WR e
 PnL) mais confirmação explícita, conforme `Regras` no topo deste arquivo.
 
+### Correção de lógica de saída (2026-07-20)
+
+**Problema identificado pelo usuário**: a v1 copiou a saída "hold to
+resolution" do Polymarket (fechava a posição no fechamento do candle de
+5min ou N segundos antes). Isso não faz sentido em trade direto de BTC —
+não existe "resolução", a posição deve fechar por stop/alvo/price action,
+podendo atravessar várias janelas de 5min.
+
+**Correção aplicada**: nova saída por stop-loss/take-profit em bps fixos e
+simétricos (`market/btc5m_risk_management_v1.py`, `evaluate_exit_v1`),
+checada a cada poll, independente do fechamento do candle. Defaults:
+`stop_loss_bps=15`, `take_profit_bps=30`. A entrada continua igual (sinal
+`evaluate_lag_continuation_btc5m_v1` — distância do open da janela +
+momentum); só a saída mudou.
+
+Versão explicitamente pedida como "mais simples" antes de evoluir para stop
+estrutural (price action: swing low/high ou `price_to_beat`) ou baseado em
+ATR — decisão do usuário, não avançar para essas variantes sem novo pedido.
+
+Position sizing ainda por stake fixo em $ (`--stake`, default 6.0, mesmo
+padrão dos outros setups paper deste repo) — não decidido ainda se deve
+migrar para risco fixo em % de capital.
+
 ## Parâmetros de risco (não alterar sem confirmação)
 
 - Qty padrão de teste: 6 shares

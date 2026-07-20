@@ -12,9 +12,13 @@ precisa ser modelado explicitamente via fee_bps, senao o resultado simulado
 fica otimista.
 
 Mesma logica de entrada: BTC distante do preco de abertura da janela de 5min
-(price_to_beat) + momentum na mesma direcao perto do fim da janela -> aposta
-que a tendencia persiste ate o fechamento da janela (LONG se dominante=UP,
-SHORT se dominante=DOWN).
+(price_to_beat) + momentum na mesma direcao -> aposta que a tendencia
+continua (LONG se dominante=UP, SHORT se dominante=DOWN).
+
+Este modulo cobre so a ENTRADA. A saida (stop/alvo) e desacoplada do
+fechamento do candle — ver market/btc5m_risk_management_v1.py — porque,
+ao contrario do contrato binario Polymarket, aqui nao existe "resolucao":
+a posicao pode atravessar varias janelas de 5min ate bater stop ou alvo.
 """
 from __future__ import annotations
 
@@ -30,7 +34,6 @@ class LagContinuationBTC5mConfigV1:
     max_signed_distance_bps: float = 30.0
     momentum_window_sec: float = 30.0
     min_momentum_bps: float = 4.0
-    exit_seconds_to_end: int = 5
     # Zona morta herdada do paper Polymarket (ver CLAUDE.md, n=22, WR 40.9%
     # vs WR 70%+ no resto). Mantido como ponto de partida ate validar com
     # dados proprios deste modulo — nao remover sem nova analise.
