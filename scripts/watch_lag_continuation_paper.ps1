@@ -2,6 +2,8 @@ param(
     [int]$RunSeconds = 3600,
     [double]$PollSeconds = 1,
     [double]$Stake = 6.0,
+    [int]$ExcludeSecondsToEndMin = 75,
+    [int]$ExcludeSecondsToEndMax = 90,
     [int]$RestartDelaySeconds = 5,
     [switch]$Continuous,
     [int]$MaxCycles = 1
@@ -29,6 +31,8 @@ while ($true) {
         "--seconds" ([string]$RunSeconds) `
         "--poll-secs" ([string]$PollSeconds) `
         "--stake" ([string]$Stake) `
+        "--exclude-seconds-to-end-min" ([string]$ExcludeSecondsToEndMin) `
+        "--exclude-seconds-to-end-max" ([string]$ExcludeSecondsToEndMax) `
         "--log-file" $logFile
 
     $exitCode = $LASTEXITCODE

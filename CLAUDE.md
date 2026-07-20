@@ -502,6 +502,37 @@ Position sizing ainda por stake fixo em $ (`--stake`, default 6.0, mesmo
 padrão dos outros setups paper deste repo) — não decidido ainda se deve
 migrar para risco fixo em % de capital.
 
+### Coleta contínua para validar secs[75,90) (iniciada 2026-07-20 17:03)
+
+Sessões de 1h isoladas (BTC5m e Polymarket-gate-off) geraram só 1-2 trades
+cada — volume insuficiente pra validar o gate. A validação original (n=22,
+WR 40,9%) veio de uma semana inteira rodando no overlay-indicator (TS); o
+port Python só acumulou 36 trades em ~24h (06-07/07).
+
+Por isso, a pedido do usuário, dois watchdogs foram deixados rodando em
+**processos PowerShell destacados** (sobrevivem independente da sessão do
+Claude Code, via `Start-Process -WindowStyle Hidden`, não pelo mecanismo de
+background task do harness):
+
+- **BTC5m paper** (novo módulo, stop/alvo 15/30bps): PID 15992,
+  `scripts\watch_lag_continuation_btc5m_paper.ps1 -Continuous -RunSeconds 3600`,
+  logs em `logs\lag_continuation_btc5m_paper_*.jsonl` +
+  `logs\_watchdog_btc5m_stdout_20260720_170331.log`
+- **Polymarket lag_continuation, gate `secs[75,90)` desligado**: PID 8924,
+  `scripts\watch_lag_continuation_paper.ps1 -Continuous -RunSeconds 3600 -ExcludeSecondsToEndMin 0 -ExcludeSecondsToEndMax 0`,
+  logs em `logs\lag_continuation_paper_*.jsonl` +
+  `logs\_watchdog_nogate_stdout_20260720_170331.log`
+
+**Para checar progresso** (sessão futura ou outro PC): contar trades
+completados nos `.jsonl` mais recentes de cada padrão de nome.
+**Para parar**: `Stop-Process -Id 15992` / `Stop-Process -Id 8924` (PIDs
+válidos só nesta máquina e sessão de Windows — se a máquina reiniciar, os
+processos morrem e precisam ser reiniciados manualmente).
+
+`watch_lag_continuation_paper.ps1` ganhou os parâmetros
+`-ExcludeSecondsToEndMin` / `-ExcludeSecondsToEndMax` (default 75/90, iguais
+ao Python) para permitir desligar o gate sem editar o script.
+
 ## Parâmetros de risco (não alterar sem confirmação)
 
 - Qty padrão de teste: 6 shares
