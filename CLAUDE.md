@@ -443,6 +443,42 @@ Critério antes de propor ir para real: mesmo padrão dos outros setups —
 50+ trades resolvidos no paper (Python, pós-gate) confirmando WR e PnL na
 faixa do resultado do overlay-indicator.
 
+## BTC 5min puro — módulo novo, sem Polymarket (2026-07-20)
+
+Motivo: Polymarket está bloqueada no Brasil. Módulo separado e paralelo ao
+bot Polymarket (que continua rodando como está) — adapta o Lag Continuation
+para operar direto em candle de 5min do BTC (LONG/SHORT no spot), sem
+mercado binário, sem broker real integrado. **Paper only.**
+
+Arquivos:
+- `market/btc5m_price_feed_v1.py` — janela de 5min alinhada ao relógio UTC
+  (00:00, 00:05, ...) via klines Binance `interval=5m`; reaproveita
+  `fetch_external_btc_reference_v1` (mediana Binance/Coinbase) de
+  `market/current_scalp_signal_v1.py` como preço corrente
+- `market/lag_continuation_btc5m_signal_v1.py` — mesma lógica de entrada do
+  setup original (distância do preço de abertura + momentum direcional),
+  mas retorna `position_side` LONG/SHORT em vez de UP/DOWN; sem
+  `max_entry_ask` (não existe book de contrato binário aqui)
+- `diagnostics_lag_continuation_btc5m_paper_v1.py` — runner paper
+  autocontido, não depende de nenhuma infra de slot/slug do Polymarket
+- `scripts/watch_lag_continuation_btc5m_paper.ps1` — watchdog, mesmo padrão
+  dos outros scripts de paper
+
+Diferença importante vs. o setup Polymarket original: como não há mais um
+book de contrato binário (que já embute o custo de execução no bid/ask), o
+custo de round-trip (spread/fee de exchange) precisa ser modelado
+explicitamente — `fee_bps_round_trip` (default 8 bps) é subtraído do PnL
+simulado em `_close_position`.
+
+Zona de exclusão `secs[75,90)` herdada do paper Polymarket como ponto de
+partida (validada lá com n=22) — precisa de validação própria com dados
+deste módulo antes de ser tratada como confirmada aqui.
+
+Smoke-tested com dados reais da Binance (2026-07-20, 15s). Nenhum broker de
+exchange integrado — avançar para execução real exige, no mínimo, o mesmo
+critério dos outros setups (50+ trades resolvidos no paper confirmando WR e
+PnL) mais confirmação explícita, conforme `Regras` no topo deste arquivo.
+
 ## Parâmetros de risco (não alterar sem confirmação)
 
 - Qty padrão de teste: 6 shares
